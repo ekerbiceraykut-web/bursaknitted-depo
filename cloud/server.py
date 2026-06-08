@@ -13,8 +13,14 @@ PORT     = int(os.environ.get("PORT", 5060))
 _tokens  = {}   # {token: user_dict}
 
 
-def _ok(data=None): return json.dumps({"ok": True,  "data": data}, ensure_ascii=False)
-def _err(msg):      return json.dumps({"ok": False, "error": msg},  ensure_ascii=False)
+def _default(o):
+    import datetime
+    if isinstance(o, (datetime.datetime, datetime.date)):
+        return o.isoformat()
+    raise TypeError(f"Not serializable: {type(o)}")
+
+def _ok(data=None): return json.dumps({"ok": True,  "data": data}, ensure_ascii=False, default=_default)
+def _err(msg):      return json.dumps({"ok": False, "error": msg},  ensure_ascii=False, default=_default)
 
 def _auth(headers):
     return _tokens.get(headers.get("X-Token",""))
