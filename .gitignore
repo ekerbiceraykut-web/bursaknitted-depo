@@ -1,0 +1,9 @@
+stok.db
+stok.db-wal
+stok.db-shm
+*.db-before*
+yedekler/
+config.json
+__pycache__/
+*.pyc
+.DS_Store

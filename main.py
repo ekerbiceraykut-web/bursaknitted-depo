@@ -1,0 +1,2479 @@
+import sys
+import os
+import os as _os
+LOGO_PATH = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logo.png")
+
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QTableWidget, QTableWidgetItem, QLineEdit, QLabel,
+    QComboBox, QDialog, QFormLayout, QDialogButtonBox, QMessageBox,
+    QTabWidget, QHeaderView, QFileDialog, QSpinBox, QDoubleSpinBox,
+    QTextEdit, QGroupBox, QSplitter, QListWidget, QListWidgetItem,
+    QStatusBar, QFrame, QAbstractItemView, QTableView, QInputDialog,
+    QCheckBox
+)
+from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant
+from PyQt6.QtGui import QFont, QColor, QIcon, QBrush, QPixmap
+
+# Bağlantı modu: "local" veya "remote"
+CONNECTION_MODE = "local"
+
+class _DbProxy:
+    """db.xxx çağrılarını CONNECTION_MODE'a göre local veya remote'a yönlendirir."""
+    def __getattr__(self, name):
+        if CONNECTION_MODE == "remote":
+            import api_client
+            return getattr(api_client, name)
+        return getattr(db, name)
+
+_db = _DbProxy()   # tüm kod db yerine _db kullanır ama mevcut kod db değişkenini kullanıyor,
+                   # bu yüzden modül seviyesinde db'yi proxy ile değiştiriyoruz
+
+def _get_db():
+    return _db
+
+# Giriş yapmış kullanıcı (global)
+CURRENT_USER = {"id": 0, "username": "sistem", "full_name": "Sistem", "role": "admin"}
+
+# Geri al yığıtı  — her eleman: (açıklama: str, geri_al_fn: callable)
+_UNDO_STACK = []
+_UNDO_CALLBACKS = []   # refresh çağrısı için StockTable kaydeder kendini
+
+def push_undo(description, fn):
+    _UNDO_STACK.append((description, fn))
+    if len(_UNDO_STACK) > 20:
+        _UNDO_STACK.pop(0)
+    for cb in _UNDO_CALLBACKS:
+        cb()          # undo butonunu güncelle
+
+def pop_undo():
+    return _UNDO_STACK.pop() if _UNDO_STACK else None
+
+import database as _local_db
+db = _local_db   # başlangıçta yerel; login sonrası proxy ile değiştirilir
+
+COLORS = {
+    "primary": "#1565C0",
+    "primary_light": "#1976D2",
+    "success": "#2E7D32",
+    "danger": "#C62828",
+    "warning": "#F57F17",
+    "bg": "#F5F5F5",
+    "white": "#FFFFFF",
+    "border": "#BDBDBD",
+    "text": "#212121",
+    "subtext": "#757575",
+    "row_alt": "#F8F9FA",
+    "row_hover": "#E3F2FD",
+    "header_bg": "#1565C0",
+    "header_fg": "#FFFFFF",
+}
+
+STYLESHEET = f"""
+QMainWindow, QWidget {{
+    background-color: {COLORS['bg']};
+    color: {COLORS['text']};
+    font-family: 'Segoe UI', Arial, sans-serif;
+    font-size: 13px;
+}}
+QPushButton {{
+    background-color: {COLORS['primary']};
+    color: white;
+    border: none;
+    border-radius: 4px;
+    padding: 7px 16px;
+    font-weight: bold;
+    min-height: 30px;
+}}
+QPushButton:hover {{
+    background-color: {COLORS['primary_light']};
+}}
+QPushButton:pressed {{
+    background-color: #0D47A1;
+}}
+QPushButton.success {{
+    background-color: {COLORS['success']};
+}}
+QPushButton.success:hover {{
+    background-color: #388E3C;
+}}
+QPushButton.danger {{
+    background-color: {COLORS['danger']};
+}}
+QPushButton.danger:hover {{
+    background-color: #D32F2F;
+}}
+QPushButton.warning {{
+    background-color: {COLORS['warning']};
+    color: #212121;
+}}
+QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit {{
+    border: 1px solid {COLORS['border']};
+    border-radius: 4px;
+    padding: 5px 8px;
+    background: white;
+    min-height: 28px;
+}}
+QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {{
+    border: 2px solid {COLORS['primary']};
+}}
+QTableWidget {{
+    background: white;
+    gridline-color: #E0E0E0;
+    border: 1px solid {COLORS['border']};
+    border-radius: 4px;
+    selection-background-color: {COLORS['row_hover']};
+    selection-color: {COLORS['text']};
+}}
+QTableWidget::item {{
+    padding: 4px 8px;
+}}
+QHeaderView::section {{
+    background-color: {COLORS['header_bg']};
+    color: {COLORS['header_fg']};
+    font-weight: bold;
+    padding: 6px 8px;
+    border: none;
+    border-right: 1px solid #1976D2;
+}}
+QTabWidget::pane {{
+    border: 1px solid {COLORS['border']};
+    border-radius: 4px;
+    background: white;
+}}
+QTabBar::tab {{
+    background: #E0E0E0;
+    color: {COLORS['text']};
+    padding: 8px 20px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    min-width: 100px;
+}}
+QTabBar::tab:selected {{
+    background: {COLORS['primary']};
+    color: white;
+    font-weight: bold;
+}}
+QGroupBox {{
+    font-weight: bold;
+    border: 1px solid {COLORS['border']};
+    border-radius: 4px;
+    margin-top: 8px;
+    padding-top: 8px;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    padding: 0 6px;
+    color: {COLORS['primary']};
+}}
+QStatusBar {{
+    background: {COLORS['primary']};
+    color: white;
+    font-weight: bold;
+}}
+QLabel.title {{
+    font-size: 16px;
+    font-weight: bold;
+    color: {COLORS['primary']};
+}}
+QLabel.stat {{
+    font-size: 15px;
+    font-weight: bold;
+    color: {COLORS['primary']};
+}}
+"""
+
+
+class _MobileAccessDialog(QDialog):
+    """WiFi erişim bilgisi."""
+    def __init__(self, parent, ip, port):
+        super().__init__(parent)
+        self.setWindowTitle("Mobil Erişim — WiFi")
+        self.setMinimumWidth(380)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(12)
+
+        info = QLabel(
+            f"<b>WiFi Yerel Erişim Açıldı</b><br><br>"
+            f"Aynı WiFi ağındaki telefon / tablet tarayıcısına:<br><br>"
+            f"<span style='font-size:18px; color:#1565C0; font-family:monospace'>"
+            f"http://{ip}:{port}</span><br><br>"
+            f"<span style='color:#757575; font-size:12px'>"
+            f"İnternetten her yerden erişmek için:<br>"
+            f"Menü → 📱 Mobil Erişim → İnternetten Erişim Aç (ngrok)</span>"
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("background:#E3F2FD; padding:16px; border-radius:6px;")
+        lay.addWidget(info)
+
+        url = f"http://{ip}:{port}"
+        btn_copy = QPushButton("📋 Adresi Kopyala")
+        btn_copy.clicked.connect(lambda: (QApplication.clipboard().setText(url),
+                                          btn_copy.setText("✓ Kopyalandı!")))
+        btn_close = QPushButton("Tamam")
+        btn_close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addWidget(btn_copy); row.addWidget(btn_close)
+        lay.addLayout(row)
+
+
+class _NgrokSetupDialog(QDialog):
+    """ngrok token kurulum dialog'u."""
+    def __init__(self, parent, current_token=""):
+        super().__init__(parent)
+        self.setWindowTitle("ngrok Token Kurulumu")
+        self.setMinimumWidth(480)
+        self.token = ""
+        lay = QVBoxLayout(self)
+        lay.setSpacing(12)
+
+        steps = QLabel(
+            "<b>Kurulum adımları (sadece bir kez):</b><br><br>"
+            "1. <a href='https://ngrok.com/signup'>ngrok.com/signup</a> adresinden <b>ücretsiz hesap</b> açın<br>"
+            "2. Giriş yapın → <b>Your Authtoken</b> sayfasına gidin<br>"
+            "3. Token'ı kopyalayıp aşağıya yapıştırın<br><br>"
+            "<span style='color:#2E7D32'>✓ Ücretsiz — aylık 1GB, sınırsız kullanıcı</span>"
+        )
+        steps.setWordWrap(True)
+        steps.setOpenExternalLinks(True)
+        steps.setStyleSheet("background:#FFF8E1; padding:14px; border-radius:6px;")
+        lay.addWidget(steps)
+
+        form = QFormLayout()
+        self.token_edit = QLineEdit(current_token)
+        self.token_edit.setPlaceholderText("2abc123xyz... şeklinde token yapıştırın")
+        form.addRow("ngrok Token:", self.token_edit)
+        lay.addLayout(form)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self._save)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+    def _save(self):
+        t = self.token_edit.text().strip()
+        if len(t) < 10:
+            QMessageBox.warning(self, "Hata", "Geçerli bir token giriniz!")
+            return
+        self.token = t
+        self.accept()
+
+
+class _NgrokActiveDialog(QDialog):
+    """ngrok aktif — URL ve QR göster."""
+    def __init__(self, parent, url):
+        super().__init__(parent)
+        self.setWindowTitle("İnternetten Erişim Açıldı 🌍")
+        self.setMinimumWidth(420)
+        lay = QVBoxLayout(self)
+        lay.setSpacing(12)
+
+        # HTTPS URL göster
+        info = QLabel(
+            f"<b>🌍 İnternetten erişim AÇIK</b><br><br>"
+            f"Herhangi bir telefon veya bilgisayar tarayıcısından:<br><br>"
+            f"<span style='font-size:16px; color:#1565C0; font-family:monospace'>{url}</span><br><br>"
+            f"<span style='color:#757575; font-size:12px'>"
+            f"⚠ Program kapatılınca veya durdurulunca erişim kapanır.<br>"
+            f"Her açılışta URL değişebilir.</span>"
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("background:#E8F5E9; padding:16px; border-radius:6px;")
+        lay.addWidget(info)
+
+        # QR kod (online servis üzerinden)
+        try:
+            from PyQt6.QtNetwork import QNetworkAccessManager
+        except Exception:
+            pass
+
+        qr_label = QLabel()
+        qr_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        qr_url = f"https://api.qrserver.com/v1/create-qr-code/?size=180x180&data={url}"
+        # QR kodu indirip göster
+        try:
+            import urllib.request
+            data = urllib.request.urlopen(qr_url, timeout=5).read()
+            pix = QPixmap()
+            pix.loadFromData(data)
+            qr_label.setPixmap(pix)
+            qr_label.setToolTip("Telefon kamerasıyla tarayın")
+        except Exception:
+            qr_label.setText("(QR kod için internet gerekli)")
+        lay.addWidget(qr_label)
+
+        btn_copy = QPushButton("📋 Adresi Kopyala")
+        btn_copy.clicked.connect(lambda: (QApplication.clipboard().setText(url),
+                                          btn_copy.setText("✓ Kopyalandı!")))
+        btn_close = QPushButton("Tamam")
+        btn_close.clicked.connect(self.accept)
+        row = QHBoxLayout()
+        row.addWidget(btn_copy); row.addWidget(btn_close)
+        lay.addLayout(row)
+
+
+class LocationManagementDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Raf / Lokasyon Tanımlamaları")
+        self.setMinimumSize(640, 480)
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+
+        # Tablo
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Lokasyon Adı", "Grup", "Açıklama", "Durum", ""])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        btn_add  = QPushButton("+ Yeni Lokasyon"); btn_add.clicked.connect(self._add)
+        btn_edit = QPushButton("✎ Düzenle");       btn_edit.clicked.connect(self._edit)
+        btn_del  = QPushButton("✕ Sil")
+        btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
+        btn_del.clicked.connect(self._delete)
+        btn_sync = QPushButton("🔄 Stoktan Senkronize Et")
+        btn_sync.setStyleSheet("background:#37474F;color:white;border-radius:4px;padding:6px 14px;")
+        btn_sync.clicked.connect(self._sync)
+        btn_close = QPushButton("Kapat"); btn_close.clicked.connect(self.accept)
+        for b in (btn_add, btn_edit, btn_del, btn_sync):
+            btn_row.addWidget(b)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+
+    def _load(self):
+        rows = db.get_all_locations()
+        self.table.setRowCount(len(rows))
+        self._ids = []
+        for i, r in enumerate(rows):
+            self._ids.append(r["id"])
+            self.table.setItem(i, 0, QTableWidgetItem(r["name"]))
+            grp_item = QTableWidgetItem(r["group_name"])
+            grp_item.setForeground(QBrush(QColor("#1565C0") if r["group_name"] == "DEPO" else QColor("#37474F")))
+            grp_item.setFont(QFont("", -1, QFont.Weight.Bold))
+            self.table.setItem(i, 1, grp_item)
+            self.table.setItem(i, 2, QTableWidgetItem(r["description"] or ""))
+            status = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
+            status.setForeground(QBrush(QColor("#2E7D32") if r["active"] else QColor("#C62828")))
+            self.table.setItem(i, 3, status)
+
+    def _selected_id(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "Bir lokasyon seçin.")
+            return None
+        return self._ids[row]
+
+    def _add(self):
+        dlg = self._loc_dialog()
+        if dlg.exec():
+            name, grp, desc = dlg._get()
+            if not name:
+                return QMessageBox.warning(self, "Hata", "Lokasyon adı boş olamaz!")
+            try:
+                db.add_location(name, grp, desc)
+                self._load()
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Eklenemedi:\n{e}")
+
+    def _edit(self):
+        lid = self._selected_id()
+        if not lid: return
+        rows = db.get_all_locations()
+        loc = next((r for r in rows if r["id"] == lid), None)
+        if not loc: return
+        dlg = self._loc_dialog(loc)
+        if dlg.exec():
+            name, grp, desc = dlg._get()
+            active = dlg.active_cb.isChecked()
+            db.update_location(lid, name, grp, desc, active)
+            self._load()
+
+    def _delete(self):
+        lid = self._selected_id()
+        if not lid: return
+        if QMessageBox.question(self, "Sil", "Bu lokasyon silinsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            db.delete_location(lid)
+            self._load()
+
+    def _sync(self):
+        db.sync_locations()
+        self._load()
+        QMessageBox.information(self, "Tamam", "Stok lokasyonları senkronize edildi.")
+
+    def _loc_dialog(self, loc=None):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Lokasyon Ekle" if not loc else "Lokasyon Düzenle")
+        dlg.setMinimumWidth(340)
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout(); form.setSpacing(8)
+        dlg.name_edit = QLineEdit(loc["name"] if loc else "")
+        dlg.grp_cb = QComboBox()
+        dlg.grp_cb.addItems(["DEPO", "DIŞ DEPO"])
+        if loc:
+            idx = dlg.grp_cb.findText(loc["group_name"])
+            if idx >= 0: dlg.grp_cb.setCurrentIndex(idx)
+        dlg.desc_edit = QLineEdit(loc["description"] if loc else "")
+        dlg.active_cb = QCheckBox("Aktif")
+        dlg.active_cb.setChecked(loc["active"] if loc else True)
+        form.addRow("Lokasyon Adı *:", dlg.name_edit)
+        form.addRow("Grup:", dlg.grp_cb)
+        form.addRow("Açıklama:", dlg.desc_edit)
+        form.addRow("", dlg.active_cb)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        dlg._get = lambda: (dlg.name_edit.text().strip(), dlg.grp_cb.currentText(), dlg.desc_edit.text().strip())
+        return dlg
+
+
+class EmailSettingsDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("E-posta Rapor Ayarları")
+        self.setMinimumWidth(480)
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+
+        # Gmail notu
+        note = QLabel(
+            "<b>Gmail kullanıyorsanız:</b> Normal şifre değil, "
+            "<a href='https://myaccount.google.com/apppasswords'>Google Uygulama Şifresi</a> gereklidir.<br>"
+            "Google Hesabım → Güvenlik → 2 Adımlı Doğrulama → Uygulama Şifreleri"
+        )
+        note.setWordWrap(True)
+        note.setOpenExternalLinks(True)
+        note.setStyleSheet("background:#FFF8E1;padding:10px;border-radius:6px;font-size:12px;")
+        lay.addWidget(note)
+
+        form = QFormLayout(); form.setSpacing(8)
+
+        self.smtp_host = QLineEdit()
+        self.smtp_port = QLineEdit()
+        self.smtp_user = QLineEdit(); self.smtp_user.setPlaceholderText("gönderen@gmail.com")
+        self.smtp_pass = QLineEdit(); self.smtp_pass.setEchoMode(QLineEdit.EchoMode.Password)
+        self.smtp_pass.setPlaceholderText("Uygulama şifresi (16 karakter)")
+        self.from_addr = QLineEdit(); self.from_addr.setPlaceholderText("gönderen@gmail.com (boş = smtp_user)")
+        self.to_addrs  = QLineEdit(); self.to_addrs.setPlaceholderText("alici@gmail.com, diger@gmail.com")
+
+        self.send_hour = QComboBox()
+        for h in range(24):
+            self.send_hour.addItem(f"{h:02d}:00", h)
+
+        self.send_enabled = QCheckBox("Her gün otomatik rapor gönder")
+
+        form.addRow("SMTP Sunucu:", self.smtp_host)
+        form.addRow("SMTP Port:", self.smtp_port)
+        form.addRow("Kullanıcı Adı:", self.smtp_user)
+        form.addRow("Şifre:", self.smtp_pass)
+        form.addRow("Gönderen:", self.from_addr)
+        form.addRow("Alıcılar:", self.to_addrs)
+        form.addRow("Gönderim Saati:", self.send_hour)
+        form.addRow("", self.send_enabled)
+        lay.addLayout(form)
+
+        btn_row = QHBoxLayout()
+        btn_test = QPushButton("📤 Şimdi Test Gönder")
+        btn_test.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:7px 14px;")
+        btn_test.clicked.connect(self._test_send)
+        btn_save = QPushButton("Kaydet")
+        btn_cancel = QPushButton("İptal")
+        btn_cancel.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:7px 14px;")
+        btn_cancel.clicked.connect(self.reject)
+        btn_save.clicked.connect(self._save)
+        btn_row.addWidget(btn_test); btn_row.addStretch()
+        btn_row.addWidget(btn_save); btn_row.addWidget(btn_cancel)
+        lay.addLayout(btn_row)
+
+    def _load(self):
+        import email_report as er
+        cfg = er.get_email_config()
+        self.smtp_host.setText(cfg["smtp_host"])
+        self.smtp_port.setText(str(cfg["smtp_port"]))
+        self.smtp_user.setText(cfg["smtp_user"])
+        self.smtp_pass.setText(cfg["smtp_pass"])
+        self.from_addr.setText(cfg["from_addr"])
+        self.to_addrs.setText(cfg["to_addrs"])
+        idx = self.send_hour.findData(cfg["send_hour"])
+        if idx >= 0: self.send_hour.setCurrentIndex(idx)
+        self.send_enabled.setChecked(cfg["send_enabled"])
+
+    def _save(self):
+        import email_report as er
+        er.save_email_config(
+            smtp_host    = self.smtp_host.text().strip(),
+            smtp_port    = self.smtp_port.text().strip() or "587",
+            smtp_user    = self.smtp_user.text().strip(),
+            smtp_pass    = self.smtp_pass.text(),
+            from_addr    = self.from_addr.text().strip(),
+            to_addrs     = self.to_addrs.text().strip(),
+            send_hour    = self.send_hour.currentData(),
+            send_enabled = self.send_enabled.isChecked(),
+        )
+        QMessageBox.information(self, "Kaydedildi", "E-posta ayarları kaydedildi.")
+        self.accept()
+
+    def _test_send(self):
+        self._save_silent()
+        import email_report as er
+        try:
+            n = er.send_report(test=True)
+            QMessageBox.information(self, "Gönderildi ✓",
+                f"Test raporu {n} alıcıya gönderildi!\nGelen kutunuzu kontrol edin.")
+        except Exception as e:
+            QMessageBox.critical(self, "Gönderilemedi", str(e))
+
+    def _save_silent(self):
+        import email_report as er
+        er.save_email_config(
+            smtp_host    = self.smtp_host.text().strip(),
+            smtp_port    = self.smtp_port.text().strip() or "587",
+            smtp_user    = self.smtp_user.text().strip(),
+            smtp_pass    = self.smtp_pass.text(),
+            from_addr    = self.from_addr.text().strip(),
+            to_addrs     = self.to_addrs.text().strip(),
+            send_hour    = self.send_hour.currentData(),
+            send_enabled = self.send_enabled.isChecked(),
+        )
+
+
+class LoginDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Giriş Yap")
+        self.setMinimumWidth(360)
+        self.setWindowFlags(Qt.WindowType.Dialog | Qt.WindowType.WindowTitleHint)
+        self._build_ui()
+        self._load_server_setting()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        if _os.path.exists(LOGO_PATH):
+            logo = QLabel()
+            pix  = QPixmap(LOGO_PATH)
+            logo.setPixmap(pix.scaledToWidth(220, Qt.TransformationMode.SmoothTransformation))
+            logo.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            layout.addWidget(logo)
+
+        title = QLabel("Depo Takip Sistemine Giriş")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size:15px; font-weight:bold; color:#1565C0;")
+        layout.addWidget(title)
+
+        # ── Bağlantı modu ──────────────────────────────────────
+        conn_box = QGroupBox("Bağlantı")
+        conn_lay = QVBoxLayout(conn_box)
+        conn_lay.setSpacing(6)
+
+        self.rb_local  = QPushButton("💻 Bu Bilgisayar (yerel)")
+        self.rb_remote = QPushButton("🌐 Sunucuya Bağlan")
+        self.rb_local.setCheckable(True);  self.rb_local.setChecked(True)
+        self.rb_remote.setCheckable(True); self.rb_remote.setChecked(False)
+        self.rb_local.setStyleSheet("text-align:left; padding:6px 10px;")
+        self.rb_remote.setStyleSheet("text-align:left; padding:6px 10px;")
+        self.rb_local.clicked.connect(lambda: self._set_mode("local"))
+        self.rb_remote.clicked.connect(lambda: self._set_mode("remote"))
+
+        self.server_url = QLineEdit()
+        self.server_url.setPlaceholderText("http://192.168.1.x:5060")
+        self.server_url.setVisible(False)
+
+        conn_lay.addWidget(self.rb_local)
+        conn_lay.addWidget(self.rb_remote)
+        conn_lay.addWidget(self.server_url)
+        layout.addWidget(conn_box)
+
+        # ── Giriş formu ────────────────────────────────────────
+        form = QFormLayout(); form.setSpacing(8)
+        self.username = QLineEdit(); self.username.setPlaceholderText("Kullanıcı adı")
+        self.password = QLineEdit(); self.password.setEchoMode(QLineEdit.EchoMode.Password)
+        self.password.setPlaceholderText("Şifre")
+        form.addRow("Kullanıcı:", self.username)
+        form.addRow("Şifre:",     self.password)
+        layout.addLayout(form)
+
+        self.err_label = QLabel("")
+        self.err_label.setStyleSheet("color:#C62828; font-size:12px;")
+        self.err_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.err_label)
+
+        btn = QPushButton("Giriş Yap")
+        btn.setMinimumHeight(38)
+        btn.clicked.connect(self._login)
+        layout.addWidget(btn)
+
+        self.password.returnPressed.connect(self._login)
+        self.username.returnPressed.connect(lambda: self.password.setFocus())
+
+    def _set_mode(self, mode):
+        self.rb_local.setChecked(mode == "local")
+        self.rb_remote.setChecked(mode == "remote")
+        self.server_url.setVisible(mode == "remote")
+        if mode == "local":
+            self.rb_local.setStyleSheet("text-align:left;padding:6px 10px;background:#E3F2FD;font-weight:bold;")
+            self.rb_remote.setStyleSheet("text-align:left;padding:6px 10px;")
+        else:
+            self.rb_remote.setStyleSheet("text-align:left;padding:6px 10px;background:#E3F2FD;font-weight:bold;")
+            self.rb_local.setStyleSheet("text-align:left;padding:6px 10px;")
+
+    def _load_server_setting(self):
+        """Daha önce kullanılan sunucu adresini yükle."""
+        try:
+            import json
+            cfg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "config.json")
+            cfg = json.load(open(cfg_path)) if _os.path.exists(cfg_path) else {}
+            saved_url = cfg.get("server_url", "")
+            if saved_url:
+                self.server_url.setText(saved_url)
+                self._set_mode("remote")
+        except Exception:
+            pass
+
+    def _save_server_setting(self, url):
+        try:
+            import json
+            cfg_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "config.json")
+            cfg = json.load(open(cfg_path)) if _os.path.exists(cfg_path) else {}
+            cfg["server_url"] = url
+            with open(cfg_path, "w") as f: json.dump(cfg, f, indent=2)
+        except Exception:
+            pass
+
+    def _login(self):
+        global CURRENT_USER, CONNECTION_MODE
+        self.err_label.setText("")
+
+        if self.rb_remote.isChecked():
+            # ── Sunucuya bağlan ─────────────────────────────────
+            url = self.server_url.text().strip()
+            if not url:
+                self.err_label.setText("Sunucu adresi giriniz!")
+                return
+            import api_client
+            api_client.configure(url)
+            self.err_label.setText("Bağlanıyor...")
+            QApplication.processEvents()
+            if not api_client.ping():
+                self.err_label.setText(f"Sunucuya bağlanılamadı:\n{url}\n\nAdres ve sunucunun açık olduğundan emin olun.")
+                return
+            try:
+                user = api_client.login(self.username.text().strip(), self.password.text())
+                CONNECTION_MODE = "remote"
+                CURRENT_USER.update(user)
+                # db'yi proxy'ye çevir — tüm db.xxx çağrıları artık API'ye gider
+                import main as _self_mod
+                _self_mod.db = _self_mod._db
+                self._save_server_setting(url)
+                self.accept()
+            except Exception as e:
+                self.err_label.setText(str(e))
+                self.password.clear(); self.password.setFocus()
+        else:
+            # ── Yerel bağlantı ──────────────────────────────────
+            user = db.authenticate(self.username.text().strip(), self.password.text())
+            if user:
+                CONNECTION_MODE = "local"
+                CURRENT_USER.update(user)
+                self._save_server_setting("")  # yerel ise kayıtlı URL'yi temizle
+                self.accept()
+            else:
+                self.err_label.setText("Kullanıcı adı veya şifre hatalı!")
+                self.password.clear(); self.password.setFocus()
+
+
+class UserManagementDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Kullanıcı Yönetimi")
+        self.setMinimumSize(580, 400)
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Tablo
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Kullanıcı Adı", "Ad Soyad", "Rol", "Durum", "Kayıt Tarihi"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        layout.addWidget(self.table)
+
+        # Butonlar
+        btn_row = QHBoxLayout()
+        btn_add  = QPushButton("+ Yeni Kullanıcı"); btn_add.clicked.connect(self._add)
+        btn_pw   = QPushButton("🔑 Şifre Değiştir"); btn_pw.clicked.connect(self._change_pw)
+        btn_tog  = QPushButton("⏸ Aktif/Pasif");    btn_tog.clicked.connect(self._toggle)
+        btn_del  = QPushButton("✕ Sil")
+        btn_del.setStyleSheet("background:#757575; color:white; border-radius:4px; padding:6px 14px;")
+        btn_del.clicked.connect(self._delete)
+        for b in (btn_add, btn_pw, btn_tog, btn_del):
+            btn_row.addWidget(b)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+
+    def _load(self):
+        users = db.get_all_users()
+        self.table.setRowCount(len(users))
+        self._ids = []
+        for i, u in enumerate(users):
+            self._ids.append(u["id"])
+            self.table.setItem(i, 0, QTableWidgetItem(u["username"]))
+            self.table.setItem(i, 1, QTableWidgetItem(u["full_name"] or ""))
+            self.table.setItem(i, 2, QTableWidgetItem(u["role"]))
+            status = QTableWidgetItem("✅ Aktif" if u["active"] else "⛔ Pasif")
+            status.setForeground(QBrush(QColor("#2E7D32") if u["active"] else QColor("#C62828")))
+            self.table.setItem(i, 3, status)
+            self.table.setItem(i, 4, QTableWidgetItem(str(u["created_at"])[:10]))
+
+    def _selected_id(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "Kullanıcı seçin.")
+            return None
+        return self._ids[row]
+
+    def _add(self):
+        dlg = QDialog(self); dlg.setWindowTitle("Yeni Kullanıcı"); dlg.setMinimumWidth(320)
+        lay = QVBoxLayout(dlg); form = QFormLayout(); form.setSpacing(8)
+        uname = QLineEdit(); fname = QLineEdit()
+        pw1 = QLineEdit(); pw1.setEchoMode(QLineEdit.EchoMode.Password)
+        pw2 = QLineEdit(); pw2.setEchoMode(QLineEdit.EchoMode.Password)
+        role_cb = QComboBox(); role_cb.addItems(["kullanici", "admin"])
+        form.addRow("Kullanıcı Adı *:", uname)
+        form.addRow("Ad Soyad:", fname)
+        form.addRow("Şifre *:", pw1)
+        form.addRow("Şifre (tekrar):", pw2)
+        form.addRow("Rol:", role_cb)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec():
+            if not uname.text().strip():
+                return QMessageBox.warning(self, "Hata", "Kullanıcı adı boş olamaz!")
+            if pw1.text() != pw2.text():
+                return QMessageBox.warning(self, "Hata", "Şifreler eşleşmiyor!")
+            if len(pw1.text()) < 4:
+                return QMessageBox.warning(self, "Hata", "Şifre en az 4 karakter olmalı!")
+            try:
+                db.add_user(uname.text(), fname.text(), pw1.text(), role_cb.currentText())
+                self._load()
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Kullanıcı eklenemedi:\n{e}")
+
+    def _change_pw(self):
+        uid = self._selected_id()
+        if not uid: return
+        pw, ok = QInputDialog.getText(self, "Şifre Değiştir", "Yeni şifre:", QLineEdit.EchoMode.Password)
+        if ok and pw:
+            if len(pw) < 4:
+                return QMessageBox.warning(self, "Hata", "Şifre en az 4 karakter!")
+            db.update_user_password(uid, pw)
+            QMessageBox.information(self, "Tamam", "Şifre güncellendi.")
+
+    def _toggle(self):
+        uid = self._selected_id()
+        if not uid: return
+        if uid == CURRENT_USER.get("id"):
+            return QMessageBox.warning(self, "Uyarı", "Kendi hesabınızı pasif yapamazsınız!")
+        db.toggle_user_active(uid); self._load()
+
+    def _delete(self):
+        uid = self._selected_id()
+        if not uid: return
+        if uid == CURRENT_USER.get("id"):
+            return QMessageBox.warning(self, "Uyarı", "Kendi hesabınızı silemezsiniz!")
+        if QMessageBox.question(self, "Sil", "Kullanıcı silinsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            db.delete_user(uid); self._load()
+
+
+class FabricDialog(QDialog):
+    def __init__(self, parent=None, fabric=None):
+        super().__init__(parent)
+        self.fabric = fabric
+        self.setWindowTitle("Kumaş Ekle" if not fabric else "Kumaş Düzenle")
+        self.setMinimumWidth(480)
+        self._build_ui()
+        if fabric:
+            self._populate(fabric)
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        self.product_code = QLineEdit()
+        self.product_name = QLineEdit()
+        self.color = QLineEdit()
+
+        # Lokasyon — seçmeli combobox
+        self.location = QComboBox()
+        self.location.setEditable(False)
+        self._load_locations()
+
+        self.meter = QDoubleSpinBox()
+        self.meter.setRange(0, 999999)
+        self.meter.setDecimals(2)
+        self.kg = QDoubleSpinBox()
+        self.kg.setRange(0, 999999)
+        self.kg.setDecimals(2)
+        self.piece_count = QLineEdit()
+
+        self.birim_fiyat = QDoubleSpinBox()
+        self.birim_fiyat.setRange(0, 9999999)
+        self.birim_fiyat.setDecimals(2)
+        self.birim_fiyat.setSuffix(" $")
+        self.birim_fiyat.setStyleSheet("border: 1px solid #BDBDBD;")
+
+        # Kumaş tipi — zorunlu
+        self.fabric_type = QComboBox()
+        self.fabric_type.addItem("— Seçiniz —", "")
+        for t in ["HAM", "BOYALI", "BASKILI"]:
+            self.fabric_type.addItem(t, t)
+        self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
+
+        self.lot = QLineEdit()
+        self.lot.setPlaceholderText("İsteğe bağlı")
+
+        self.description = QTextEdit()
+        self.description.setMaximumHeight(70)
+
+        form.addRow("Ürün Kodu *:", self.product_code)
+        form.addRow("Ürün Bilgisi:", self.product_name)
+        form.addRow("Renk:", self.color)
+        form.addRow("Lokasyon *:", self.location)
+        form.addRow("Kumaş Tipi *:", self.fabric_type)
+        form.addRow("Lot:", self.lot)
+        form.addRow("Metre:", self.meter)
+        form.addRow("Kilo:", self.kg)
+        form.addRow("Top/Adet:", self.piece_count)
+        form.addRow("Birim Fiyat ($/mt) *:", self.birim_fiyat)
+        form.addRow("Açıklama:", self.description)
+
+        layout.addLayout(form)
+
+        # Zorunlu alan notu
+        note = QLabel("* işaretli alanlar zorunludur")
+        note.setStyleSheet("color:#9E9E9E; font-size:11px;")
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def _load_locations(self):
+        """Locations tablosundan gruplu yükle."""
+        self.location.clear()
+        self.location.addItem("— Seçiniz —", "")
+        locs = db.get_active_locations()
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for l in locs:
+            groups[l["group_name"]].append(l["name"])
+        for grp in sorted(groups.keys()):
+            # Grup ayracı (seçilemez)
+            self.location.addItem(f"── {grp} ──", "__SEP__")
+            idx = self.location.count() - 1
+            self.location.model().item(idx).setEnabled(False)
+            self.location.model().item(idx).setForeground(
+                QColor("#1565C0") if grp == "DEPO" else QColor("#37474F"))
+            f = QFont(); f.setBold(True)
+            self.location.model().item(idx).setFont(f)
+            for name in sorted(groups[grp]):
+                self.location.addItem(f"  {name}", name)
+
+    def _populate(self, f):
+        self.product_code.setText(f["product_code"] or "")
+        self.product_name.setText(f["product_name"] or "")
+        self.color.setText(f["color"] or "")
+        # Lokasyonu seç
+        loc_val = f["location"] or ""
+        idx = self.location.findData(loc_val)
+        if idx >= 0:
+            self.location.setCurrentIndex(idx)
+        self.meter.setValue(f["meter"] or 0)
+        self.kg.setValue(f["kg"] or 0)
+        self.piece_count.setText(f["piece_count"] or "")
+        self.birim_fiyat.setValue(f["birim_fiyat"] or 0)
+        ft_idx = self.fabric_type.findData(f["fabric_type"] or "")
+        if ft_idx >= 0:
+            self.fabric_type.setCurrentIndex(ft_idx)
+        self.lot.setText(f["lot"] or "")
+        self.description.setPlainText(f["description"] or "")
+
+    def _validate(self):
+        errors = []
+        if not self.product_code.text().strip():
+            errors.append("• Ürün kodu zorunludur")
+        if not self.location.currentData() or self.location.currentData() in ("", "__SEP__"):
+            errors.append("• Lokasyon seçilmelidir")
+        if not self.fabric_type.currentData():
+            errors.append("• Kumaş tipi seçilmelidir (Ham / Boyalı / Baskılı)")
+            self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
+        else:
+            self.fabric_type.setStyleSheet("")
+        if self.birim_fiyat.value() <= 0:
+            errors.append("• Birim fiyat girilmelidir (0'dan büyük olmalı)")
+            self.birim_fiyat.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
+        else:
+            self.birim_fiyat.setStyleSheet("")
+        if errors:
+            QMessageBox.warning(self, "Eksik Bilgi", "\n".join(errors))
+            return
+        self.accept()
+
+    def get_data(self):
+        return {
+            "product_code": self.product_code.text().strip().upper(),
+            "product_name": self.product_name.text().strip(),
+            "color": self.color.text().strip().upper(),
+            "location": self.location.currentData() or "",
+            "fabric_type": self.fabric_type.currentData() or "",
+            "lot": self.lot.text().strip(),
+            "meter": self.meter.value(),
+            "kg": self.kg.value(),
+            "piece_count": self.piece_count.text().strip(),
+            "birim_fiyat": self.birim_fiyat.value(),
+            "description": self.description.toPlainText().strip(),
+        }
+
+
+class MovementDialog(QDialog):
+    def __init__(self, parent, fabric, movement_type):
+        super().__init__(parent)
+        self.movement_type = movement_type
+        label = "GİRİŞ" if movement_type == "GİRİŞ" else "ÇIKIŞ"
+        self.setWindowTitle(f"Stok {label} — {fabric['product_code']} / {fabric['color']}")
+        self.setMinimumWidth(400)
+        self._build_ui(fabric)
+
+    def _build_ui(self, fabric):
+        layout = QVBoxLayout(self)
+
+        info = QLabel(f"<b>{fabric['product_name'] or fabric['product_code']}</b>  |  "
+                      f"Renk: {fabric['color']}  |  Lokasyon: {fabric['location']}<br>"
+                      f"Mevcut: <b>{fabric['meter']:.2f} mt</b>  /  <b>{fabric['kg']:.2f} kg</b>")
+        info.setStyleSheet("background:#E3F2FD; padding:8px; border-radius:4px;")
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        self.meter = QDoubleSpinBox()
+        self.meter.setRange(0, 999999)
+        self.meter.setDecimals(2)
+        self.kg = QDoubleSpinBox()
+        self.kg.setRange(0, 999999)
+        self.kg.setDecimals(2)
+        self.piece_count = QLineEdit()
+        self.notes = QLineEdit()
+
+        form.addRow("Metre:", self.meter)
+        form.addRow("Kilo:", self.kg)
+        form.addRow("Top/Adet:", self.piece_count)
+        form.addRow("Not:", self.notes)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def get_data(self):
+        return {
+            "meter": self.meter.value(),
+            "kg": self.kg.value(),
+            "piece_count": self.piece_count.text().strip(),
+            "notes": self.notes.text().strip(),
+        }
+
+
+TYPE_COLORS = {"GİRİŞ": "#2E7D32", "ÇIKIŞ": "#C62828", "SİLME": "#880E4F"}
+
+
+def _fill_movement_table(table, movements, show_product=False):
+    """Hareket tablosunu doldur. show_product=True ise ürün sütunu eklenir."""
+    if show_product:
+        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Kullanıcı", "Not"]
+    else:
+        cols = ["Tarih", "Tür", "Metre", "Kilo", "Top/Adet", "Kullanıcı", "Not"]
+
+    table.setColumnCount(len(cols))
+    table.setHorizontalHeaderLabels(cols)
+    hdr = table.horizontalHeader()
+    hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+    hdr.setSectionResizeMode(len(cols) - 1, QHeaderView.ResizeMode.Stretch)
+    table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+    table.setAlternatingRowColors(True)
+    table.verticalHeader().setVisible(False)
+    table.setRowCount(len(movements))
+
+    for i, m in enumerate(movements):
+        col = 0
+        def _set(val, align=None, color=None, bold=False):
+            nonlocal col
+            item = QTableWidgetItem(str(val) if val else "")
+            if align:
+                item.setTextAlignment(align)
+            if color:
+                item.setForeground(QBrush(QColor(color)))
+            if bold:
+                item.setFont(QFont("", -1, QFont.Weight.Bold))
+            table.setItem(i, col, item)
+            col += 1
+
+        _set(str(m["movement_date"])[:16])
+        t = m["movement_type"]
+        _set(t, color=TYPE_COLORS.get(t, "#333"), bold=True)
+        if show_product:
+            _set(m["product_code"] or "")
+            _set(m["color"] or "")
+            _set(m["location"] or "")
+        _set(f"{m['meter']:,.2f}" if m["meter"] else "")
+        _set(f"{m['kg']:,.2f}" if m["kg"] else "")
+        _set(m["piece_count"] or "")
+        _set(m["user_name"] or "")
+        _set(m["notes"] or "")
+
+
+class MovementsDialog(QDialog):
+    """Tek ürünün tüm hareketleri."""
+    def __init__(self, parent, fabric):
+        super().__init__(parent)
+        self.setWindowTitle(f"Tüm Hareketler — {fabric['product_code']} / {fabric['color']}")
+        self.setMinimumSize(750, 480)
+        layout = QVBoxLayout(self)
+
+        info = QLabel(
+            f"<b>{fabric['product_name'] or ''} {fabric['product_code']}</b>"
+            f" — {fabric['color']} — <span style='color:#1565C0'>{fabric['location']}</span>"
+        )
+        info.setStyleSheet("font-size:14px; padding:6px; background:#E3F2FD; border-radius:4px;")
+        layout.addWidget(info)
+
+        table = QTableWidget()
+        movements = db.get_movements(fabric["id"])
+        _fill_movement_table(table, movements, show_product=False)
+        layout.addWidget(table)
+
+        row = QHBoxLayout()
+        lbl = QLabel(f"<span style='color:#555'>{len(movements)} hareket kaydı</span>")
+        btn = QPushButton("Kapat"); btn.clicked.connect(self.accept)
+        row.addWidget(lbl); row.addStretch(); row.addWidget(btn)
+        layout.addLayout(row)
+
+
+class DailyMovementsDialog(QDialog):
+    """Bugünün tüm hareketleri — seçili satır yokken açılır."""
+    def __init__(self, parent):
+        super().__init__(parent)
+        from datetime import date
+        self._today = date.today()
+        self.setWindowTitle(f"Günlük Hareketler — {self._today.strftime('%d.%m.%Y')}")
+        self.setMinimumSize(900, 520)
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+
+        # Tarih seçici
+        top = QHBoxLayout()
+        from PyQt6.QtWidgets import QDateEdit
+        from PyQt6.QtCore import QDate
+        top.addWidget(QLabel("Tarih:"))
+        self.date_edit = QDateEdit()
+        self.date_edit.setCalendarPopup(True)
+        self.date_edit.setDate(QDate.currentDate())
+        self.date_edit.setDisplayFormat("dd.MM.yyyy")
+        self.date_edit.dateChanged.connect(self._load)
+        top.addWidget(self.date_edit)
+        top.addStretch()
+        self.count_lbl = QLabel()
+        self.count_lbl.setStyleSheet("color:#555; font-size:12px;")
+        top.addWidget(self.count_lbl)
+        layout.addLayout(top)
+
+        self.table = QTableWidget()
+        layout.addWidget(self.table)
+
+        btn = QPushButton("Kapat"); btn.clicked.connect(self.accept)
+        layout.addWidget(btn)
+
+    def _load(self):
+        from PyQt6.QtCore import QDate
+        d = self.date_edit.date().toString("yyyy-MM-dd")
+        all_mv = db.get_all_movements(1000)
+        movements = [m for m in all_mv if str(m["movement_date"]).startswith(d)]
+        _fill_movement_table(self.table, movements, show_product=True)
+        self.count_lbl.setText(
+            f"{len(movements)} hareket" if movements else "Bu tarihte hareket yok"
+        )
+
+
+COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Açıklama"]
+_GREEN = QColor("#1B5E20")
+_GREY  = QColor("#BDBDBD")
+_ALT   = QColor("#F0F4FF")
+
+
+def _export_table_to_excel(parent, model, table_view, title="Stok Raporu"):
+    """Model verilerini sütun sırasına göre (görsel sıra dahil) Excel'e aktar."""
+    path, _ = QFileDialog.getSaveFileName(
+        parent, "Excel'e Aktar", f"{title}.xlsx", "Excel (*.xlsx)"
+    )
+    if not path:
+        return
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from datetime import datetime
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = title[:31]
+
+        # Görsel sütun sırası (kullanıcı sütunları taşımış olabilir)
+        hdr = table_view.horizontalHeader()
+        col_count = model.columnCount()
+        visual_order = [hdr.logicalIndex(vi) for vi in range(col_count)]
+
+        # Başlık satırı
+        headers = [model.headerData(li, Qt.Orientation.Horizontal) or "" for li in visual_order]
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", start_color="1565C0")
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 18
+
+        # Veri satırları
+        for row_i in range(model.rowCount()):
+            row_data = []
+            for li in visual_order:
+                idx = model.index(row_i, li)
+                val = model.data(idx, Qt.ItemDataRole.DisplayRole) or ""
+                # Sayısal değerler için float'a çevir
+                if li in (7, 8, 10, 11):
+                    try:
+                        val = float(str(val).replace(" $", "").replace(",", ""))
+                    except Exception:
+                        pass
+                row_data.append(val)
+            ws.append(row_data)
+
+        # Sütun genişlikleri
+        for i, col in enumerate(ws.columns, 1):
+            max_len = max((len(str(c.value or "")) for c in col), default=8)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 40)
+
+        # Footer notu
+        ws.append([])
+        ws.append([f"Dışa aktarıldı: {datetime.now().strftime('%d.%m.%Y %H:%M')}  |  {model.rowCount()} kayıt"])
+
+        wb.save(path)
+        QMessageBox.information(parent, "Başarılı", f"{model.rowCount()} kayıt dışa aktarıldı:\n{path}")
+    except Exception as e:
+        QMessageBox.critical(parent, "Hata", f"Dışa aktarma hatası:\n{e}")
+
+
+def _export_widget_table_to_excel(parent, table_widget, title="Rapor"):
+    """QTableWidget içeriğini Excel'e aktar (Lokasyon görünümü için)."""
+    path, _ = QFileDialog.getSaveFileName(
+        parent, "Excel'e Aktar", f"{title}.xlsx", "Excel (*.xlsx)"
+    )
+    if not path:
+        return
+    try:
+        import openpyxl
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from datetime import datetime
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = title[:31]
+
+        hdr = table_widget.horizontalHeader()
+        col_count = table_widget.columnCount()
+        visual_order = [hdr.logicalIndex(vi) for vi in range(col_count)]
+
+        headers = [table_widget.horizontalHeaderItem(li).text()
+                   if table_widget.horizontalHeaderItem(li) else "" for li in visual_order]
+        ws.append(headers)
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", start_color="1565C0")
+            cell.alignment = Alignment(horizontal="center")
+
+        for row_i in range(table_widget.rowCount()):
+            row_data = []
+            for li in visual_order:
+                item = table_widget.item(row_i, li)
+                row_data.append(item.text() if item else "")
+            ws.append(row_data)
+
+        for col in ws.columns:
+            max_len = max((len(str(c.value or "")) for c in col), default=8)
+            ws.column_dimensions[col[0].column_letter].width = min(max_len + 3, 40)
+
+        ws.append([])
+        ws.append([f"Dışa aktarıldı: {datetime.now().strftime('%d.%m.%Y %H:%M')}  |  {table_widget.rowCount()} kayıt"])
+
+        wb.save(path)
+        QMessageBox.information(parent, "Başarılı", f"{table_widget.rowCount()} kayıt dışa aktarıldı:\n{path}")
+    except Exception as e:
+        QMessageBox.critical(parent, "Hata", f"Dışa aktarma hatası:\n{e}")
+
+
+class FabricModel(QAbstractTableModel):
+    def __init__(self):
+        super().__init__()
+        self._rows = []
+        self._ids  = []
+
+    # tuple: 0=id,1=code,2=name,3=color,4=loc,5=tip,6=lot,7=mt,8=kg,9=piece,10=fiyat,11=deger,12=date,13=desc
+    def load(self, rows):
+        self.beginResetModel()
+        self._rows = []
+        for r in rows:
+            mt    = r["meter"] or 0.0
+            kg    = r["kg"] or 0.0
+            fiy   = r["birim_fiyat"] or 0.0
+            deger = mt * fiy if mt > 0 else (kg * fiy if kg > 0 else 0.0)
+            self._rows.append((
+                r["id"],
+                r["product_code"] or "",
+                r["product_name"] or "",
+                r["color"] or "",
+                r["location"] or "",
+                r["fabric_type"] or "",
+                r["lot"] or "",
+                mt,
+                kg,
+                r["piece_count"] or "",
+                fiy,
+                deger,
+                str(r["updated_at"] or "")[:16],
+                r["description"] or "",
+            ))
+        self._ids = [r[0] for r in self._rows]
+        self.endResetModel()
+
+    def rowCount(self, parent=QModelIndex()):
+        return len(self._rows)
+
+    def columnCount(self, parent=QModelIndex()):
+        return len(COLS)
+
+    def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
+        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+            return COLS[section]
+        if role == Qt.ItemDataRole.FontRole and orientation == Qt.Orientation.Horizontal:
+            f = QFont(); f.setBold(True); return f
+        return None
+
+    def sort(self, col, order=Qt.SortOrder.AscendingOrder):
+        if col == 0:   # # sütunu — sıralama yapma
+            return
+        self.layoutAboutToBeChanged.emit()
+        reverse = (order == Qt.SortOrder.DescendingOrder)
+        # Sayısal sütunlar: 7=mt, 8=kg, 10=fiyat, 11=değer
+        numeric = {7, 8, 10, 11}
+        def key(r):
+            v = r[col]
+            if col in numeric:
+                return v if isinstance(v, (int, float)) else 0
+            return str(v).lower()
+        self._rows.sort(key=key, reverse=reverse)
+        self._ids = [r[0] for r in self._rows]
+        self.layoutChanged.emit()
+
+    def data(self, index, role=Qt.ItemDataRole.DisplayRole):
+        if not index.isValid():
+            return None
+        row, col = index.row(), index.column()
+        r = self._rows[row]
+
+        # col: 0=#,1=code,2=name,3=color,4=loc,5=tip,6=lot,7=mt,8=kg,9=piece,10=fiyat,11=deger,12=date,13=desc
+        if role == Qt.ItemDataRole.DisplayRole:
+            if col == 0: return str(row + 1)
+            val = r[col]
+            if col in (7, 8): return f"{val:.2f}"
+            if col == 10: return f"{val:,.2f} $" if val else "—"
+            if col == 11: return f"{val:,.2f} $" if val else "—"
+            return str(val)
+
+        if role == Qt.ItemDataRole.TextAlignmentRole:
+            if col in (7, 8, 10, 11):
+                return int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
+            return int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+        if role == Qt.ItemDataRole.ForegroundRole:
+            if col in (7, 8):
+                return QBrush(_GREY if r[col] == 0 else _GREEN)
+            if col == 11 and r[11] > 0:
+                return QBrush(QColor("#1A237E"))
+            if col == 5:
+                return QBrush({"HAM": QColor("#5D4037"),
+                                "BOYALI": QColor("#1565C0"),
+                                "BASKILI": QColor("#6A1B9A")}.get(r[5], QColor("#333")))
+
+        if role == Qt.ItemDataRole.BackgroundRole:
+            if row % 2 == 1:
+                return QBrush(_ALT)
+
+        if role == Qt.ItemDataRole.ToolTipRole:
+            val = r[col]
+            if col == 0: return str(row + 1)
+            if col in (7, 8): return f"{val:.2f}"
+            if col == 10: return f"{val:,.2f} $" if val else "Fiyat girilmemiş"
+            if col == 11: return f"{val:,.2f} $" if val else "—"
+            return str(val) if val else ""
+
+        return None
+
+    def id_at(self, row):
+        if 0 <= row < len(self._ids):
+            return self._ids[row]
+        return None
+
+
+class StockTable(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._loaded = False
+        self._model = FabricModel()
+        self._build_ui()
+        QTimer.singleShot(0, self._first_load)
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        toolbar = QHBoxLayout()
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Ürün kodu, adı, renk ile ara...")
+        self.search_box.setMinimumWidth(280)
+        self.search_box.textChanged.connect(self._on_search_change)
+
+        self.location_filter = QComboBox()
+        self.location_filter.setMinimumWidth(130)
+        self.location_filter.currentIndexChanged.connect(self.refresh)
+
+        self.type_filter = QComboBox()
+        self.type_filter.setMinimumWidth(100)
+        self.type_filter.addItem("Tüm Tipler", "")
+        for t in ["HAM", "BOYALI", "BASKILI"]:
+            self.type_filter.addItem(t, t)
+        self.type_filter.currentIndexChanged.connect(self.refresh)
+
+        btn_add   = QPushButton("+ Yeni Kumaş"); btn_add.clicked.connect(self._add)
+        btn_giris = QPushButton("↑ Giriş");      btn_giris.clicked.connect(self._giris)
+        btn_cikis = QPushButton("↓ Çıkış");      btn_cikis.clicked.connect(self._cikis)
+        btn_edit  = QPushButton("✎ Düzenle");    btn_edit.clicked.connect(self._edit)
+        btn_del   = QPushButton("✕ Sil");        btn_del.clicked.connect(self._delete)
+        btn_hist  = QPushButton("☰ Hareketler"); btn_hist.clicked.connect(self._history)
+        btn_hist.setToolTip("Satır seçiliyse: o ürünün tüm hareketleri\nSeçili satır yoksa: bugünün hareketleri")
+
+        self.btn_undo = QPushButton("↩ Geri Al")
+        self.btn_undo.setEnabled(False)
+        self.btn_undo.setStyleSheet("background:#5C6BC0; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
+        self.btn_undo.clicked.connect(self._undo)
+
+        btn_giris.setStyleSheet(f"background:{COLORS['success']}; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
+        btn_cikis.setStyleSheet(f"background:{COLORS['danger']}; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
+        btn_edit.setStyleSheet("background:#F57F17; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
+        btn_del.setStyleSheet("background:#757575; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
+
+        toolbar.addWidget(QLabel("Ara:")); toolbar.addWidget(self.search_box)
+        toolbar.addWidget(QLabel("Lokasyon:")); toolbar.addWidget(self.location_filter)
+        toolbar.addWidget(QLabel("Tip:")); toolbar.addWidget(self.type_filter)
+        toolbar.addStretch()
+        for b in (btn_add, btn_giris, btn_cikis, btn_edit, btn_del, btn_hist, self.btn_undo):
+            toolbar.addWidget(b)
+        layout.addLayout(toolbar)
+
+        # Undo stack değişince butonu güncelle
+        _UNDO_CALLBACKS.append(self._refresh_undo_btn)
+
+        # QTableView — sadece görünen satırları render eder
+        self.table = QTableView()
+        self.table.setModel(self._model)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(True)
+        self.table.setGridStyle(Qt.PenStyle.SolidLine)
+        self.table.doubleClicked.connect(self._history)
+        self.table.verticalHeader().setDefaultSectionSize(26)
+        self.table.setMouseTracking(True)
+        self.table.setWordWrap(False)
+        self.table.setSortingEnabled(True)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
+
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(False)
+        hdr.setMinimumSectionSize(40)
+        hdr.setSectionsMovable(True)   # sütun sürükle-bırak
+
+        # Başlangıç genişlikleri
+        col_widths = [36, 100, 130, 110, 90, 70, 90, 72, 65, 80, 110, 120, 130, 220]
+        for i, w in enumerate(col_widths):
+            self.table.setColumnWidth(i, w)
+
+        layout.addWidget(self.table)
+
+        # ── Toplam Barı ──
+        self._totals_bar = QFrame()
+        self._totals_bar.setStyleSheet(
+            "background:#1565C0; border-radius:4px; padding:0;"
+        )
+        bar_layout = QHBoxLayout(self._totals_bar)
+        bar_layout.setContentsMargins(12, 6, 12, 6)
+        bar_layout.setSpacing(0)
+
+        def _stat_widget(label):
+            w = QWidget()
+            wl = QVBoxLayout(w); wl.setSpacing(1); wl.setContentsMargins(0,0,0,0)
+            lbl = QLabel(label)
+            lbl.setStyleSheet("color:rgba(255,255,255,.65); font-size:10px;")
+            val = QLabel("—")
+            val.setStyleSheet("color:white; font-size:14px; font-weight:bold;")
+            wl.addWidget(lbl); wl.addWidget(val)
+            return w, val
+
+        def sep():
+            f = QFrame()
+            f.setFrameShape(QFrame.Shape.VLine)
+            f.setStyleSheet("color:rgba(255,255,255,.25); margin:0 16px;")
+            return f
+
+        w1, self._tot_items  = _stat_widget("Kalem Sayısı")
+        w2, self._tot_meter  = _stat_widget("Toplam Metre")
+        w3, self._tot_kg     = _stat_widget("Toplam Kilo")
+        w4, self._tot_value  = _stat_widget("Toplam Değer")
+
+        for w in (w1, sep(), w2, sep(), w3, sep(), w4):
+            bar_layout.addWidget(w)
+        bar_layout.addStretch()
+
+        self._filter_lbl = QLabel()
+        self._filter_lbl.setStyleSheet("color:rgba(255,255,255,.7); font-size:11px; font-style:italic;")
+        bar_layout.addWidget(self._filter_lbl)
+
+        layout.addWidget(self._totals_bar)
+
+        self._search_timer = QTimer()
+        self._search_timer.setSingleShot(True)
+        self._search_timer.timeout.connect(self.refresh)
+
+    def _on_search_change(self):
+        self._search_timer.start(250)
+
+    def _refresh_undo_btn(self):
+        if _UNDO_STACK:
+            desc = _UNDO_STACK[-1][0]
+            self.btn_undo.setEnabled(True)
+            self.btn_undo.setText(f"↩ Geri Al: {desc}")
+            self.btn_undo.setToolTip(f"Son işlemi geri al:\n{desc}")
+        else:
+            self.btn_undo.setEnabled(False)
+            self.btn_undo.setText("↩ Geri Al")
+            self.btn_undo.setToolTip("")
+
+    def _undo(self):
+        item = pop_undo()
+        if not item:
+            return
+        desc, fn = item
+        try:
+            fn()
+            self.refresh_with_locations()
+            self._refresh_undo_btn()
+        except Exception as e:
+            QMessageBox.critical(self, "Geri Al Hatası", str(e))
+
+    def _first_load(self):
+        self._reload_locations()
+        self._fill_table()
+        self._loaded = True
+
+    def refresh(self):
+        if not self._loaded:
+            return
+        self._fill_table()
+
+    def refresh_with_locations(self):
+        self._reload_locations()
+        self._fill_table()
+
+    def _reload_locations(self):
+        current_loc = self.location_filter.currentData()
+        self.location_filter.blockSignals(True)
+        self.location_filter.clear()
+        self.location_filter.addItem("Tüm Lokasyonlar", "")
+
+        all_locs = db.get_active_locations()
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for l in all_locs:
+            groups[l["group_name"]].append(l["name"])
+
+        for grp in sorted(groups.keys()):
+            if grp == "DEPO":
+                # DEPO → tek seçenek, tümünü getirir
+                self.location_filter.addItem("DEPO", "__GRP_DEPO__")
+            else:
+                # Diğer gruplar → tek tek lokasyon olarak listele
+                for name in sorted(groups[grp]):
+                    self.location_filter.addItem(name, name)
+
+        if current_loc:
+            idx = self.location_filter.findData(current_loc)
+            if idx >= 0:
+                self.location_filter.setCurrentIndex(idx)
+        self.location_filter.blockSignals(False)
+
+    def _fill_table(self):
+        search  = self.search_box.text().strip()
+        loc     = self.location_filter.currentData() or ""
+        ftype   = self.type_filter.currentData() or ""
+
+        if loc.startswith("__GRP_"):
+            grp_name = loc[len("__GRP_"):-2]
+            grp_locs = [l["name"] for l in db.get_active_locations()
+                        if l["group_name"] == grp_name]
+            rows = []
+            for gl in grp_locs:
+                rows.extend(db.get_all_fabrics(search, gl, ftype))
+        else:
+            rows = db.get_all_fabrics(search, loc, ftype)
+
+        self._model.load(rows)
+        self._update_totals(rows)
+
+        summary = db.get_summary()
+        if hasattr(self.parent(), "update_status"):
+            self.parent().update_status(len(rows), summary)
+
+    def _update_totals(self, rows):
+        total_mt  = sum(r["meter"] or 0 for r in rows)
+        total_kg  = sum(r["kg"] or 0 for r in rows)
+        total_val = sum(
+            ((r["meter"] or 0) * (r["birim_fiyat"] or 0)) if (r["meter"] or 0) > 0
+            else ((r["kg"] or 0) * (r["birim_fiyat"] or 0))
+            for r in rows
+        )
+        self._tot_items.setText(f"{len(rows):,}")
+        self._tot_meter.setText(f"{total_mt:,.2f} mt")
+        self._tot_kg.setText(f"{total_kg:,.2f} kg")
+        self._tot_value.setText(f"{total_val:,.2f} $" if total_val else "—")
+
+        loc = self.location_filter.currentData() or ""
+        search = self.search_box.text().strip()
+        parts = []
+        if loc and not loc.startswith("__"):
+            parts.append(f"Lokasyon: {self.location_filter.currentText().strip()}")
+        elif loc.startswith("__ALL_"):
+            parts.append(f"Lokasyon: {self.location_filter.currentText().strip()}")
+        if search:
+            parts.append(f'Arama: "{search}"')
+        self._filter_lbl.setText("  |  " + "  ·  ".join(parts) if parts else "")
+
+    def _selected_row(self):
+        idx = self.table.selectionModel().currentIndex()
+        if not idx.isValid():
+            QMessageBox.information(self, "Bilgi", "Lütfen bir kayıt seçin.")
+            return -1
+        return idx.row()
+
+    def _selected_id(self):
+        row = self._selected_row()
+        if row < 0:
+            return None
+        fid = self._model.id_at(row)
+        if fid is None:
+            QMessageBox.information(self, "Bilgi", "Lütfen bir kayıt seçin.")
+        return fid
+
+    def _add(self):
+        dlg = FabricDialog(self)
+        if dlg.exec():
+            d = dlg.get_data()
+            fid = db.add_fabric(**d, user_name=CURRENT_USER["full_name"])
+            push_undo(f"Eklendi: {d['product_code']}",
+                      lambda fid=fid: db.soft_delete_fabric(fid, "UNDO"))
+            self.refresh_with_locations()
+
+    def _edit(self):
+        fid = self._selected_id()
+        if not fid:
+            return
+        fabric = db.get_fabric(fid)
+        dlg = FabricDialog(self, fabric)
+        if dlg.exec():
+            d = dlg.get_data()
+            db.update_fabric(fid, **d)
+            self.refresh()
+
+    def _delete(self):
+        fid = self._selected_id()
+        if not fid:
+            return
+        fabric = db.get_fabric(fid)
+        reply = QMessageBox.question(
+            self, "Stoktan Sil",
+            f"<b>{fabric['product_code']}</b> ({fabric['color']}) stoktan silinsin mi?<br><br>"
+            f"<span style='color:#555'>Hareket geçmişi korunacak, stok listesinden kaldırılacak.</span>",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            db.soft_delete_fabric(fid, user_name=CURRENT_USER["full_name"])
+            push_undo(f"Silindi: {fabric['product_code']} / {fabric['color']}",
+                      lambda fid=fid: db.restore_fabric(fid))
+            self.refresh_with_locations()
+
+    def _giris(self):
+        fid = self._selected_id()
+        if not fid:
+            return
+        fabric = db.get_fabric(fid)
+        dlg = MovementDialog(self, fabric, "GİRİŞ")
+        if dlg.exec():
+            d = dlg.get_data()
+            mid = db.add_movement(fid, "GİRİŞ", d["meter"], d["kg"], d["piece_count"],
+                                  d["notes"], user_name=CURRENT_USER["full_name"])
+            push_undo(f"Giriş: {fabric['product_code']} +{d['meter']:.1f}mt",
+                      lambda mid=mid: db.reverse_movement(mid))
+            self.refresh()
+
+    def _cikis(self):
+        fid = self._selected_id()
+        if not fid:
+            return
+        fabric = db.get_fabric(fid)
+        dlg = MovementDialog(self, fabric, "ÇIKIŞ")
+        if dlg.exec():
+            d = dlg.get_data()
+            mid = db.add_movement(fid, "ÇIKIŞ", d["meter"], d["kg"], d["piece_count"],
+                                  d["notes"], user_name=CURRENT_USER["full_name"])
+            push_undo(f"Çıkış: {fabric['product_code']} -{d['meter']:.1f}mt",
+                      lambda mid=mid: db.reverse_movement(mid))
+            self.refresh()
+
+    def _history(self):
+        idx = self.table.selectionModel().currentIndex()
+        if idx.isValid():
+            fid = self._model.id_at(idx.row())
+            if fid:
+                fabric = db.get_fabric(fid)
+                MovementsDialog(self, fabric).exec()
+                return
+        DailyMovementsDialog(self).exec()
+
+    def _context_menu(self, pos):
+        from PyQt6.QtWidgets import QMenu
+        menu = QMenu(self)
+        act_export = menu.addAction("📥 Excel'e Aktar (görünen liste)")
+        act_export_all = menu.addAction("📥 Excel'e Aktar (tüm stok)")
+        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if action == act_export:
+            self._export_visible()
+        elif action == act_export_all:
+            self._export_all()
+
+    def _export_visible(self):
+        """Tabloda şu an görünen satırları dışa aktar."""
+        _export_table_to_excel(self, self._model, self.table)
+
+    def _export_all(self):
+        """Filtresiz tüm stoğu dışa aktar."""
+        all_rows = db.get_all_fabrics()
+        import tempfile
+        tmp_model = FabricModel()
+        tmp_model.load(all_rows)
+        _export_table_to_excel(self, tmp_model, self.table, title="Tüm Stok")
+
+
+class LocationView(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+        self.refresh()
+
+    def _build_ui(self):
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # Left: location list
+        left = QGroupBox("Lokasyonlar")
+        left_layout = QVBoxLayout(left)
+        self.loc_list = QListWidget()
+        self.loc_list.currentItemChanged.connect(self._on_loc_change)
+        left_layout.addWidget(self.loc_list)
+        left.setMaximumWidth(180)
+        splitter.addWidget(left)
+
+        # Right: fabric table
+        right = QGroupBox("Kumaşlar")
+        right_layout = QVBoxLayout(right)
+        self.table = QTableWidget()
+        cols = ["Ürün Kodu", "Ürün Bilgisi", "Renk", "Metre", "Kilo", "Top/Adet", "Açıklama"]
+        self.table.setColumnCount(len(cols))
+        self.table.setHorizontalHeaderLabels(cols)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        self.table.setMouseTracking(True)
+        self.table.setSortingEnabled(True)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._context_menu)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(False)
+        hdr.setMinimumSectionSize(50)
+        hdr.setSectionsMovable(True)
+        for i, w in enumerate([100, 130, 100, 75, 65, 80, 250]):
+            self.table.setColumnWidth(i, w)
+        right_layout.addWidget(self.table)
+
+        self.loc_total = QLabel()
+        self.loc_total.setStyleSheet("padding:4px; font-weight:bold; color:#1565C0;")
+        right_layout.addWidget(self.loc_total)
+        splitter.addWidget(right)
+        splitter.setSizes([160, 640])
+        layout.addWidget(splitter)
+
+    def refresh(self):
+        current = self.loc_list.currentItem()
+        current_data = current.data(Qt.ItemDataRole.UserRole) if current else None
+
+        # Listeyi sadece lokasyon sayısı değişmişse yeniden oluştur
+        new_locs = db.get_active_locations()
+        new_sig  = tuple(l["name"] for l in new_locs)
+        if hasattr(self, "_loc_sig") and self._loc_sig == new_sig and self.loc_list.count() > 0:
+            return   # değişmemiş, listeyi yeniden çizme
+        self._loc_sig = new_sig
+
+        self.loc_list.clear()
+
+        all_locs = db.get_active_locations()
+        from collections import defaultdict
+        groups = defaultdict(list)
+        for l in all_locs:
+            groups[l["group_name"]].append(l["name"])
+
+        for grp in sorted(groups.keys()):
+            if grp == "DEPO":
+                # DEPO → tek tıklanabilir satır, tüm rafları getirir
+                item = QListWidgetItem("DEPO")
+                item.setData(Qt.ItemDataRole.UserRole, "__GRP_DEPO__")
+                item.setForeground(QBrush(QColor("#FFFFFF")))
+                item.setBackground(QBrush(QColor("#1565C0")))
+                item.setFont(QFont("", -1, QFont.Weight.Bold))
+                self.loc_list.addItem(item)
+            else:
+                # Diğer grup → başlık + tek tek lokasyonlar
+                sep = QListWidgetItem(f"── {grp} ──")
+                sep.setForeground(QBrush(QColor("#FFFFFF")))
+                sep.setBackground(QBrush(QColor("#37474F")))
+                sep.setFont(QFont("", -1, QFont.Weight.Bold))
+                sep.setFlags(Qt.ItemFlag.NoItemFlags)
+                self.loc_list.addItem(sep)
+                for name in sorted(groups[grp]):
+                    item = QListWidgetItem(f"  {name}")
+                    item.setData(Qt.ItemDataRole.UserRole, name)
+                    self.loc_list.addItem(item)
+
+        # Önceki seçimi koru
+        if current_data:
+            for i in range(self.loc_list.count()):
+                it = self.loc_list.item(i)
+                if it.data(Qt.ItemDataRole.UserRole) == current_data:
+                    self.loc_list.setCurrentItem(it)
+                    break
+
+    def _on_loc_change(self, item):
+        if not item:
+            return
+        loc_data = item.data(Qt.ItemDataRole.UserRole)
+        if not loc_data:
+            return
+
+        if loc_data == "__GRP_DEPO__":
+            rows = db.get_all_fabrics()   # tek sorgu — tümünü çek, sonra filtrele
+            depo_locs = {l["name"] for l in db.get_active_locations()
+                         if l["group_name"] == "DEPO"}
+            rows = [r for r in rows if (r["location"] or "") in depo_locs]
+            label = "DEPO"
+        else:
+            rows = db.get_all_fabrics(location=loc_data)
+            label = loc_data
+
+        R_ALIGN = Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight
+        total_m = total_kg = total_val = 0.0
+
+        self.table.setSortingEnabled(False)   # veri yüklenirken sıralamayı kapat
+        self.table.setUpdatesEnabled(False)
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            mt  = r["meter"] or 0
+            kg  = r["kg"] or 0
+            fiy = r["birim_fiyat"] or 0
+            val = mt * fiy if mt > 0 else kg * fiy
+            vals = [r["product_code"] or "", r["product_name"] or "", r["color"] or "",
+                    f"{mt:,.2f}", f"{kg:,.2f}", r["piece_count"] or "", r["description"] or ""]
+            for j, v in enumerate(vals):
+                cell = QTableWidgetItem(v)
+                cell.setToolTip(v)
+                if j in (3, 4):
+                    cell.setTextAlignment(R_ALIGN)
+                self.table.setItem(i, j, cell)
+            total_m += mt; total_kg += kg; total_val += val
+        self.table.setUpdatesEnabled(True)
+        self.table.setSortingEnabled(True)   # veri yüklendi, sıralamayı aç
+
+        val_str = f"  |  {total_val:,.0f} $" if total_val else ""
+        self.loc_total.setText(
+            f"{label}: {len(rows)} kalem  |  {total_m:,.2f} mt  |  {total_kg:,.2f} kg{val_str}"
+        )
+
+    def _context_menu(self, pos):
+        from PyQt6.QtWidgets import QMenu
+        cur = self.loc_list.currentItem()
+        label = cur.text().strip() if cur else "Lokasyon"
+        menu = QMenu(self)
+        act = menu.addAction(f"📥 Excel'e Aktar ({label})")
+        if menu.exec(self.table.viewport().mapToGlobal(pos)) == act:
+            _export_widget_table_to_excel(self, self.table, title=label)
+
+
+class DashboardWidget(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+        self.refresh()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(16)
+
+        header_row = QHBoxLayout()
+        header_row.setSpacing(16)
+        header_row.setContentsMargins(12, 8, 12, 8)
+
+        # Logo — yüksek çözünürlük, sola yasla
+        logo_label = QLabel()
+        if _os.path.exists(LOGO_PATH):
+            pix = QPixmap(LOGO_PATH)
+            logo_label.setPixmap(
+                pix.scaledToHeight(100, Qt.TransformationMode.SmoothTransformation)
+            )
+        logo_label.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+        # Başlık
+        title = QLabel("DEPO TAKİP SİSTEMİ")
+        title.setStyleSheet("font-size:20px; font-weight:bold; color:#1565C0; letter-spacing:1px;")
+        title.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
+
+        header_row.addWidget(logo_label)
+        header_row.addWidget(title)
+        header_row.addStretch()
+
+        btn_users = QPushButton("👤 Kullanıcı Yönetimi")
+        btn_users.setStyleSheet(
+            "background:#37474F; color:white; font-weight:bold; border-radius:4px; padding:8px 16px;"
+        )
+        btn_users.clicked.connect(self._open_user_mgmt)
+        header_row.addWidget(btn_users)
+
+        header_frame = QFrame()
+        header_frame.setLayout(header_row)
+        header_frame.setStyleSheet("background:white; border-radius:6px;")
+        header_frame.setFixedHeight(116)
+        layout.addWidget(header_frame)
+
+        stats_layout = QHBoxLayout()
+        self.stat_items = QLabel("0")
+        self.stat_meter = QLabel("0.00 mt")
+        self.stat_kg    = QLabel("0.00 kg")
+        self.stat_value = QLabel("0 $")
+
+        for label_text, stat_widget, color, icon in [
+            ("Toplam Ürün Kalemi",   self.stat_items, "#1565C0", "📦"),
+            ("Toplam Stok (Metre)",  self.stat_meter, "#2E7D32", "📏"),
+            ("Toplam Stok (Kilo)",   self.stat_kg,    "#6A1B9A", "⚖️"),
+            ("Stok Toplam Değeri",   self.stat_value, "#B71C1C", "💰"),
+        ]:
+            box = QGroupBox()
+            box_layout = QVBoxLayout(box)
+            lbl_icon = QLabel(icon)
+            lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl_icon.setStyleSheet("font-size:22px;")
+            lbl = QLabel(label_text)
+            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("color:#757575; font-size:11px;")
+            stat_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            stat_widget.setStyleSheet(f"color:{color}; font-size:22px; font-weight:bold;")
+            box_layout.addWidget(lbl_icon)
+            box_layout.addWidget(stat_widget)
+            box_layout.addWidget(lbl)
+            box.setMinimumHeight(110)
+            stats_layout.addWidget(box)
+        layout.addLayout(stats_layout)
+
+        # Location summary table
+        loc_group = QGroupBox("Depo / Lokasyon Özeti")
+        loc_layout = QVBoxLayout(loc_group)
+        self.loc_table = QTableWidget()
+        self.loc_table.setColumnCount(5)
+        self.loc_table.setHorizontalHeaderLabels(["Depo / Lokasyon", "Kalem", "Toplam Metre", "Toplam Kilo", "Toplam Değer $"])
+        self.loc_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.loc_table.verticalHeader().setVisible(False)
+        hdr = self.loc_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        loc_layout.addWidget(self.loc_table)
+        layout.addWidget(loc_group)
+
+    def _open_user_mgmt(self):
+        if CURRENT_USER.get("role") != "admin":
+            QMessageBox.warning(self, "Yetki", "Bu işlem için yönetici yetkisi gereklidir.")
+            return
+        UserManagementDialog(self).exec()
+
+    DEPO_LOCS = {"DEPO", "M11", "M7", "OFİS", "OFIS"}
+
+    @classmethod
+    def _loc_group(cls, loc):
+        import re
+        u = loc.strip().upper()
+        if u in cls.DEPO_LOCS or re.match(r"^(RAF|PALET|P\d|H\d|HP|H-P)", u):
+            return "DEPO"
+        return u
+
+    def refresh(self):
+        import re
+        summary = db.get_summary()
+        self.stat_items.setText(str(summary["total_items"] or 0))
+        self.stat_meter.setText(f"{summary['total_meter'] or 0:,.0f} mt")
+        self.stat_kg.setText(f"{summary['total_kg'] or 0:,.0f} kg")
+        val = summary["total_value"] or 0
+        priced = summary["priced_items"] or 0
+        total  = summary["total_items"] or 1
+        self.stat_value.setText(f"{val:,.0f} $")
+        if priced < total:
+            self.stat_value.setToolTip(f"Not: {total - priced} kalemin fiyatı girilmemiş")
+
+        locs = db.get_locations()
+
+        # Build grouped data: {group: {loc: (count, meter, kg)}}
+        from collections import defaultdict
+        groups = defaultdict(dict)
+        for loc in locs:
+            rows = db.get_all_fabrics(location=loc)
+            total_m   = sum(r["meter"] or 0 for r in rows)
+            total_kg  = sum(r["kg"] or 0 for r in rows)
+            total_val = sum(
+                ((r["meter"] or 0) * (r["birim_fiyat"] or 0)) if (r["meter"] or 0) > 0
+                else ((r["kg"] or 0) * (r["birim_fiyat"] or 0))
+                for r in rows
+            )
+            group = self._loc_group(loc)
+            groups[group][loc] = (len(rows), total_m, total_kg, total_val)
+
+        table_rows = []
+        for group in sorted(groups.keys()):
+            locs_in_group = groups[group]
+            g_count = sum(v[0] for v in locs_in_group.values())
+            g_meter = sum(v[1] for v in locs_in_group.values())
+            g_kg    = sum(v[2] for v in locs_in_group.values())
+            g_val   = sum(v[3] for v in locs_in_group.values())
+            table_rows.append((group, g_count, g_meter, g_kg, g_val))
+
+        self.loc_table.setRowCount(len(table_rows))
+
+        for i, (group, count, meter, kg, val) in enumerate(table_rows):
+            bg = QColor("#1565C0") if group == "DEPO" else QColor("#37474F")
+            fg = QColor("#FFFFFF")
+            val_str = f"{val:,.0f} $" if val else "—"
+            vals = [group, str(count), f"{meter:,.2f} mt", f"{kg:,.2f} kg", val_str]
+
+            for j, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                item.setBackground(QBrush(bg))
+                item.setForeground(QBrush(fg))
+                item.setFont(QFont("", -1, QFont.Weight.Bold))
+                item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter |
+                    (Qt.AlignmentFlag.AlignRight if j >= 1 else Qt.AlignmentFlag.AlignLeft))
+                self.loc_table.setItem(i, j, item)
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Bursa Knitted Depo Takip Sistemi")
+        self.setMinimumSize(1100, 700)
+        if _os.path.exists(LOGO_PATH):
+            self.setWindowIcon(QIcon(LOGO_PATH))
+        self._build_ui()
+
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self.tabs = QTabWidget()
+        self.dashboard = DashboardWidget()
+        self.stock_table = StockTable(self)
+        self.location_view = LocationView()
+
+        # Dashboard sadece admin'e göster
+        if CURRENT_USER.get("role") == "admin":
+            self.tabs.addTab(self.dashboard, "📊 Dashboard")
+        self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
+        self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
+        self.tabs.currentChanged.connect(self._on_tab_change)
+        layout.addWidget(self.tabs)
+
+        self.status = QStatusBar()
+        self.setStatusBar(self.status)
+        self._user_label = QLabel()
+        self._user_label.setStyleSheet("color:white; font-weight:bold; padding:0 12px;")
+        self.status.addPermanentWidget(self._user_label)
+        self._update_user_label()
+
+        # Menu
+        menubar = self.menuBar()
+        file_menu = menubar.addMenu("Dosya")
+        file_menu.addAction("Excel'den İçe Aktar...").triggered.connect(self._import)
+        file_menu.addAction("Excel'e Dışa Aktar...").triggered.connect(self._export)
+        file_menu.addSeparator()
+        file_menu.addAction("Çıkış").triggered.connect(self.close)
+
+        sys_menu = menubar.addMenu("🛡 Sistem")
+        sys_menu.addAction("Yedek Durumu ve Yönetimi...").triggered.connect(self._backup_dialog)
+        sys_menu.addAction("Şimdi Yedek Al").triggered.connect(self._backup_now)
+
+        loc_menu = menubar.addMenu("🗄 Lokasyonlar")
+        loc_menu.addAction("Raf / Lokasyon Tanımlamaları...").triggered.connect(
+            lambda: LocationManagementDialog(self).exec())
+
+        user_menu = menubar.addMenu("👤 Kullanıcılar")
+        user_menu.addAction("Kullanıcı Yönetimi").triggered.connect(self._user_mgmt)
+        user_menu.addSeparator()
+        user_menu.addAction("Oturumu Kapat").triggered.connect(self._logout)
+
+        mail_menu = menubar.addMenu("📧 E-posta Rapor")
+        mail_menu.addAction("Ayarlar ve Zamanlama...").triggered.connect(
+            lambda: EmailSettingsDialog(self).exec())
+        mail_menu.addAction("Şimdi Rapor Gönder").triggered.connect(self._send_now)
+
+        web_menu = menubar.addMenu("📱 Mobil Erişim")
+        self._web_action = web_menu.addAction("WiFi Sunucusunu Başlat (yerel)")
+        self._web_action.triggered.connect(self._toggle_web)
+        web_menu.addSeparator()
+        self._ngrok_action = web_menu.addAction("İnternetten Erişim Aç (ngrok)")
+        self._ngrok_action.triggered.connect(self._toggle_ngrok)
+        web_menu.addSeparator()
+        web_menu.addAction("ngrok Token Ayarla...").triggered.connect(self._set_ngrok_token)
+
+        self._web_label = QLabel("  📱 Kapalı  ")
+        self._web_label.setStyleSheet("color:rgba(255,255,255,.6); font-size:12px; padding:0 8px;")
+        self.status.addPermanentWidget(self._web_label)
+
+        self._backup_lbl = QLabel("  🛡 Yedek: —  ")
+        self._backup_lbl.setStyleSheet("color:rgba(255,255,255,.6); font-size:11px; padding:0 6px;")
+        self._backup_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._backup_lbl.mousePressEvent = lambda e: self._backup_dialog()
+        self.status.addPermanentWidget(self._backup_lbl)
+        QTimer.singleShot(2000, self._refresh_backup_indicator)
+
+    def _update_user_label(self):
+        role_icon = "👑" if CURRENT_USER.get("role") == "admin" else "👤"
+        self._user_label.setText(f"{role_icon} {CURRENT_USER.get('full_name', '')}")
+
+    def _user_mgmt(self):
+        if CURRENT_USER.get("role") != "admin":
+            QMessageBox.warning(self, "Yetki", "Bu işlem için yönetici yetkisi gereklidir.")
+            return
+        UserManagementDialog(self).exec()
+
+    def _logout(self):
+        reply = QMessageBox.question(self, "Çıkış", "Oturumu kapatıp yeniden giriş yapılsın mı?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            dlg = LoginDialog(self)
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+            if dlg.exec():
+                self._update_user_label()
+                self._rebuild_tabs()
+            else:
+                self.close()
+
+    def _rebuild_tabs(self):
+        """Oturum değişince tabları role göre yeniden oluştur."""
+        while self.tabs.count():
+            self.tabs.removeTab(0)
+        if CURRENT_USER.get("role") == "admin":
+            self.tabs.addTab(self.dashboard, "📊 Dashboard")
+        self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
+        self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
+        self.stock_table.refresh_with_locations()
+
+    def _toggle_web(self):
+        import web_server as ws
+        if ws.is_running():
+            ws.stop()
+            self._web_action.setText("Mobil Sunucuyu Başlat")
+            self._web_label.setText("  📱 Kapalı  ")
+            self._web_label.setStyleSheet("color:rgba(255,255,255,.6); font-size:12px; padding:0 8px;")
+        else:
+            ip, port = ws.start()
+            self._web_action.setText("Mobil Sunucuyu Durdur")
+            self._web_label.setText(f"  📱 {ip}:{port}  ")
+            self._web_label.setStyleSheet("color:#A5D6A7; font-weight:bold; font-size:12px; padding:0 8px;")
+            # Bilgi dialogu
+            dlg = _MobileAccessDialog(self, ip, port)
+            dlg.exec()
+
+    def _toggle_ngrok(self):
+        import web_server as ws
+        if ws.ngrok_running():
+            ws.stop_ngrok()
+            self._ngrok_action.setText("İnternetten Erişim Aç (ngrok)")
+            self._web_label.setText(
+                f"  📱 {ws.get_local_ip()}:{ws.PORT}  " if ws.is_running() else "  📱 Kapalı  "
+            )
+        else:
+            # Token kontrolü
+            token = ws.get_ngrok_token()
+            if not token:
+                dlg = _NgrokSetupDialog(self)
+                if dlg.exec() != QDialog.DialogCode.Accepted:
+                    return
+                token = dlg.token
+                ws.set_ngrok_token(token)
+
+            # Loading mesajı
+            self.status.showMessage("  ngrok bağlantısı kuruluyor...")
+            QApplication.processEvents()
+            try:
+                url = ws.start_ngrok()
+                self._ngrok_action.setText("İnternetten Erişimi Kapat")
+                self._web_label.setText(f"  🌍 İnternette Açık  ")
+                self._web_label.setStyleSheet("color:#FFD54F; font-weight:bold; font-size:12px; padding:0 8px;")
+                dlg = _NgrokActiveDialog(self, url)
+                dlg.exec()
+            except Exception as e:
+                QMessageBox.critical(self, "ngrok Hatası",
+                    f"Bağlantı kurulamadı:\n{e}\n\nToken'ı kontrol edin: Menü → Mobil Erişim → ngrok Token Ayarla")
+
+    def _send_now(self):
+        import email_report as er
+        try:
+            self.status.showMessage("  Rapor gönderiliyor...")
+            QApplication.processEvents()
+            n = er.send_report(test=True)
+            self.status.showMessage(f"  ✓ Rapor {n} alıcıya gönderildi.")
+        except Exception as e:
+            QMessageBox.critical(self, "Gönderilemedi",
+                f"{e}\n\nMenü → 📧 E-posta Rapor → Ayarlar'dan yapılandırın.")
+
+    def _backup_now(self):
+        import backup as bk
+        self.status.showMessage("  Yedek alınıyor...")
+        QApplication.processEvents()
+        ok, msg = bk.take_backup(force=True)
+        if ok:
+            self.status.showMessage(f"  ✓ {msg}")
+            self._refresh_backup_indicator()
+        else:
+            QMessageBox.critical(self, "Yedekleme Hatası", msg)
+
+    def _backup_dialog(self):
+        import backup as bk, glob, os
+        s = bk.get_backup_status()
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Yedek Yönetimi")
+        dlg.setMinimumSize(580, 420)
+        lay = QVBoxLayout(dlg)
+
+        status_color = "#2E7D32" if s["is_today"] else "#C62828"
+        status_text  = "✅ Bugün alındı" if s["is_today"] else "⚠️ Bugün alınmadı!"
+        info = QLabel(
+            f"<b>Yedek Durumu:</b> <span style='color:{status_color}'>{status_text}</span><br>"
+            f"Son yedek: <b>{s['last_backup'] or 'Hiç alınmamış'}</b><br>"
+            f"Kayıtlı yedek sayısı: <b>{s['backup_count']}</b>  |  "
+            f"Toplam boyut: <b>{s['backup_size_mb']} MB</b><br>"
+            f"Klasör: <span style='color:#555;font-size:11px'>{s['backup_dir']}</span>"
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet("background:#F5F5F5; padding:12px; border-radius:6px;")
+        lay.addWidget(info)
+
+        # Yedek listesi
+        table = QTableWidget()
+        table.setColumnCount(3)
+        table.setHorizontalHeaderLabels(["Dosya Adı", "Tarih", "Boyut"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        hdr = table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+
+        files = sorted(glob.glob(os.path.join(s["backup_dir"], "stok_*.db")), reverse=True)
+        table.setRowCount(len(files))
+        for i, f in enumerate(files):
+            name = os.path.basename(f)
+            size = f"{os.path.getsize(f)/1024/1024:.1f} MB"
+            mtime = datetime.fromtimestamp(os.path.getmtime(f)).strftime("%d.%m.%Y %H:%M")
+            table.setItem(i, 0, QTableWidgetItem(name))
+            table.setItem(i, 1, QTableWidgetItem(mtime))
+            table.setItem(i, 2, QTableWidgetItem(size))
+        lay.addWidget(table)
+
+        btn_row = QHBoxLayout()
+        btn_now = QPushButton("🗂 Şimdi Yedek Al")
+        btn_now.setStyleSheet("background:#2E7D32; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
+
+        btn_restore = QPushButton("↩ Seçili Yedeği Geri Yükle")
+        btn_restore.setStyleSheet("background:#C62828; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
+
+        btn_close = QPushButton("Kapat")
+
+        def _now():
+            ok, msg = bk.take_backup(force=True)
+            if ok:
+                dlg.accept()
+                self._backup_now()
+            else:
+                QMessageBox.critical(dlg, "Hata", msg)
+
+        def _restore():
+            row = table.currentRow()
+            if row < 0:
+                return QMessageBox.information(dlg, "Bilgi", "Geri yüklenecek yedeği seçin.")
+            f = files[row]
+            reply = QMessageBox.question(dlg, "Geri Yükle",
+                f"<b>{os.path.basename(f)}</b> yedeğine dönülsün mü?<br><br>"
+                f"<span style='color:#C62828'>Mevcut tüm veriler bu yedekle değiştirilir!</span>",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if reply == QMessageBox.StandardButton.Yes:
+                try:
+                    safe = bk.restore_backup(f)
+                    QMessageBox.information(dlg, "Başarılı",
+                        f"Yedek geri yüklendi.\nEski veriler şuraya kaydedildi:\n{os.path.basename(safe)}\n\nProgram yeniden başlatılıyor...")
+                    dlg.accept()
+                    import subprocess, sys
+                    subprocess.Popen([sys.executable] + sys.argv)
+                    QApplication.quit()
+                except Exception as e:
+                    QMessageBox.critical(dlg, "Hata", str(e))
+
+        btn_now.clicked.connect(_now)
+        btn_restore.clicked.connect(_restore)
+        btn_close.clicked.connect(dlg.accept)
+        btn_row.addWidget(btn_now); btn_row.addWidget(btn_restore)
+        btn_row.addStretch(); btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+        dlg.exec()
+
+    def _refresh_backup_indicator(self):
+        import backup as bk
+        s = bk.get_backup_status()
+        if hasattr(self, "_backup_lbl"):
+            if s["is_today"]:
+                self._backup_lbl.setText(f"  🛡 Yedek: {s['last_backup']}  ")
+                self._backup_lbl.setStyleSheet("color:#A5D6A7; font-size:11px; padding:0 6px;")
+            else:
+                self._backup_lbl.setText("  ⚠️ Yedek alınmadı  ")
+                self._backup_lbl.setStyleSheet("color:#FFCC80; font-size:11px; font-weight:bold; padding:0 6px;")
+
+    def _set_ngrok_token(self):
+        import web_server as ws
+        current = ws.get_ngrok_token()
+        dlg = _NgrokSetupDialog(self, current)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            ws.set_ngrok_token(dlg.token)
+            QMessageBox.information(self, "Kaydedildi", "ngrok token kaydedildi.\nArtık 'İnternetten Erişim Aç' butonunu kullanabilirsiniz.")
+
+    def _on_tab_change(self, idx):
+        is_admin = CURRENT_USER.get("role") == "admin"
+        if is_admin:
+            if idx == 0:   self.dashboard.refresh()
+            elif idx == 1: self.stock_table.refresh()
+            elif idx == 2: self.location_view.refresh()
+        else:
+            # Admin değil: dashboard yok, idx 0=stok, 1=lokasyon
+            if idx == 0:   self.stock_table.refresh()
+            elif idx == 1: self.location_view.refresh()
+
+    def update_status(self, count, summary):
+        if not hasattr(self, "status"):
+            return
+        self.status.showMessage(
+            f"  {count} kayıt gösteriliyor  |  Toplam: {summary['total_items'] or 0} kalem  |  "
+            f"{summary['total_meter'] or 0:.2f} mt  |  {summary['total_kg'] or 0:.2f} kg"
+        )
+
+    def _import(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Excel Dosyası Seç", "", "Excel Dosyaları (*.xlsx *.xls)"
+        )
+        if not path:
+            return
+
+        reply = QMessageBox.question(
+            self, "İçe Aktarma",
+            "Hangi sayfaları içe aktarmak istersiniz?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Yes
+        )
+
+        from importer import import_from_excel, import_from_main_sheet
+        try:
+            if reply == QMessageBox.StandardButton.Yes:
+                records = import_from_main_sheet(path)
+                source = "STOK RAPORU sayfası"
+            elif reply == QMessageBox.StandardButton.No:
+                records = import_from_excel(path)
+                source = "Raf/Lokasyon sayfaları"
+            else:
+                return
+
+            if not records:
+                QMessageBox.warning(self, "Uyarı", "Hiç kayıt bulunamadı!")
+                return
+
+            confirm = QMessageBox.question(
+                self, "Onay",
+                f"{source}'ndan <b>{len(records)}</b> kayıt bulundu.\nİçe aktarılsın mı?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if confirm == QMessageBox.StandardButton.Yes:
+                db.import_fabrics_bulk(records)
+                self.stock_table.refresh()
+                self.location_view.refresh()
+                self.dashboard.refresh()
+                QMessageBox.information(self, "Başarılı", f"{len(records)} kayıt içe aktarıldı!")
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"İçe aktarma hatası:\n{e}")
+
+    def _export(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Dışa Aktar", "stok_raporu.xlsx", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "STOK RAPORU"
+
+            # Header
+            headers = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Açıklama", "Son Güncelleme"]
+            ws.append(headers)
+            for cell in ws[1]:
+                cell.font = Font(bold=True, color="FFFFFF")
+                cell.fill = PatternFill("solid", start_color="1565C0")
+                cell.alignment = Alignment(horizontal="center")
+
+            rows = db.get_all_fabrics()
+            for i, r in enumerate(rows, 1):
+                ws.append([
+                    i,
+                    r["product_code"] or "",
+                    r["product_name"] or "",
+                    r["color"] or "",
+                    r["location"] or "",
+                    r["meter"] or 0,
+                    r["kg"] or 0,
+                    r["piece_count"] or "",
+                    r["description"] or "",
+                    str(r["updated_at"] or "")[:16],
+                ])
+
+            for col in ws.columns:
+                max_len = max(len(str(cell.value or "")) for cell in col)
+                ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
+            wb.save(path)
+            QMessageBox.information(self, "Başarılı", f"Dışa aktarıldı:\n{path}")
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Dışa aktarma hatası:\n{e}")
+
+
+def main():
+    db.init_db()
+    app = QApplication(sys.argv)
+    app.setApplicationName("Bursa Knitted Depo Takip Sistemi")
+    app.setStyle("Fusion")
+    app.setStyleSheet(STYLESHEET)
+
+    # Giriş ekranı
+    login = LoginDialog()
+    if login.exec() != QDialog.DialogCode.Accepted:
+        sys.exit(0)
+
+    # Günlük yedek al (arka planda)
+    import threading, backup as bk
+    def _do_backup():
+        ok, msg = bk.take_backup()
+        print(f"[Yedek] {msg}")
+    threading.Thread(target=_do_backup, daemon=True).start()
+
+    # Günlük mail zamanlayıcısını başlat
+    import email_report as er
+    er.start_scheduler()
+
+    window = MainWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()
