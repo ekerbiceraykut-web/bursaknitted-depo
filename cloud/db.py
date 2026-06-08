@@ -11,11 +11,13 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 def get_conn():
     if DATABASE_URL:
         import psycopg2, psycopg2.extras
-        # İç ağda SSL gerekmez, dış ağda otomatik dener
+        import psycopg2.extras
         try:
-            conn = psycopg2.connect(DATABASE_URL)
+            conn = psycopg2.connect(DATABASE_URL,
+                                    cursor_factory=psycopg2.extras.RealDictCursor)
         except Exception:
-            conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+            conn = psycopg2.connect(DATABASE_URL, sslmode="require",
+                                    cursor_factory=psycopg2.extras.RealDictCursor)
         conn.autocommit = False
         return conn, "pg"
     else:
@@ -34,13 +36,10 @@ def _q(sql):
 def _now():
     return "NOW()" if DATABASE_URL else "datetime('now','localtime')"
 
-def _rows_to_dicts(rows, cursor):
-    """psycopg2 sonuçlarını dict listesine çevir."""
+def _rows_to_dicts(rows, cursor=None):
+    """Satırları dict listesine çevir."""
     if not rows: return []
-    if DATABASE_URL:
-        cols = [d[0] for d in cursor.description]
-        return [dict(zip(cols, r)) for r in rows]
-    return [dict(r) for r in rows]  # sqlite3.Row zaten dict-like
+    return [dict(r) for r in rows]
 
 
 # ── Init ─────────────────────────────────────────────────────────
