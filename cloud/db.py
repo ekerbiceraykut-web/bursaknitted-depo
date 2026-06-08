@@ -11,7 +11,11 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")
 def get_conn():
     if DATABASE_URL:
         import psycopg2, psycopg2.extras
-        conn = psycopg2.connect(DATABASE_URL, sslmode="require")
+        # İç ağda SSL gerekmez, dış ağda otomatik dener
+        try:
+            conn = psycopg2.connect(DATABASE_URL)
+        except Exception:
+            conn = psycopg2.connect(DATABASE_URL, sslmode="require")
         conn.autocommit = False
         return conn, "pg"
     else:
