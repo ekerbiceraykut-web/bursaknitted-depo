@@ -52,9 +52,13 @@ def pop_undo():
 import database as _local_db
 db = _local_db   # başlangıçta yerel; login sonrası proxy ile değiştirilir
 
+GREY   = "#545454"
+GREY_D = "#3A3A3A"   # koyu gri (çerçeve, hover)
+GREY_L = "#6B6B6B"   # açık gri (hover)
+
 COLORS = {
-    "primary": "#1565C0",
-    "primary_light": "#1976D2",
+    "primary":      GREY,
+    "primary_light": GREY_L,
     "success": "#2E7D32",
     "danger": "#C62828",
     "warning": "#F57F17",
@@ -64,8 +68,8 @@ COLORS = {
     "text": "#212121",
     "subtext": "#757575",
     "row_alt": "#F8F9FA",
-    "row_hover": "#E3F2FD",
-    "header_bg": "#1565C0",
+    "row_hover": "#EEEEEE",
+    "header_bg": GREY,
     "header_fg": "#FFFFFF",
 }
 
@@ -89,7 +93,7 @@ QPushButton:hover {{
     background-color: {COLORS['primary_light']};
 }}
 QPushButton:pressed {{
-    background-color: #0D47A1;
+    background-color: {GREY_D};
 }}
 QPushButton.success {{
     background-color: {COLORS['success']};
@@ -115,7 +119,7 @@ QLineEdit, QComboBox, QDoubleSpinBox, QTextEdit {{
     min-height: 28px;
 }}
 QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QTextEdit:focus {{
-    border: 2px solid {COLORS['primary']};
+    border: 2px solid {GREY};
 }}
 QTableWidget {{
     background: white;
@@ -134,7 +138,7 @@ QHeaderView::section {{
     font-weight: bold;
     padding: 6px 8px;
     border: none;
-    border-right: 1px solid #1976D2;
+    border-right: 1px solid {GREY_L};
 }}
 QTabWidget::pane {{
     border: 1px solid {COLORS['border']};
@@ -150,7 +154,7 @@ QTabBar::tab {{
     min-width: 100px;
 }}
 QTabBar::tab:selected {{
-    background: {COLORS['primary']};
+    background: {GREY};
     color: white;
     font-weight: bold;
 }}
@@ -167,9 +171,11 @@ QGroupBox::title {{
     color: {COLORS['primary']};
 }}
 QStatusBar {{
-    background: {COLORS['primary']};
+    background: {GREY};
     color: white;
     font-weight: bold;
+    font-size: 13px;
+    min-height: 28px;
 }}
 QLabel.title {{
     font-size: 16px;
@@ -196,7 +202,7 @@ class _MobileAccessDialog(QDialog):
         info = QLabel(
             f"<b>WiFi Yerel Erişim Açıldı</b><br><br>"
             f"Aynı WiFi ağındaki telefon / tablet tarayıcısına:<br><br>"
-            f"<span style='font-size:18px; color:#1565C0; font-family:monospace'>"
+            f"<span style='font-size:18px; color:#545454; font-family:monospace'>"
             f"http://{ip}:{port}</span><br><br>"
             f"<span style='color:#757575; font-size:12px'>"
             f"İnternetten her yerden erişmek için:<br>"
@@ -272,7 +278,7 @@ class _NgrokActiveDialog(QDialog):
         info = QLabel(
             f"<b>🌍 İnternetten erişim AÇIK</b><br><br>"
             f"Herhangi bir telefon veya bilgisayar tarayıcısından:<br><br>"
-            f"<span style='font-size:16px; color:#1565C0; font-family:monospace'>{url}</span><br><br>"
+            f"<span style='font-size:16px; color:#545454; font-family:monospace'>{url}</span><br><br>"
             f"<span style='color:#757575; font-size:12px'>"
             f"⚠ Program kapatılınca veya durdurulunca erişim kapanır.<br>"
             f"Her açılışta URL değişebilir.</span>"
@@ -504,7 +510,7 @@ class LocationManagementDialog(QDialog):
             self._ids.append(r["id"])
             self.table.setItem(i, 0, QTableWidgetItem(r["name"]))
             grp_item = QTableWidgetItem(r["group_name"])
-            grp_item.setForeground(QBrush(QColor("#1565C0") if r["group_name"] == "DEPO" else QColor("#37474F")))
+            grp_item.setForeground(QBrush(QColor("#545454") if r["group_name"] == "DEPO" else QColor("#545454")))
             grp_item.setFont(QFont("", -1, QFont.Weight.Bold))
             self.table.setItem(i, 1, grp_item)
             self.table.setItem(i, 2, QTableWidgetItem(r["description"] or ""))
@@ -720,7 +726,7 @@ class LoginDialog(QDialog):
 
         title = QLabel("Depo Takip Sistemine Giriş")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size:15px; font-weight:bold; color:#1565C0;")
+        title.setStyleSheet("font-size:15px; font-weight:bold; color:#545454;")
         layout.addWidget(title)
 
         # ── Bağlantı modu ──────────────────────────────────────
@@ -732,8 +738,8 @@ class LoginDialog(QDialog):
         self.rb_remote = QPushButton("🌐 Sunucuya Bağlan")
         self.rb_local.setCheckable(True);  self.rb_local.setChecked(True)
         self.rb_remote.setCheckable(True); self.rb_remote.setChecked(False)
-        self.rb_local.setStyleSheet("text-align:left; padding:6px 10px;")
-        self.rb_remote.setStyleSheet("text-align:left; padding:6px 10px;")
+        self.rb_local.setMinimumHeight(36)
+        self.rb_remote.setMinimumHeight(36)
         self.rb_local.clicked.connect(lambda: self._set_mode("local"))
         self.rb_remote.clicked.connect(lambda: self._set_mode("remote"))
 
@@ -745,6 +751,8 @@ class LoginDialog(QDialog):
         conn_lay.addWidget(self.rb_remote)
         conn_lay.addWidget(self.server_url)
         layout.addWidget(conn_box)
+        # Başlangıç stilleri — server_url tanımlandıktan sonra
+        self._set_mode("local")
 
         # ── Giriş formu ────────────────────────────────────────
         form = QFormLayout(); form.setSpacing(8)
@@ -772,12 +780,14 @@ class LoginDialog(QDialog):
         self.rb_local.setChecked(mode == "local")
         self.rb_remote.setChecked(mode == "remote")
         self.server_url.setVisible(mode == "remote")
+        ACTIVE   = "background:#545454; color:white; font-weight:bold; text-align:left; padding:8px 12px; border-radius:4px;"
+        INACTIVE = "background:white; color:#545454; font-weight:normal; text-align:left; padding:8px 12px; border-radius:4px; border:1px solid #BDBDBD;"
         if mode == "local":
-            self.rb_local.setStyleSheet("text-align:left;padding:6px 10px;background:#E3F2FD;font-weight:bold;")
-            self.rb_remote.setStyleSheet("text-align:left;padding:6px 10px;")
+            self.rb_local.setStyleSheet(ACTIVE)
+            self.rb_remote.setStyleSheet(INACTIVE)
         else:
-            self.rb_remote.setStyleSheet("text-align:left;padding:6px 10px;background:#E3F2FD;font-weight:bold;")
-            self.rb_local.setStyleSheet("text-align:left;padding:6px 10px;")
+            self.rb_remote.setStyleSheet(ACTIVE)
+            self.rb_local.setStyleSheet(INACTIVE)
 
     def _load_server_setting(self):
         """Daha önce kullanılan sunucu adresini yükle."""
@@ -1046,7 +1056,7 @@ class FabricDialog(QDialog):
             idx = self.location.count() - 1
             self.location.model().item(idx).setEnabled(False)
             self.location.model().item(idx).setForeground(
-                QColor("#1565C0") if grp == "DEPO" else QColor("#37474F"))
+                QColor("#545454") if grp == "DEPO" else QColor("#545454"))
             f = QFont(); f.setBold(True)
             self.location.model().item(idx).setFont(f)
             for name in sorted(groups[grp]):
@@ -1270,7 +1280,7 @@ class MovementsDialog(QDialog):
 
         info = QLabel(
             f"<b>{fabric['product_name'] or ''} {fabric['product_code']}</b>"
-            f" — {fabric['color']} — <span style='color:#1565C0'>{fabric['location']}</span>"
+            f" — {fabric['color']} — <span style='color:#545454'>{fabric['location']}</span>"
         )
         info.setStyleSheet("font-size:14px; padding:6px; background:#E3F2FD; border-radius:4px;")
         layout.addWidget(info)
@@ -1539,7 +1549,7 @@ class FabricModel(QAbstractTableModel):
                 return QBrush(QColor("#1A237E"))
             if col == 5:
                 return QBrush({"HAM": QColor("#5D4037"),
-                                "BOYALI": QColor("#1565C0"),
+                                "BOYALI": QColor("#545454"),
                                 "BASKILI": QColor("#6A1B9A")}.get(r[5], QColor("#333")))
 
         if role == Qt.ItemDataRole.BackgroundRole:
@@ -1653,26 +1663,30 @@ class StockTable(QWidget):
         # ── Toplam Barı ──
         self._totals_bar = QFrame()
         self._totals_bar.setStyleSheet(
-            "background:#1565C0; border-radius:4px; padding:0;"
+            "QFrame { background:#545454; border-radius:6px;"
+            "border: 2px solid #3A3A3A; padding:0; }"
         )
+        self._totals_bar.setFixedHeight(56)
         bar_layout = QHBoxLayout(self._totals_bar)
-        bar_layout.setContentsMargins(12, 6, 12, 6)
+        bar_layout.setContentsMargins(20, 4, 20, 4)
         bar_layout.setSpacing(0)
 
         def _stat_widget(label):
             w = QWidget()
-            wl = QVBoxLayout(w); wl.setSpacing(1); wl.setContentsMargins(0,0,0,0)
+            w.setStyleSheet("background:transparent;")
+            wl = QVBoxLayout(w); wl.setSpacing(2); wl.setContentsMargins(16, 2, 16, 2)
             lbl = QLabel(label)
-            lbl.setStyleSheet("color:rgba(255,255,255,.65); font-size:10px;")
+            lbl.setStyleSheet("color:rgba(255,255,255,.7); font-size:10px; background:transparent;")
             val = QLabel("—")
-            val.setStyleSheet("color:white; font-size:14px; font-weight:bold;")
+            val.setStyleSheet("color:white; font-size:15px; font-weight:bold; background:transparent;")
             wl.addWidget(lbl); wl.addWidget(val)
             return w, val
 
         def sep():
             f = QFrame()
             f.setFrameShape(QFrame.Shape.VLine)
-            f.setStyleSheet("color:rgba(255,255,255,.25); margin:0 16px;")
+            f.setFixedWidth(1)
+            f.setStyleSheet("background:rgba(255,255,255,.3); margin:8px 4px;")
             return f
 
         w1, self._tot_items  = _stat_widget("Kalem Sayısı")
@@ -1685,7 +1699,8 @@ class StockTable(QWidget):
         bar_layout.addStretch()
 
         self._filter_lbl = QLabel()
-        self._filter_lbl.setStyleSheet("color:rgba(255,255,255,.7); font-size:11px; font-style:italic;")
+        self._filter_lbl.setStyleSheet(
+            "color:rgba(255,255,255,.75); font-size:11px; font-style:italic; background:transparent;")
         bar_layout.addWidget(self._filter_lbl)
 
         layout.addWidget(self._totals_bar)
@@ -1969,9 +1984,43 @@ class LocationView(QWidget):
             self.table.setColumnWidth(i, w)
         right_layout.addWidget(self.table)
 
-        self.loc_total = QLabel()
-        self.loc_total.setStyleSheet("padding:4px; font-weight:bold; color:#1565C0;")
-        right_layout.addWidget(self.loc_total)
+        # Alt toplam barı
+        self._loc_bar = QFrame()
+        self._loc_bar.setStyleSheet(
+            "QFrame { background:#545454; border-radius:6px;"
+            "border: 2px solid #3A3A3A; padding:0; }"
+        )
+        self._loc_bar.setFixedHeight(56)
+        loc_bar_layout = QHBoxLayout(self._loc_bar)
+        loc_bar_layout.setContentsMargins(20, 4, 20, 4)
+        loc_bar_layout.setSpacing(0)
+
+        def _lstat(label):
+            w = QWidget(); w.setStyleSheet("background:transparent;")
+            wl = QVBoxLayout(w); wl.setSpacing(2); wl.setContentsMargins(16,2,16,2)
+            lbl = QLabel(label)
+            lbl.setStyleSheet("color:rgba(255,255,255,.7); font-size:10px; background:transparent;")
+            val = QLabel("—")
+            val.setStyleSheet("color:white; font-size:15px; font-weight:bold; background:transparent;")
+            wl.addWidget(lbl); wl.addWidget(val)
+            return w, val
+
+        def _lsep():
+            f = QFrame(); f.setFrameShape(QFrame.Shape.VLine); f.setFixedWidth(1)
+            f.setStyleSheet("background:rgba(255,255,255,.3); margin:8px 4px;")
+            return f
+
+        bw1, self._lbl_loc   = _lstat("Lokasyon")
+        bw2, self._lbl_items = _lstat("Kalem Sayısı")
+        bw3, self._lbl_meter = _lstat("Toplam Metre")
+        bw4, self._lbl_kg    = _lstat("Toplam Kilo")
+        bw5, self._lbl_val   = _lstat("Toplam Değer")
+
+        for w in (bw1, _lsep(), bw2, _lsep(), bw3, _lsep(), bw4, _lsep(), bw5):
+            loc_bar_layout.addWidget(w)
+        loc_bar_layout.addStretch()
+
+        right_layout.addWidget(self._loc_bar)
         splitter.addWidget(right)
         splitter.setSizes([160, 640])
         layout.addWidget(splitter)
@@ -2000,20 +2049,11 @@ class LocationView(QWidget):
                 # DEPO → tek tıklanabilir satır, tüm rafları getirir
                 item = QListWidgetItem("DEPO")
                 item.setData(Qt.ItemDataRole.UserRole, "__GRP_DEPO__")
-                item.setForeground(QBrush(QColor("#FFFFFF")))
-                item.setBackground(QBrush(QColor("#1565C0")))
-                item.setFont(QFont("", -1, QFont.Weight.Bold))
                 self.loc_list.addItem(item)
             else:
-                # Diğer grup → başlık + tek tek lokasyonlar
-                sep = QListWidgetItem(f"── {grp} ──")
-                sep.setForeground(QBrush(QColor("#FFFFFF")))
-                sep.setBackground(QBrush(QColor("#37474F")))
-                sep.setFont(QFont("", -1, QFont.Weight.Bold))
-                sep.setFlags(Qt.ItemFlag.NoItemFlags)
-                self.loc_list.addItem(sep)
+                # Diğer grup → başlık yok, lokasyonlar kendi isimleriyle
                 for name in sorted(groups[grp]):
-                    item = QListWidgetItem(f"  {name}")
+                    item = QListWidgetItem(name)
                     item.setData(Qt.ItemDataRole.UserRole, name)
                     self.loc_list.addItem(item)
 
@@ -2065,10 +2105,11 @@ class LocationView(QWidget):
         self.table.setUpdatesEnabled(True)
         self.table.setSortingEnabled(True)   # veri yüklendi, sıralamayı aç
 
-        val_str = f"  |  {total_val:,.0f} $" if total_val else ""
-        self.loc_total.setText(
-            f"{label}: {len(rows)} kalem  |  {total_m:,.2f} mt  |  {total_kg:,.2f} kg{val_str}"
-        )
+        self._lbl_loc.setText(label)
+        self._lbl_items.setText(f"{len(rows):,}")
+        self._lbl_meter.setText(f"{total_m:,.2f} mt")
+        self._lbl_kg.setText(f"{total_kg:,.2f} kg")
+        self._lbl_val.setText(f"{total_val:,.0f} $" if total_val else "—")
 
     def _context_menu(self, pos):
         from PyQt6.QtWidgets import QMenu
@@ -2106,7 +2147,7 @@ class DashboardWidget(QWidget):
 
         # Başlık
         title = QLabel("DEPO TAKİP SİSTEMİ")
-        title.setStyleSheet("font-size:20px; font-weight:bold; color:#1565C0; letter-spacing:1px;")
+        title.setStyleSheet("font-size:20px; font-weight:bold; color:#545454; letter-spacing:1px;")
         title.setAlignment(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
 
         header_row.addWidget(logo_label)
@@ -2126,34 +2167,66 @@ class DashboardWidget(QWidget):
         header_frame.setFixedHeight(116)
         layout.addWidget(header_frame)
 
-        stats_layout = QHBoxLayout()
-        self.stat_items = QLabel("0")
-        self.stat_meter = QLabel("0.00 mt")
-        self.stat_kg    = QLabel("0.00 kg")
-        self.stat_value = QLabel("0 $")
-
-        for label_text, stat_widget, color, icon in [
-            ("Toplam Ürün Kalemi",   self.stat_items, "#1565C0", "📦"),
-            ("Toplam Stok (Metre)",  self.stat_meter, "#2E7D32", "📏"),
-            ("Toplam Stok (Kilo)",   self.stat_kg,    "#6A1B9A", "⚖️"),
-            ("Stok Toplam Değeri",   self.stat_value, "#B71C1C", "💰"),
-        ]:
+        def _make_card(icon, label, color, small=False):
             box = QGroupBox()
-            box_layout = QVBoxLayout(box)
-            lbl_icon = QLabel(icon)
-            lbl_icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl_icon.setStyleSheet("font-size:22px;")
-            lbl = QLabel(label_text)
-            lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            lbl.setStyleSheet("color:#757575; font-size:11px;")
-            stat_widget.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            stat_widget.setStyleSheet(f"color:{color}; font-size:22px; font-weight:bold;")
-            box_layout.addWidget(lbl_icon)
-            box_layout.addWidget(stat_widget)
-            box_layout.addWidget(lbl)
-            box.setMinimumHeight(110)
-            stats_layout.addWidget(box)
-        layout.addLayout(stats_layout)
+            bl  = QVBoxLayout(box); bl.setSpacing(2)
+            li  = QLabel(icon); li.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            li.setStyleSheet("font-size:18px;")
+            val = QLabel("—"); val.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            fs  = "14px" if small else "18px"
+            val.setStyleSheet(f"color:{color}; font-size:{fs}; font-weight:bold;")
+            lbl = QLabel(label); lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl.setStyleSheet("color:#757575; font-size:10px;")
+            bl.addWidget(li); bl.addWidget(val); bl.addWidget(lbl)
+            box.setMinimumHeight(90)
+            return box, val
+
+        # Satır 1 — Genel özet
+        self.stat_items = QLabel("0")
+        self.stat_meter = QLabel("0 mt")
+        self.stat_kg    = QLabel("0 kg")
+        self.stat_value = QLabel("0 $")
+        row1 = QHBoxLayout()
+        for icon, lbl, color, wgt in [
+            ("📦","Toplam Kalem","#545454", self.stat_items),
+            ("📏","Toplam Metre","#2E7D32", self.stat_meter),
+            ("⚖️","Toplam Kilo","#6A1B9A",  self.stat_kg),
+            ("💰","Stok Değeri","#B71C1C",   self.stat_value),
+        ]:
+            box, val = _make_card(icon, lbl, color)
+            val.setText = wgt.setText  # yönlendir — kullanmayacağız, ayrı set edeceğiz
+            # Ortak widget referansı için kutuya ekleyelim
+            # val zaten dışarıda tanımlı, sadece stili ata
+            val.setStyleSheet(f"color:{color}; font-size:18px; font-weight:bold;")
+            # Box içindeki ikinci widget val — bunu değiştir
+            box.layout().itemAt(1).widget().deleteLater()
+            box.layout().insertWidget(1, wgt)
+            wgt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            wgt.setStyleSheet(f"color:{color}; font-size:18px; font-weight:bold;")
+            row1.addWidget(box)
+        layout.addLayout(row1)
+
+        # Satır 2 — Tip dağılımı
+        self.stat_ham    = QLabel("—")
+        self.stat_boyali = QLabel("—")
+        self.stat_baskili= QLabel("—")
+        row2 = QHBoxLayout()
+        for icon, lbl, color, wgt in [
+            ("🟫","HAM (Metre)","#5D4037",   self.stat_ham),
+            ("🟦","BOYALI (Metre)","#1565C0", self.stat_boyali),
+            ("🟪","BASKILI (Metre)","#6A1B9A",self.stat_baskili),
+        ]:
+            box2 = QGroupBox(); bl2 = QVBoxLayout(box2); bl2.setSpacing(2)
+            li2  = QLabel(icon); li2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            li2.setStyleSheet("font-size:16px;")
+            wgt.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            wgt.setStyleSheet(f"color:{color}; font-size:16px; font-weight:bold;")
+            lbl2 = QLabel(lbl); lbl2.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            lbl2.setStyleSheet("color:#757575; font-size:10px;")
+            bl2.addWidget(li2); bl2.addWidget(wgt); bl2.addWidget(lbl2)
+            box2.setMinimumHeight(80)
+            row2.addWidget(box2)
+        layout.addLayout(row2)
 
         # Location summary table
         loc_group = QGroupBox("Depo / Lokasyon Özeti")
@@ -2201,6 +2274,17 @@ class DashboardWidget(QWidget):
         if priced < total:
             self.stat_value.setToolTip(f"Not: {total - priced} kalemin fiyatı girilmemiş")
 
+        # ── Kumaş Tipi Özet Kartları ─────────────────────────────
+        all_rows = db.get_all_fabrics()
+        tip_mt = {"HAM": 0.0, "BOYALI": 0.0, "BASKILI": 0.0}
+        for r in all_rows:
+            t = r["fabric_type"] or ""
+            if t in tip_mt:
+                tip_mt[t] += r["meter"] or 0
+        self.stat_ham.setText(f"{tip_mt['HAM']:,.0f} mt")
+        self.stat_boyali.setText(f"{tip_mt['BOYALI']:,.0f} mt")
+        self.stat_baskili.setText(f"{tip_mt['BASKILI']:,.0f} mt")
+
         locs = db.get_locations()
 
         # Build grouped data: {group: {loc: (count, meter, kg)}}
@@ -2230,7 +2314,7 @@ class DashboardWidget(QWidget):
         self.loc_table.setRowCount(len(table_rows))
 
         for i, (group, count, meter, kg, val) in enumerate(table_rows):
-            bg = QColor("#1565C0") if group == "DEPO" else QColor("#37474F")
+            bg = QColor("#545454") if group == "DEPO" else QColor("#545454")
             fg = QColor("#FFFFFF")
             val_str = f"{val:,.0f} $" if val else "—"
             vals = [group, str(count), f"{meter:,.2f} mt", f"{kg:,.2f} kg", val_str]
@@ -2277,7 +2361,7 @@ class MainWindow(QMainWindow):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self._user_label = QLabel()
-        self._user_label.setStyleSheet("color:white; font-weight:bold; padding:0 12px;")
+        self._user_label.setStyleSheet("color:white; font-weight:bold; font-size:12px; padding:0 12px;")
         self.status.addPermanentWidget(self._user_label)
         self._update_user_label()
 
@@ -2320,12 +2404,12 @@ class MainWindow(QMainWindow):
         web_menu.addSeparator()
         web_menu.addAction("ngrok Token Ayarla...").triggered.connect(self._set_ngrok_token)
 
-        self._web_label = QLabel("  📱 Kapalı  ")
-        self._web_label.setStyleSheet("color:rgba(255,255,255,.6); font-size:12px; padding:0 8px;")
+        self._web_label = QLabel("  📱 Mobil: Kapalı  ")
+        self._web_label.setStyleSheet("color:rgba(255,255,255,.75); font-size:12px; padding:0 10px;")
         self.status.addPermanentWidget(self._web_label)
 
         self._backup_lbl = QLabel("  🛡 Yedek: —  ")
-        self._backup_lbl.setStyleSheet("color:rgba(255,255,255,.6); font-size:11px; padding:0 6px;")
+        self._backup_lbl.setStyleSheet("color:rgba(255,255,255,.75); font-size:12px; padding:0 10px;")
         self._backup_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
         self._backup_lbl.mousePressEvent = lambda e: self._backup_dialog()
         self.status.addPermanentWidget(self._backup_lbl)
