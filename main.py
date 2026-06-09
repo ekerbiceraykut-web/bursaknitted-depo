@@ -312,6 +312,148 @@ class _NgrokActiveDialog(QDialog):
         lay.addLayout(row)
 
 
+class CustomerManagementDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Müşteri Yönetimi")
+        self.setMinimumSize(680, 460)
+        self._build_ui(); self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+
+        # Arama
+        top = QHBoxLayout()
+        self.search = QLineEdit(); self.search.setPlaceholderText("Müşteri adı, kodu, telefon...")
+        self.search.textChanged.connect(lambda: self._load(self.search.text()))
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.search); top.addStretch()
+        lay.addLayout(top)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Müşteri Adı", "Kodu", "Telefon", "Adres", "Durum"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for i in (1,2,3,4): hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        btn_add   = QPushButton("+ Yeni Müşteri");  btn_add.clicked.connect(self._add)
+        btn_edit  = QPushButton("✎ Düzenle");        btn_edit.clicked.connect(self._edit)
+        btn_del   = QPushButton("✕ Sil")
+        btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
+        btn_del.clicked.connect(self._delete)
+        btn_excel = QPushButton("📥 Excel'den İçe Aktar")
+        btn_excel.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
+        btn_excel.clicked.connect(self._import_excel)
+        btn_close = QPushButton("Kapat"); btn_close.clicked.connect(self.accept)
+        for b in (btn_add, btn_edit, btn_del, btn_excel):
+            btn_row.addWidget(b)
+        btn_row.addStretch(); btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+
+    def _load(self, search=""):
+        rows = db.get_all_customers(search=search, active_only=False)
+        self.table.setRowCount(len(rows))
+        self._ids = []
+        for i, r in enumerate(rows):
+            self._ids.append(r["id"])
+            self.table.setItem(i, 0, QTableWidgetItem(r["name"] or ""))
+            self.table.setItem(i, 1, QTableWidgetItem(r["code"] or ""))
+            self.table.setItem(i, 2, QTableWidgetItem(r["phone"] or ""))
+            self.table.setItem(i, 3, QTableWidgetItem(r["address"] or ""))
+            s = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
+            s.setForeground(QBrush(QColor("#2E7D32" if r["active"] else "#C62828")))
+            self.table.setItem(i, 4, s)
+
+    def _selected_id(self):
+        row = self.table.currentRow()
+        if row < 0: QMessageBox.information(self,"Bilgi","Müşteri seçin."); return None
+        return self._ids[row]
+
+    def _customer_dialog(self, c=None):
+        dlg = QDialog(self); dlg.setWindowTitle("Müşteri" + (" Düzenle" if c else " Ekle"))
+        dlg.setMinimumWidth(360); lay = QVBoxLayout(dlg); form = QFormLayout(); form.setSpacing(8)
+        dlg.name  = QLineEdit(c["name"]    if c else "")
+        dlg.code  = QLineEdit(c["code"]    if c else "")
+        dlg.phone = QLineEdit(c["phone"]   if c else "")
+        dlg.addr  = QLineEdit(c["address"] if c else "")
+        form.addRow("Müşteri Adı *:", dlg.name)
+        form.addRow("Kodu:",          dlg.code)
+        form.addRow("Telefon:",       dlg.phone)
+        form.addRow("Adres:",         dlg.addr)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        return dlg
+
+    def _add(self):
+        dlg = self._customer_dialog()
+        if dlg.exec():
+            if not dlg.name.text().strip():
+                return QMessageBox.warning(self,"Hata","Müşteri adı zorunlu!")
+            db.add_customer(dlg.name.text(), dlg.code.text(), dlg.phone.text(), dlg.addr.text())
+            self._load(self.search.text())
+
+    def _edit(self):
+        cid = self._selected_id()
+        if not cid: return
+        c = db.get_customer(cid)
+        dlg = self._customer_dialog(c)
+        if dlg.exec():
+            db.update_customer(cid, dlg.name.text(), dlg.code.text(),
+                               dlg.phone.text(), dlg.addr.text())
+            self._load(self.search.text())
+
+    def _delete(self):
+        cid = self._selected_id()
+        if not cid: return
+        if QMessageBox.question(self,"Sil","Müşteri silinsin mi?",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            db.delete_customer(cid); self._load(self.search.text())
+
+    def _import_excel(self):
+        path, _ = QFileDialog.getOpenFileName(self,"Müşteri Excel Dosyası","","Excel (*.xlsx *.xls)")
+        if not path: return
+        try:
+            import pandas as pd
+            df = pd.read_excel(path)
+            df.columns = [str(c).strip().lower() for c in df.columns]
+
+            # Sütun eşleştirme — esnek
+            col_map = {}
+            for col in df.columns:
+                if any(k in col for k in ["ad","isim","müşteri","musteri","name"]): col_map.setdefault("name", col)
+                elif any(k in col for k in ["kod","code"]): col_map.setdefault("code", col)
+                elif any(k in col for k in ["tel","phone","gsm","cep"]): col_map.setdefault("phone", col)
+                elif any(k in col for k in ["adres","address"]): col_map.setdefault("address", col)
+
+            if "name" not in col_map:
+                return QMessageBox.warning(self,"Hata",
+                    f"'Müşteri Adı' sütunu bulunamadı.\nMevcut sütunlar: {', '.join(df.columns)}")
+
+            records = []
+            for _, row in df.iterrows():
+                name = str(row.get(col_map["name"],"")).strip()
+                if not name or name.lower() == "nan": continue
+                records.append({
+                    "name":    name,
+                    "code":    str(row.get(col_map.get("code","_"),"")).strip() if "code" in col_map else "",
+                    "phone":   str(row.get(col_map.get("phone","_"),"")).strip() if "phone" in col_map else "",
+                    "address": str(row.get(col_map.get("address","_"),"")).strip() if "address" in col_map else "",
+                })
+
+            db.import_customers_bulk(records)
+            self._load(self.search.text())
+            QMessageBox.information(self,"Başarılı",f"{len(records)} müşteri içe aktarıldı.")
+        except Exception as e:
+            QMessageBox.critical(self,"Hata",f"İçe aktarma hatası:\n{e}")
+
+
 class LocationManagementDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -972,26 +1114,23 @@ class MovementDialog(QDialog):
         self.movement_type = movement_type
         label = "GİRİŞ" if movement_type == "GİRİŞ" else "ÇIKIŞ"
         self.setWindowTitle(f"Stok {label} — {fabric['product_code']} / {fabric['color']}")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(440)
         self._build_ui(fabric)
 
     def _build_ui(self, fabric):
         layout = QVBoxLayout(self)
 
+        bg = "#E3F2FD" if self.movement_type == "GİRİŞ" else "#FFEBEE"
         info = QLabel(f"<b>{fabric['product_name'] or fabric['product_code']}</b>  |  "
                       f"Renk: {fabric['color']}  |  Lokasyon: {fabric['location']}<br>"
                       f"Mevcut: <b>{fabric['meter']:.2f} mt</b>  /  <b>{fabric['kg']:.2f} kg</b>")
-        info.setStyleSheet("background:#E3F2FD; padding:8px; border-radius:4px;")
+        info.setStyleSheet(f"background:{bg}; padding:8px; border-radius:4px;")
         layout.addWidget(info)
 
-        form = QFormLayout()
-        form.setSpacing(10)
-        self.meter = QDoubleSpinBox()
-        self.meter.setRange(0, 999999)
-        self.meter.setDecimals(2)
-        self.kg = QDoubleSpinBox()
-        self.kg.setRange(0, 999999)
-        self.kg.setDecimals(2)
+        form = QFormLayout(); form.setSpacing(10)
+
+        self.meter = QDoubleSpinBox(); self.meter.setRange(0, 999999); self.meter.setDecimals(2)
+        self.kg    = QDoubleSpinBox(); self.kg.setRange(0, 999999);    self.kg.setDecimals(2)
         self.piece_count = QLineEdit()
         self.notes = QLineEdit()
 
@@ -999,20 +1138,74 @@ class MovementDialog(QDialog):
         form.addRow("Kilo:", self.kg)
         form.addRow("Top/Adet:", self.piece_count)
         form.addRow("Not:", self.notes)
-        layout.addLayout(form)
 
+        # Çıkış ise hedef seçimi
+        if self.movement_type == "ÇIKIŞ":
+            self.dest_type = QComboBox()
+            self.dest_type.addItems(["Müşteri", "Lokasyon", "Diğer"])
+            self.dest_type.currentIndexChanged.connect(self._on_dest_type_change)
+
+            self.dest_customer = QComboBox()
+            self._load_customers()
+
+            self.dest_location = QComboBox()
+            self._load_locations()
+            self.dest_location.setVisible(False)
+
+            self.dest_other = QLineEdit()
+            self.dest_other.setPlaceholderText("Hedef açıklayınız...")
+            self.dest_other.setVisible(False)
+
+            form.addRow("Çıkış Hedefi:", self.dest_type)
+            form.addRow("Müşteri:", self.dest_customer)
+            form.addRow("Lokasyon:", self.dest_location)
+            form.addRow("Diğer:", self.dest_other)
+
+        layout.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _load_customers(self):
+        self.dest_customer.clear()
+        self.dest_customer.addItem("— Seçiniz —", "")
+        for c in db.get_all_customers():
+            label = c["name"] + (f" ({c['code']})" if c["code"] else "")
+            self.dest_customer.addItem(label, str(c["id"]))
+
+    def _load_locations(self):
+        self.dest_location.clear()
+        self.dest_location.addItem("— Seçiniz —", "")
+        for l in db.get_active_locations():
+            self.dest_location.addItem(l["name"], l["name"])
+
+    def _on_dest_type_change(self, idx):
+        t = self.dest_type.currentText()
+        self.dest_customer.setVisible(t == "Müşteri")
+        self.dest_location.setVisible(t == "Lokasyon")
+        self.dest_other.setVisible(t == "Diğer")
+        # Etiket satırlarını güncelle
+        form = self.layout().itemAt(1)
+
     def get_data(self):
-        return {
-            "meter": self.meter.value(),
-            "kg": self.kg.value(),
+        d = {
+            "meter":       self.meter.value(),
+            "kg":          self.kg.value(),
             "piece_count": self.piece_count.text().strip(),
-            "notes": self.notes.text().strip(),
+            "notes":       self.notes.text().strip(),
+            "destination": "", "destination_type": "",
         }
+        if self.movement_type == "ÇIKIŞ":
+            t = self.dest_type.currentText()
+            d["destination_type"] = t
+            if t == "Müşteri":
+                d["destination"] = self.dest_customer.currentText() if self.dest_customer.currentData() else ""
+            elif t == "Lokasyon":
+                d["destination"] = self.dest_location.currentData() or ""
+            else:
+                d["destination"] = self.dest_other.text().strip()
+        return d
 
 
 TYPE_COLORS = {"GİRİŞ": "#2E7D32", "ÇIKIŞ": "#C62828", "SİLME": "#880E4F"}
@@ -1021,9 +1214,9 @@ TYPE_COLORS = {"GİRİŞ": "#2E7D32", "ÇIKIŞ": "#C62828", "SİLME": "#880E4F"}
 def _fill_movement_table(table, movements, show_product=False):
     """Hareket tablosunu doldur. show_product=True ise ürün sütunu eklenir."""
     if show_product:
-        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Kullanıcı", "Not"]
+        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
     else:
-        cols = ["Tarih", "Tür", "Metre", "Kilo", "Top/Adet", "Kullanıcı", "Not"]
+        cols = ["Tarih", "Tür", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
 
     table.setColumnCount(len(cols))
     table.setHorizontalHeaderLabels(cols)
@@ -1059,6 +1252,10 @@ def _fill_movement_table(table, movements, show_product=False):
         _set(f"{m['meter']:,.2f}" if m["meter"] else "")
         _set(f"{m['kg']:,.2f}" if m["kg"] else "")
         _set(m["piece_count"] or "")
+        dest = m.get("destination") or ""
+        dest_type = m.get("destination_type") or ""
+        dest_label = f"{dest_type}: {dest}" if dest and dest_type else dest
+        _set(dest_label, color="#1565C0" if dest else None)
         _set(m["user_name"] or "")
         _set(m["notes"] or "")
 
@@ -1686,7 +1883,9 @@ class StockTable(QWidget):
         if dlg.exec():
             d = dlg.get_data()
             mid = db.add_movement(fid, "ÇIKIŞ", d["meter"], d["kg"], d["piece_count"],
-                                  d["notes"], user_name=CURRENT_USER["full_name"])
+                                  d["notes"], user_name=CURRENT_USER["full_name"],
+                                  destination=d.get("destination",""),
+                                  destination_type=d.get("destination_type",""))
             push_undo(f"Çıkış: {fabric['product_code']} -{d['meter']:.1f}mt",
                       lambda mid=mid: db.reverse_movement(mid))
             self.refresh()
@@ -2094,6 +2293,10 @@ class MainWindow(QMainWindow):
         sys_menu.addAction("Yedek Durumu ve Yönetimi...").triggered.connect(self._backup_dialog)
         sys_menu.addAction("Şimdi Yedek Al").triggered.connect(self._backup_now)
 
+        cust_menu = menubar.addMenu("👥 Müşteriler")
+        cust_menu.addAction("Müşteri Listesi...").triggered.connect(
+            lambda: CustomerManagementDialog(self).exec())
+
         loc_menu = menubar.addMenu("🗄 Lokasyonlar")
         loc_menu.addAction("Raf / Lokasyon Tanımlamaları...").triggered.connect(
             lambda: LocationManagementDialog(self).exec())
@@ -2338,6 +2541,28 @@ class MainWindow(QMainWindow):
             ws.set_ngrok_token(dlg.token)
             QMessageBox.information(self, "Kaydedildi", "ngrok token kaydedildi.\nArtık 'İnternetten Erişim Aç' butonunu kullanabilirsiniz.")
 
+    def _check_updates(self):
+        """Arka planda güncelleme kontrolü — program açılınca çağrılır."""
+        import updater
+        def _on_result(var_mi, mesaj):
+            if var_mi:
+                # Ana thread'de bildirim göster
+                QTimer.singleShot(0, lambda: self._show_update_notice(mesaj))
+        updater.check_in_background(_on_result)
+
+    def _show_update_notice(self, mesaj):
+        reply = QMessageBox.question(self, "🔄 Güncelleme Mevcut",
+            f"{mesaj}\n\nŞimdi güncellensin mi?\n(Program yeniden başlayacak)",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            import updater
+            ok, msg = updater.apply_update()
+            if ok:
+                QMessageBox.information(self, "Güncellendi", msg)
+                updater.restart()
+            else:
+                QMessageBox.critical(self, "Güncelleme Hatası", msg)
+
     def _on_tab_change(self, idx):
         is_admin = CURRENT_USER.get("role") == "admin"
         if is_admin:
@@ -2472,6 +2697,8 @@ def main():
 
     window = MainWindow()
     window.show()
+    # 3 saniye sonra arka planda güncelleme kontrol et
+    QTimer.singleShot(3000, window._check_updates)
     sys.exit(app.exec())
 
 

@@ -61,6 +61,16 @@ def init_db():
             FOREIGN KEY (fabric_id) REFERENCES fabrics(id)
         );
 
+        CREATE TABLE IF NOT EXISTS customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            code TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            address TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
         CREATE TABLE IF NOT EXISTS locations (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE NOT NULL,
@@ -83,6 +93,8 @@ def init_db():
         "ALTER TABLE fabrics ADD COLUMN deleted_at TEXT DEFAULT NULL",
         "ALTER TABLE fabrics ADD COLUMN deleted_by TEXT DEFAULT ''",
         "ALTER TABLE movements ADD COLUMN user_name TEXT DEFAULT ''",
+        "ALTER TABLE movements ADD COLUMN destination TEXT DEFAULT ''",
+        "ALTER TABLE movements ADD COLUMN destination_type TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -105,6 +117,64 @@ def init_db():
         conn.commit()
 
     conn.close()
+
+
+# ── Customers ───────────────────────────────────────────────────
+
+def get_all_customers(search="", active_only=True):
+    conn = get_connection()
+    q = "SELECT * FROM customers WHERE 1=1"
+    params = []
+    if active_only:
+        q += " AND active=1"
+    if search:
+        q += " AND (name LIKE ? OR code LIKE ? OR phone LIKE ?)"
+        s = f"%{search}%"
+        params.extend([s, s, s])
+    q += " ORDER BY name"
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    return rows
+
+def get_customer(cid):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM customers WHERE id=?", (cid,)).fetchone()
+    conn.close()
+    return row
+
+def add_customer(name, code="", phone="", address=""):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO customers (name, code, phone, address) VALUES (?,?,?,?)",
+        (name.strip(), code.strip(), phone.strip(), address.strip())
+    )
+    conn.commit(); conn.close()
+
+def update_customer(cid, name, code, phone, address, active=1):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE customers SET name=?, code=?, phone=?, address=?, active=? WHERE id=?",
+        (name.strip(), code.strip(), phone.strip(), address.strip(), int(active), cid)
+    )
+    conn.commit(); conn.close()
+
+def delete_customer(cid):
+    conn = get_connection()
+    conn.execute("DELETE FROM customers WHERE id=?", (cid,))
+    conn.commit(); conn.close()
+
+def import_customers_bulk(records):
+    """records: [{"name":..., "code":..., "phone":..., "address":...}]"""
+    conn = get_connection()
+    c = conn.cursor()
+    for r in records:
+        name = r.get("name","").strip()
+        if not name: continue
+        c.execute(
+            "INSERT OR IGNORE INTO customers (name, code, phone, address) VALUES (?,?,?,?)",
+            (name, r.get("code",""), r.get("phone",""), r.get("address",""))
+        )
+    conn.commit(); conn.close()
 
 
 # ── Locations ───────────────────────────────────────────────────
@@ -355,13 +425,16 @@ def soft_delete_fabric(fabric_id, user_name=""):
 
 # ── Movements ───────────────────────────────────────────────────
 
-def add_movement(fabric_id, movement_type, meter, kg, piece_count, notes, user_name=""):
+def add_movement(fabric_id, movement_type, meter, kg, piece_count, notes,
+                 user_name="", destination="", destination_type=""):
     conn = get_connection()
     c = conn.cursor()
     c.execute("""
-        INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count, notes, user_name)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-    """, (fabric_id, movement_type, meter or 0, kg or 0, piece_count, notes, user_name))
+        INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count,
+                               notes, user_name, destination, destination_type)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (fabric_id, movement_type, meter or 0, kg or 0, piece_count,
+          notes, user_name, destination, destination_type))
     fabric = conn.execute("SELECT meter, kg FROM fabrics WHERE id=?", (fabric_id,)).fetchone()
     if fabric:
         if movement_type == "GİRİŞ":
