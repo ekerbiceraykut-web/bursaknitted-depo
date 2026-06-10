@@ -171,11 +171,11 @@ QGroupBox::title {{
     color: {COLORS['primary']};
 }}
 QStatusBar {{
-    background: {GREY};
-    color: white;
-    font-weight: bold;
+    background: #F0F0F0;
+    color: #212121;
     font-size: 13px;
     min-height: 28px;
+    border-top: 1px solid #BDBDBD;
 }}
 QLabel.title {{
     font-size: 16px;
@@ -1700,7 +1700,7 @@ class StockTable(QWidget):
 
         self._filter_lbl = QLabel()
         self._filter_lbl.setStyleSheet(
-            "color:rgba(255,255,255,.75); font-size:11px; font-style:italic; background:transparent;")
+            "color:#212121; font-size:11px; font-style:italic; background:transparent;")
         bar_layout.addWidget(self._filter_lbl)
 
         layout.addWidget(self._totals_bar)
@@ -2361,7 +2361,7 @@ class MainWindow(QMainWindow):
         self.status = QStatusBar()
         self.setStatusBar(self.status)
         self._user_label = QLabel()
-        self._user_label.setStyleSheet("color:white; font-weight:bold; font-size:12px; padding:0 12px;")
+        self._user_label.setStyleSheet("color:#212121; font-weight:bold; font-size:12px; padding:0 12px;")
         self.status.addPermanentWidget(self._user_label)
         self._update_user_label()
 
@@ -2405,11 +2405,11 @@ class MainWindow(QMainWindow):
         web_menu.addAction("ngrok Token Ayarla...").triggered.connect(self._set_ngrok_token)
 
         self._web_label = QLabel("  📱 Mobil: Kapalı  ")
-        self._web_label.setStyleSheet("color:rgba(255,255,255,.75); font-size:12px; padding:0 10px;")
+        self._web_label.setStyleSheet("color:#212121; font-size:12px; padding:0 10px;")
         self.status.addPermanentWidget(self._web_label)
 
         self._backup_lbl = QLabel("  🛡 Yedek: —  ")
-        self._backup_lbl.setStyleSheet("color:rgba(255,255,255,.75); font-size:12px; padding:0 10px;")
+        self._backup_lbl.setStyleSheet("color:#212121; font-size:12px; padding:0 10px;")
         self._backup_lbl.setCursor(Qt.CursorShape.PointingHandCursor)
         self._backup_lbl.mousePressEvent = lambda e: self._backup_dialog()
         self.status.addPermanentWidget(self._backup_lbl)
@@ -2453,12 +2453,12 @@ class MainWindow(QMainWindow):
             ws.stop()
             self._web_action.setText("Mobil Sunucuyu Başlat")
             self._web_label.setText("  📱 Kapalı  ")
-            self._web_label.setStyleSheet("color:rgba(255,255,255,.6); font-size:12px; padding:0 8px;")
+            self._web_label.setStyleSheet("color:#212121; font-size:12px; padding:0 8px;")
         else:
             ip, port = ws.start()
             self._web_action.setText("Mobil Sunucuyu Durdur")
             self._web_label.setText(f"  📱 {ip}:{port}  ")
-            self._web_label.setStyleSheet("color:#A5D6A7; font-weight:bold; font-size:12px; padding:0 8px;")
+            self._web_label.setStyleSheet("color:#2E7D32; font-weight:bold; font-size:12px; padding:0 8px;")
             # Bilgi dialogu
             dlg = _MobileAccessDialog(self, ip, port)
             dlg.exec()
@@ -2612,10 +2612,10 @@ class MainWindow(QMainWindow):
         if hasattr(self, "_backup_lbl"):
             if s["is_today"]:
                 self._backup_lbl.setText(f"  🛡 Yedek: {s['last_backup']}  ")
-                self._backup_lbl.setStyleSheet("color:#A5D6A7; font-size:11px; padding:0 6px;")
+                self._backup_lbl.setStyleSheet("color:#2E7D32; font-size:12px; padding:0 10px;")
             else:
                 self._backup_lbl.setText("  ⚠️ Yedek alınmadı  ")
-                self._backup_lbl.setStyleSheet("color:#FFCC80; font-size:11px; font-weight:bold; padding:0 6px;")
+                self._backup_lbl.setStyleSheet("color:#E65100; font-size:11px; font-weight:bold; padding:0 6px;")
 
     def _set_ngrok_token(self):
         import web_server as ws
