@@ -833,9 +833,10 @@ class LoginDialog(QDialog):
                 user = api_client.login(self.username.text().strip(), self.password.text())
                 CONNECTION_MODE = "remote"
                 CURRENT_USER.update(user)
-                # db'yi proxy'ye çevir — tüm db.xxx çağrıları artık API'ye gider
-                import main as _self_mod
-                _self_mod.db = _self_mod._db
+                # db'yi proxy'ye çevir — __main__ modülünü kullan (import main değil!)
+                import sys
+                _mod = sys.modules['__main__']
+                _mod.db = _mod._db
                 self._save_server_setting(url)
                 self.accept()
             except Exception as e:
