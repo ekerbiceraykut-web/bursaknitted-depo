@@ -1299,30 +1299,45 @@ class MovementsDialog(QDialog):
 
 
 class DailyMovementsDialog(QDialog):
-    """Bugünün tüm hareketleri — seçili satır yokken açılır."""
+    """Tarih aralığındaki tüm hareketler — seçili satır yokken açılır."""
     def __init__(self, parent):
         super().__init__(parent)
-        from datetime import date
-        self._today = date.today()
-        self.setWindowTitle(f"Günlük Hareketler — {self._today.strftime('%d.%m.%Y')}")
-        self.setMinimumSize(900, 520)
+        self.setWindowTitle("Hareketler")
+        self.setMinimumSize(950, 540)
         self._build_ui()
         self._load()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
 
-        # Tarih seçici
-        top = QHBoxLayout()
         from PyQt6.QtWidgets import QDateEdit
         from PyQt6.QtCore import QDate
-        top.addWidget(QLabel("Tarih:"))
-        self.date_edit = QDateEdit()
-        self.date_edit.setCalendarPopup(True)
-        self.date_edit.setDate(QDate.currentDate())
-        self.date_edit.setDisplayFormat("dd.MM.yyyy")
-        self.date_edit.dateChanged.connect(self._load)
-        top.addWidget(self.date_edit)
+
+        # Hazır aralık butonları
+        presets = QHBoxLayout()
+        for label, days in [("Bugün", 0), ("Son 7 Gün", 7), ("Son 15 Gün", 15), ("Son 30 Gün", 30)]:
+            b = QPushButton(label)
+            b.clicked.connect(lambda _, d=days: self._set_preset(d))
+            presets.addWidget(b)
+        presets.addStretch()
+        layout.addLayout(presets)
+
+        # Tarih aralığı seçici
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Başlangıç:"))
+        self.start_edit = QDateEdit()
+        self.start_edit.setCalendarPopup(True)
+        self.start_edit.setDate(QDate.currentDate())
+        self.start_edit.setDisplayFormat("dd.MM.yyyy")
+        self.start_edit.dateChanged.connect(self._load)
+        top.addWidget(self.start_edit)
+        top.addWidget(QLabel("Bitiş:"))
+        self.end_edit = QDateEdit()
+        self.end_edit.setCalendarPopup(True)
+        self.end_edit.setDate(QDate.currentDate())
+        self.end_edit.setDisplayFormat("dd.MM.yyyy")
+        self.end_edit.dateChanged.connect(self._load)
+        top.addWidget(self.end_edit)
         top.addStretch()
         self.count_lbl = QLabel()
         self.count_lbl.setStyleSheet("color:#555; font-size:12px;")
@@ -1335,15 +1350,33 @@ class DailyMovementsDialog(QDialog):
         btn = QPushButton("Kapat"); btn.clicked.connect(self.accept)
         layout.addWidget(btn)
 
-    def _load(self):
+    def _set_preset(self, days):
         from PyQt6.QtCore import QDate
-        d = self.date_edit.date().toString("yyyy-MM-dd")
-        all_mv = db.get_all_movements(1000)
-        movements = [m for m in all_mv if str(m["movement_date"]).startswith(d)]
+        today = QDate.currentDate()
+        # Sinyalleri kapat, iki tarihi birden ayarla, tek seferde yükle
+        self.start_edit.blockSignals(True)
+        self.end_edit.blockSignals(True)
+        self.start_edit.setDate(today.addDays(-days))
+        self.end_edit.setDate(today)
+        self.start_edit.blockSignals(False)
+        self.end_edit.blockSignals(False)
+        self._load()
+
+    def _load(self):
+        start = self.start_edit.date().toString("yyyy-MM-dd")
+        end = self.end_edit.date().toString("yyyy-MM-dd")
+        if start > end:
+            start, end = end, start
+        movements = db.get_movements_by_range(start, end)
         _fill_movement_table(self.table, movements, show_product=True)
-        self.count_lbl.setText(
-            f"{len(movements)} hareket" if movements else "Bu tarihte hareket yok"
-        )
+        if movements:
+            in_m = sum(m["meter"] or 0 for m in movements if m["movement_type"] == "GİRİŞ")
+            out_m = sum(m["meter"] or 0 for m in movements if m["movement_type"] == "ÇIKIŞ")
+            self.count_lbl.setText(
+                f"{len(movements)} hareket — Giriş: {in_m:,.0f} mt, Çıkış: {out_m:,.0f} mt"
+            )
+        else:
+            self.count_lbl.setText("Bu tarih aralığında hareket yok")
 
 
 COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Açıklama"]
@@ -1608,7 +1641,7 @@ class StockTable(QWidget):
         btn_edit  = QPushButton("✎ Düzenle");    btn_edit.clicked.connect(self._edit)
         btn_del   = QPushButton("✕ Sil");        btn_del.clicked.connect(self._delete)
         btn_hist  = QPushButton("☰ Hareketler"); btn_hist.clicked.connect(self._history)
-        btn_hist.setToolTip("Satır seçiliyse: o ürünün tüm hareketleri\nSeçili satır yoksa: bugünün hareketleri")
+        btn_hist.setToolTip("Satır seçiliyse: o ürünün tüm hareketleri\nSeçili satır yoksa: tarih aralığına göre hareketler")
 
         self.btn_undo = QPushButton("↩ Geri Al")
         self.btn_undo.setEnabled(False)

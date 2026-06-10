@@ -474,6 +474,20 @@ def get_all_movements(limit=200):
     return rows
 
 
+def get_movements_by_range(start_date, end_date):
+    """start_date ve end_date dahil, 'YYYY-MM-DD' formatında."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT m.*, f.product_code, f.product_name, f.color, f.location
+        FROM movements m
+        LEFT JOIN fabrics f ON m.fabric_id = f.id
+        WHERE date(m.movement_date) BETWEEN ? AND ?
+        ORDER BY m.movement_date DESC
+    """, (start_date, end_date)).fetchall()
+    conn.close()
+    return rows
+
+
 # ── Stats ───────────────────────────────────────────────────────
 
 def get_locations():
