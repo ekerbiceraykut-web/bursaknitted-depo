@@ -2,7 +2,7 @@
 API İstemcisi — Uzak sunucuya bağlanarak veritabanı işlemleri yapar.
 database.py ile aynı arayüzü sunar.
 """
-import json, urllib.request, urllib.error, os
+import json, urllib.request, urllib.error, urllib.parse, os
 
 _server_url = ""
 _token      = ""
@@ -45,9 +45,11 @@ def _headers():
 def _get(path, params=None, auth=True):
     url = _server_url + path
     if params:
-        url += "?" + "&".join(f"{k}={v}" for k, v in params.items() if v)
+        encoded = urllib.parse.urlencode({k: v for k, v in params.items() if v})
+        if encoded:
+            url += "?" + encoded
     req = urllib.request.Request(url, headers=_headers() if auth else {})
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=15) as r:
         resp = json.loads(r.read())
     if not resp.get("ok"):
         raise Exception(resp.get("error", "API hatası"))
