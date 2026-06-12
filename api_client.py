@@ -42,6 +42,20 @@ def _headers():
     h = {"Content-Type": "application/json", "X-Token": _token}
     return h
 
+def _request(req, timeout):
+    """İsteği çalıştır; hata durumunda sunucunun mesajını ilet (HTTP 4xx/5xx dahil)."""
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            resp = json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        try:
+            resp = json.loads(e.read())
+        except Exception:
+            raise Exception(f"Sunucu hatası (HTTP {e.code})")
+    if not resp.get("ok"):
+        raise Exception(resp.get("error", "API hatası"))
+    return resp.get("data")
+
 def _get(path, params=None, auth=True):
     url = _server_url + path
     if params:
@@ -49,38 +63,24 @@ def _get(path, params=None, auth=True):
         if encoded:
             url += "?" + encoded
     req = urllib.request.Request(url, headers=_headers() if auth else {})
-    with urllib.request.urlopen(req, timeout=15) as r:
-        resp = json.loads(r.read())
-    if not resp.get("ok"):
-        raise Exception(resp.get("error", "API hatası"))
-    return resp.get("data")
+    return _request(req, 15)
 
 def _post(path, data, auth=True):
     url = _server_url + path
     body = json.dumps(data, ensure_ascii=False).encode()
     req  = urllib.request.Request(url, data=body, method="POST",
                                   headers=_headers() if auth else {"Content-Type":"application/json"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        resp = json.loads(r.read())
-    if not resp.get("ok"):
-        raise Exception(resp.get("error", "API hatası"))
-    return resp.get("data")
+    return _request(req, 10)
 
 def _put(path, data):
     url  = _server_url + path
     body = json.dumps(data, ensure_ascii=False).encode()
     req  = urllib.request.Request(url, data=body, method="PUT", headers=_headers())
-    with urllib.request.urlopen(req, timeout=10) as r:
-        resp = json.loads(r.read())
-    if not resp.get("ok"):
-        raise Exception(resp.get("error", "API hatası"))
+    return _request(req, 10)
 
 def _delete(path):
     req = urllib.request.Request(_server_url + path, method="DELETE", headers=_headers())
-    with urllib.request.urlopen(req, timeout=10) as r:
-        resp = json.loads(r.read())
-    if not resp.get("ok"):
-        raise Exception(resp.get("error", "API hatası"))
+    return _request(req, 10)
 
 
 # ── Fabrics ──────────────────────────────────────────────────────

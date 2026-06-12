@@ -276,7 +276,18 @@ def update_location(loc_id, name, group_name, description, active):
     conn.close()
 
 def delete_location(loc_id):
+    """Lokasyonda aktif stok kaydı varsa silinemez — stoklar korunur."""
     conn = get_connection()
+    row = conn.execute("SELECT name FROM locations WHERE id=?", (loc_id,)).fetchone()
+    if row:
+        cnt = conn.execute(
+            "SELECT COUNT(*) c FROM fabrics WHERE location=? AND deleted_at IS NULL",
+            (row["name"],)).fetchone()["c"]
+        if cnt > 0:
+            conn.close()
+            raise ValueError(
+                f"'{row['name']}' lokasyonunda {cnt} stok kaydı var. "
+                f"Önce stokları başka lokasyona taşıyın, sonra silebilirsiniz.")
     conn.execute("DELETE FROM locations WHERE id=?", (loc_id,))
     conn.commit()
     conn.close()

@@ -543,9 +543,27 @@ class LocationManagementDialog(QDialog):
     def _delete(self):
         lid = self._selected_id()
         if not lid: return
-        if QMessageBox.question(self, "Sil", "Bu lokasyon silinsin mi?",
+        loc = next((r for r in db.get_all_locations() if r["id"] == lid), None)
+        if not loc: return
+
+        # Lokasyonda aktif stok varsa silme — stoklar hiçbir şekilde silinmez
+        fabrics = db.get_all_fabrics(location=loc["name"])
+        if fabrics:
+            toplam_mt = sum((f["meter"] or 0) for f in fabrics)
+            QMessageBox.warning(
+                self, "Lokasyon Silinemez",
+                f"<b>{loc['name']}</b> lokasyonunda <b>{len(fabrics)} stok kaydı</b> var "
+                f"({toplam_mt:,.0f} mt).<br><br>"
+                f"Stoklar silinemez — önce bu kayıtları çıkış/transfer ile "
+                f"<b>başka lokasyona taşıyın</b>, sonra lokasyonu silebilirsiniz.")
+            return
+
+        if QMessageBox.question(self, "Sil", f"<b>{loc['name']}</b> lokasyonu silinsin mi?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
-            db.delete_location(lid)
+            try:
+                db.delete_location(lid)
+            except Exception as e:
+                QMessageBox.critical(self, "Silinemedi", str(e))
             self._load()
 
     def _sync(self):
