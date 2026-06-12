@@ -1549,7 +1549,8 @@ TYPE_COLORS = {"GİRİŞ": "#2E7D32", "ÇIKIŞ": "#C62828", "SİLME": "#880E4F"}
 
 
 def _fill_movement_table(table, movements, show_product=False):
-    """Hareket tablosunu doldur. show_product=True ise ürün sütunu eklenir."""
+    """Hareket tablosunu doldur. show_product=True ise ürün sütunu eklenir.
+    Sütunlar elle ayarlanabilir, başlıklar taşınabilir, tıklayınca sıralanır."""
     if show_product:
         cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
     else:
@@ -1558,19 +1559,26 @@ def _fill_movement_table(table, movements, show_product=False):
     table.setColumnCount(len(cols))
     table.setHorizontalHeaderLabels(cols)
     hdr = table.horizontalHeader()
-    hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-    hdr.setSectionResizeMode(len(cols) - 1, QHeaderView.ResizeMode.Stretch)
+    hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)   # elle genişlik
+    hdr.setStretchLastSection(True)
+    hdr.setSectionsMovable(True)   # başlıklar sürüklenerek yer değiştirir
     table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
     table.setAlternatingRowColors(True)
     table.verticalHeader().setVisible(False)
+    table.setSortingEnabled(False)   # doldururken kapalı
     table.setRowCount(len(movements))
 
     for i, m in enumerate(movements):
         m = dict(m)   # sqlite3.Row'da .get yok; dict'e çevirince iki kaynak da çalışır
         col = 0
-        def _set(val, align=None, color=None, bold=False):
+        def _set(val, align=None, color=None, bold=False, sort_key=None):
             nonlocal col
-            item = QTableWidgetItem(str(val) if val else "")
+            text = str(val) if val else ""
+            item = _FireSortItem(text)
+            if sort_key is not None:
+                item.setData(Qt.ItemDataRole.UserRole, sort_key)
+            if text:
+                item.setToolTip(text)   # sığmayan yazılar üzerine gelince okunur
             if align:
                 item.setTextAlignment(align)
             if color:
@@ -1586,10 +1594,15 @@ def _fill_movement_table(table, movements, show_product=False):
         if show_product:
             _set(m["product_code"] or "")
             _set(m["color"] or "")
-            _set(m["location"] or "")
-        _set(f"{m['meter']:,.2f}" if m["meter"] else "")
-        _set(f"{m['kg']:,.2f}" if m["kg"] else "")
-        _set(m["piece_count"] or "")
+            # Hareketin yapıldığı lokasyon; eski kayıtlarda kumaşın güncel lokasyonu
+            _set(m.get("location") or m.get("fabric_location") or "")
+        _set(f"{m['meter']:,.2f}" if m["meter"] else "", sort_key=m["meter"] or 0)
+        _set(f"{m['kg']:,.2f}" if m["kg"] else "", sort_key=m["kg"] or 0)
+        try:
+            piece_key = int(str(m["piece_count"]).strip())
+        except (ValueError, TypeError):
+            piece_key = -1
+        _set(m["piece_count"] or "", sort_key=piece_key)
         dest = m.get("destination") or ""
         dest_type = m.get("destination_type") or ""
         dest_label = f"{dest_type}: {dest}" if dest and dest_type else dest
@@ -1606,6 +1619,11 @@ def _fill_movement_table(table, movements, show_product=False):
         if extra:
             notes = (notes + "  |  " if notes else "") + "  ".join(extra)
         _set(notes)
+
+    table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
+    if not table.property("cols_sized"):
+        table.resizeColumnsToContents()   # ilk dolduruşta makul genişlik
+        table.setProperty("cols_sized", True)
 
 
 class MovementsDialog(QDialog):

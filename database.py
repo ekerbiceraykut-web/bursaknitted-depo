@@ -129,6 +129,7 @@ def init_db():
         "ALTER TABLE fire_records ADD COLUMN lab_no TEXT DEFAULT ''",
         "ALTER TABLE fire_records ADD COLUMN parti_no TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN entry_location TEXT DEFAULT ''",
+        "ALTER TABLE movements ADD COLUMN location TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -139,6 +140,16 @@ def init_db():
     # Giriş lokasyonu boş olan mevcut kayıtlara şimdiki lokasyonunu yaz
     try:
         c.execute("UPDATE fabrics SET entry_location=location WHERE IFNULL(entry_location,'')=''")
+    except Exception:
+        pass
+
+    # Eski hareketlere, bağlı kumaşın şimdiki lokasyonunu işle (bir defalık doldurma)
+    try:
+        c.execute("""
+            UPDATE movements SET location =
+                COALESCE((SELECT location FROM fabrics WHERE fabrics.id = movements.fabric_id), '')
+            WHERE IFNULL(location,'') = ''
+        """)
     except Exception:
         pass
 
@@ -512,10 +523,11 @@ def soft_delete_fabric(fabric_id, user_name=""):
         """, (user_name, fabric_id))
         # Silme hareketi kaydet
         conn.execute("""
-            INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count, notes, user_name)
-            VALUES (?, 'SİLME', ?, ?, ?, 'Stoktan silindi', ?)
+            INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count,
+                                   notes, user_name, location)
+            VALUES (?, 'SİLME', ?, ?, ?, 'Stoktan silindi', ?, ?)
         """, (fabric_id, fabric["meter"] or 0, fabric["kg"] or 0,
-              fabric["piece_count"] or "", user_name))
+              fabric["piece_count"] or "", user_name, fabric["location"] or ""))
     conn.commit()
     conn.close()
 
@@ -547,16 +559,17 @@ def add_movement(fabric_id, movement_type, meter, kg, piece_count, notes,
     miktardan farklıysa (fire: çıkış öncesi miktar düşülür) kullanılır."""
     conn = get_connection()
     c = conn.cursor()
+    fabric = conn.execute("SELECT * FROM fabrics WHERE id=?", (fabric_id,)).fetchone()
+    mv_location = (fabric["location"] or "") if fabric else ""
     c.execute("""
         INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count,
                                notes, user_name, destination, destination_type,
-                               out_color, lab_no, parti_no)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               out_color, lab_no, parti_no, location)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (fabric_id, movement_type, meter or 0, kg or 0, piece_count,
           notes, user_name, destination, destination_type,
-          out_color, lab_no, parti_no))
+          out_color, lab_no, parti_no, mv_location))
     mid = c.lastrowid
-    fabric = conn.execute("SELECT * FROM fabrics WHERE id=?", (fabric_id,)).fetchone()
     if fabric:
         if movement_type == "GİRİŞ":
             new_meter = (fabric["meter"] or 0) + (meter or 0)
@@ -622,11 +635,12 @@ def _transfer_in(conn, src_fabric, dest_location, meter, kg, piece_count, user_n
     # Hedef tarafta GİRİŞ hareketi kaydet ve iki hareketi birbirine bağla
     cur = conn.execute("""
         INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count,
-                               notes, user_name, destination, destination_type, linked_movement_id)
-        VALUES (?, 'GİRİŞ', ?, ?, ?, ?, ?, ?, 'Transfer', ?)
+                               notes, user_name, destination, destination_type,
+                               linked_movement_id, location)
+        VALUES (?, 'GİRİŞ', ?, ?, ?, ?, ?, ?, 'Transfer', ?, ?)
     """, (dest_id, meter or 0, kg or 0, piece_count,
           f"Transfer: {src_fabric['location']} → {dest_location}",
-          user_name, src_fabric["location"] or "", src_mid))
+          user_name, src_fabric["location"] or "", src_mid, dest_location))
     conn.execute("UPDATE movements SET linked_movement_id=? WHERE id=?", (cur.lastrowid, src_mid))
 
 
@@ -643,7 +657,8 @@ def get_movements(fabric_id):
 def get_all_movements(limit=200):
     conn = get_connection()
     rows = conn.execute("""
-        SELECT m.*, f.product_code, f.product_name, f.color, f.location
+        SELECT m.*, f.product_code, f.product_name, f.color,
+               f.location AS fabric_location
         FROM movements m
         LEFT JOIN fabrics f ON m.fabric_id = f.id
         ORDER BY m.movement_date DESC LIMIT ?
@@ -656,7 +671,8 @@ def get_movements_by_range(start_date, end_date):
     """start_date ve end_date dahil, 'YYYY-MM-DD' formatında."""
     conn = get_connection()
     rows = conn.execute("""
-        SELECT m.*, f.product_code, f.product_name, f.color, f.location
+        SELECT m.*, f.product_code, f.product_name, f.color,
+               f.location AS fabric_location
         FROM movements m
         LEFT JOIN fabrics f ON m.fabric_id = f.id
         WHERE date(m.movement_date) BETWEEN ? AND ?
@@ -774,9 +790,9 @@ def reset_lot_fire(fabric_id, user_name=""):
     if rem_m > 0 or rem_k > 0:
         conn.execute("""
             INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count,
-                                   notes, user_name, destination, destination_type)
-            VALUES (?, 'ÇIKIŞ', ?, ?, '', 'Lot sıfırlama — kalan stok fire yazıldı', ?, '', '')
-        """, (fabric_id, rem_m, rem_k, user_name))
+                                   notes, user_name, destination, destination_type, location)
+            VALUES (?, 'ÇIKIŞ', ?, ?, '', 'Lot sıfırlama — kalan stok fire yazıldı', ?, '', '', ?)
+        """, (fabric_id, rem_m, rem_k, user_name, fabric["location"] or ""))
         conn.execute("""
             UPDATE fabrics SET meter=0, kg=0, piece_count='0',
             updated_at=datetime('now','localtime') WHERE id=?
