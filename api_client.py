@@ -261,10 +261,10 @@ def update_user_password(uid, pw):
     _put(f"/api/users/{uid}/password", {"password": pw})
 
 def toggle_user_active(uid):
-    pass
+    _put(f"/api/users/{uid}/toggle", {})
 
 def delete_user(uid):
-    pass
+    _delete(f"/api/users/{uid}")
 
 
 # ── Import ───────────────────────────────────────────────────────

@@ -286,6 +286,12 @@ class APIHandler(BaseHTTPRequestHandler):
                     return self._send(_err("Yetki yok"), 403)
                 db.update_user_password(uid, body["password"])
                 self._send(_ok())
+            elif path.startswith("/api/users/") and path.endswith("/toggle"):
+                uid = int(path.split("/")[-2])
+                if user.get("role") != "admin":
+                    return self._send(_err("Yetki yok"), 403)
+                db.toggle_user_active(uid)
+                self._send(_ok())
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)
         except Exception as e:
@@ -308,6 +314,14 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/locations/"):
                 lid = int(path.split("/")[-1])
                 db.delete_location(lid)
+                self._send(_ok())
+            elif path.startswith("/api/users/"):
+                if user.get("role") != "admin":
+                    return self._send(_err("Yetki yok"), 403)
+                uid = int(path.split("/")[-1])
+                if uid == user.get("id"):
+                    return self._send(_err("Kendi hesabınızı silemezsiniz"), 400)
+                db.delete_user(uid)
                 self._send(_ok())
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)
