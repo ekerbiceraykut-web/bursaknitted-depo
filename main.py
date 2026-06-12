@@ -1020,7 +1020,7 @@ class FabricDialog(QDialog):
         form.addRow("Metre:", self.meter)
         form.addRow("Kilo:", self.kg)
         form.addRow("Top/Adet:", self.piece_count)
-        form.addRow("Birim Fiyat ($/mt) *:", self.birim_fiyat)
+        form.addRow("Birim Fiyat ($/mt):", self.birim_fiyat)
         form.addRow("Açıklama:", self.description)
 
         layout.addLayout(form)
@@ -1103,11 +1103,6 @@ class FabricDialog(QDialog):
             self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
         else:
             self.fabric_type.setStyleSheet("")
-        if self.birim_fiyat.value() <= 0:
-            errors.append("• Birim fiyat girilmelidir (0'dan büyük olmalı)")
-            self.birim_fiyat.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
-        else:
-            self.birim_fiyat.setStyleSheet("")
         if errors:
             QMessageBox.warning(self, "Eksik Bilgi", "\n".join(errors))
             return
@@ -1225,9 +1220,6 @@ class CellEditDialog(QDialog):
             return
         if self.field == "fabric_type" and not v:
             QMessageBox.warning(self, "Eksik Bilgi", "Kumaş tipi seçilmelidir.")
-            return
-        if self.field == "birim_fiyat" and v <= 0:
-            QMessageBox.warning(self, "Eksik Bilgi", "Birim fiyat 0'dan büyük olmalıdır.")
             return
         self.accept()
 

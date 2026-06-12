@@ -563,7 +563,7 @@ def _fabric_form(user, fabric=None, error="", post_data=None):
           <input name="piece_count" value="{v('piece_count')}">
         </div>
         <div class="form-group">
-          <label>Birim Fiyat ($/mt) <span class="required">*</span></label>
+          <label>Birim Fiyat ($/mt)</label>
           <input name="birim_fiyat" type="number" step="0.01" min="0" value="{v('birim_fiyat','0')}">
         </div>
       </div>
@@ -727,7 +727,6 @@ class Handler(BaseHTTPRequestHandler):
                 if not pd.get("product_code","").strip(): errors.append("Ürün kodu zorunlu")
                 if not pd.get("location","").strip():     errors.append("Lokasyon zorunlu")
                 if not pd.get("fabric_type","").strip():  errors.append("Kumaş tipi zorunlu")
-                if float(pd.get("birim_fiyat") or 0) <= 0: errors.append("Birim fiyat zorunlu")
                 if errors:
                     self._send(_fabric_form(user, error=", ".join(errors), post_data=pd)); return
                 db.add_fabric(
