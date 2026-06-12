@@ -34,11 +34,10 @@ def _save_config(data):
 def take_backup(force=False):
     """
     Günlük yedek al. Bugün zaten alındıysa atlar (force=True ile zorla).
+    Uzak moddaysa (buluta bağlı) buluttaki veritabanının kopyasını indirir;
+    yerel moddaysa yerel dosyayı kopyalar.
     Döner: (başarılı: bool, mesaj: str)
     """
-    if not os.path.exists(DB_PATH):
-        return False, "Veritabanı bulunamadı"
-
     os.makedirs(BACKUP_DIR, exist_ok=True)
 
     # Bugün yedek alındı mı?
@@ -47,10 +46,23 @@ def take_backup(force=False):
     if not force and cfg.get("last_backup") == today:
         return True, f"Bugün ({today}) yedek zaten alınmış"
 
-    # Yedek dosya adı
     ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    dest = os.path.join(BACKUP_DIR, f"stok_{ts}.db")
 
+    # Buluta bağlıysak: bulut veritabanının kopyasını indir
+    try:
+        import api_client
+        if api_client.is_configured() and api_client._token:
+            dest = os.path.join(BACKUP_DIR, f"stok_bulut_{ts}.db")
+            size = api_client.download_backup(dest)
+            _save_config({"last_backup": today, "last_backup_file": dest})
+            _cleanup_old_backups()
+            return True, f"Bulut yedeği indirildi: yedekler/stok_bulut_{ts}.db ({size//1024} KB)"
+    except Exception:
+        pass   # bulut yedeği alınamazsa yerel kopyaya düş
+
+    if not os.path.exists(DB_PATH):
+        return False, "Veritabanı bulunamadı"
+    dest = os.path.join(BACKUP_DIR, f"stok_{ts}.db")
     try:
         shutil.copy2(DB_PATH, dest)
         _save_config({"last_backup": today, "last_backup_file": dest})

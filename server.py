@@ -14,6 +14,7 @@ import database as db
 
 PORT = int(os.environ.get("PORT", "5060"))   # bulutta Render PORT verir
 _tokens: dict = {}  # {token: user_dict}
+_login_fails: dict = {}  # {ip: [zaman damgaları]} — kaba kuvvet koruması
 
 
 def _hash(p): return hashlib.sha256(p.encode()).hexdigest()
@@ -86,6 +87,23 @@ class APIHandler(BaseHTTPRequestHandler):
                     rows = db.get_all_movements(limit)
                 self._send(_ok([dict(r) for r in rows]))
 
+            # ── Yedek indirme (admin) ────────────────────────────
+            elif path == "/api/backup":
+                if user.get("role") != "admin":
+                    return self._send(_err("Yetki yok"), 403)
+                import sqlite3, base64, tempfile
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+                tmp.close()
+                src = sqlite3.connect(db.DB_PATH)
+                dst = sqlite3.connect(tmp.name)
+                src.backup(dst)   # WAL dahil tutarlı kopya
+                dst.close(); src.close()
+                with open(tmp.name, "rb") as f:
+                    data = f.read()
+                os.unlink(tmp.name)
+                self._send(_ok({"db_base64": base64.b64encode(data).decode(),
+                                "size": len(data)}))
+
             # ── Fire kayıtları ───────────────────────────────────
             elif path == "/api/fire":
                 rows = db.get_fire_records()
@@ -141,13 +159,25 @@ class APIHandler(BaseHTTPRequestHandler):
 
         # ── Giriş ────────────────────────────────────────────────
         if path == "/api/login":
+            import time as _time
+            fwd = self.headers.get("X-Forwarded-For", "")
+            ip = fwd.split(",")[0].strip() if fwd else self.client_address[0]
+            now = _time.time()
+            fails = [t for t in _login_fails.get(ip, []) if now - t < 300]
+            if len(fails) >= 5:
+                _login_fails[ip] = fails
+                return self._send(_err("Çok fazla başarısız deneme — 5 dakika sonra tekrar deneyin"), 429)
+
             body = self._body()
             u = db.authenticate(body.get("username",""), body.get("password",""))
             if u:
+                _login_fails.pop(ip, None)
                 token = str(uuid.uuid4())
                 _tokens[token] = dict(u)
                 data = dict(u); data["token"] = token
                 return self._send(_ok(data))
+            fails.append(now)
+            _login_fails[ip] = fails
             return self._send(_err("Kullanıcı adı veya şifre hatalı"), 401)
 
         user = _auth(self.headers)

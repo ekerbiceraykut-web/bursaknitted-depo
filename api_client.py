@@ -138,6 +138,16 @@ def add_movement(fid, movement_type, meter, kg, piece_count, notes, user_name=""
     return (r or {}).get("id")
 
 
+def download_backup(dest_path):
+    """Buluttaki veritabanının tutarlı kopyasını indirir (admin gerekli)."""
+    import base64
+    r = _get("/api/backup")
+    data = base64.b64decode(r["db_base64"])
+    with open(dest_path, "wb") as f:
+        f.write(data)
+    return len(data)
+
+
 # ── Customers ────────────────────────────────────────────────────
 
 def get_all_customers(search="", active_only=True):
