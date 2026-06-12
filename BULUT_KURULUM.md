@@ -1,126 +1,65 @@
-# Bulut Kurulum — Mac Kapalıyken de Çalışır
+# Bulut Kurulum — Mac Kapalıyken de Herkes Çalışır
 
-Toplam süre: ~20 dakika
-Maliyet: ~$7/ay (Render.com)
+Sunucu (server.py) Render.com'da 7/24 çalışır; tüm bilgisayarlar
+hangi WiFi'de olursa olsun internetten bağlanır.
 
----
-
-## ADIM 1 — GitHub Hesabı (ücretsiz)
-
-1. https://github.com → **Sign Up**
-2. E-posta ve şifre gir → hesap aç
-3. E-postayı doğrula
+- Süre: ~15 dakika
+- Maliyet: ~$7/ay (Render Starter) + ~$0.25/ay (1 GB kalıcı disk)
+- Kod zaten GitHub'da olduğu için ek yükleme gerekmez.
 
 ---
 
-## ADIM 2 — Kodu GitHub'a Yükle
+## ADIM 1 — Render Hesabı
 
-Mac'te **Terminal** aç (Spotlight → Terminal):
+1. https://render.com → **Get Started** → **GitHub ile giriş yap**
+2. Render'a GitHub erişim izni ver (bursaknitted-depo reposunu seç)
 
-```bash
-cd /Users/aykut/tekstil-stok
+## ADIM 2 — Servisi Oluştur
 
-git init
-git add .
-git commit -m "Bursa Knitted Depo ilk yükleme"
-```
+1. Render panelinde **New +** → **Web Service**
+2. `bursaknitted-depo` reposunu seç
+3. Render, repodaki `render.yaml` dosyasını otomatik tanır →
+   **"Apply"** / onayla de. (Tanımazsa elle gir:
+   - Build Command: `echo ok`
+   - Start Command: `python server.py`
+   - Plan: **Starter**
+   - Disks: Add Disk → Mount Path `/var/data`, Size 1 GB
+   - Environment → `STOK_DB_PATH` = `/var/data/stok.db`)
+4. Kart bilgisi isteyebilir → Starter planı için gerekli
+5. **Deploy** → 2-3 dakika bekle
 
-GitHub'da yeni repo oluştur:
-- https://github.com → **"+"** → **New repository**
-- Repository name: `bursaknitted-depo`
-- **Private** seç → **Create repository**
+## ADIM 3 — Adresi Al ve Test Et
 
-Sonra terminale:
-```bash
-git remote add origin https://github.com/SENIN_KULLANICI_ADIN/bursaknitted-depo.git
-git branch -M main
-git push -u origin main
-```
-(GitHub kullanıcı adı ve şifre sorabilir)
+Deploy bitince üstte adres görünür, örnek:
 
----
+    https://bursaknitted-depo.onrender.com
 
-## ADIM 3 — Render.com'da Hesap Aç
+Tarayıcıdan test: `https://....onrender.com/ping` →
+`{"ok": true, "data": "pong"}` görünmeli.
 
-1. https://render.com → **Get Started for Free**
-2. **GitHub ile giriş yap** (en kolay yol)
+## ADIM 4 — Bilgisayarları Bağla
 
----
+**Tüm bilgisayarlarda** (Mac dahil):
+1. Programı aç → giriş ekranında **"🌐 Sunucuya Bağlan"**
+2. Sunucu adresi: `https://bursaknitted-depo.onrender.com`
+3. Kullanıcı: `admin` / Şifre: `admin123`
+4. **İlk girişte mutlaka şifreyi değiştirin!**
+   (👤 Kullanıcılar menüsünden)
 
-## ADIM 4 — PostgreSQL Veritabanı Oluştur
-
-1. Render Dashboard → **New +** → **PostgreSQL**
-2. Şu bilgileri gir:
-   - **Name:** `bursaknitted-db`
-   - **Plan:** Free (90 gün ücretsiz, sonra $7/ay)
-3. **Create Database** → Oluşmasını bekle (1-2 dk)
-4. Açılan sayfada **"Internal Database URL"** yi kopyala → not al
-
----
-
-## ADIM 5 — Web Servisi Oluştur
-
-1. Render Dashboard → **New +** → **Web Service**
-2. **Connect a repository** → GitHub repo'nu seç → `bursaknitted-depo`
-3. Şu bilgileri gir:
-   - **Name:** `bursaknitted-depo`
-   - **Runtime:** Python
-   - **Build Command:** `pip install -r cloud/requirements.txt`
-   - **Start Command:** `python cloud/server.py`
-   - **Plan:** Starter ($7/ay)
-4. **Environment Variables** bölümüne ekle:
-   - Key: `DATABASE_URL`  → Value: (4. adımda kopyaladığın URL)
-5. **Create Web Service** → Deploy başlar (3-5 dk)
-6. Deploy tamamlanınca URL görünür:
-   `https://bursaknitted-depo.onrender.com`
+Artık:
+- Mac kapalıyken herkes çalışmaya devam eder
+- Her bilgisayar farklı WiFi'de / 4G'de olabilir
+- Veri tek yerde (bulutta) tutulur, çakışma olmaz
 
 ---
 
-## ADIM 6 — Mevcut Verileri Aktar
+## Notlar
 
-Mac'te Terminal'de:
-```bash
-cd /Users/aykut/tekstil-stok
-DATABASE_URL="postgresql://ADRESIN" python3 cloud/migrate.py
-```
-(DATABASE_URL'yi 4. adımdaki URL ile değiştir)
-
----
-
-## ADIM 7 — Programı Buluta Bağla
-
-Masaüstü programı aç → Giriş ekranında:
-- **"🌐 Sunucuya Bağlan"** seç
-- Sunucu adresi: `https://bursaknitted-depo.onrender.com`
-- admin / admin123 ile giriş
-
-**Bu adresi tüm bilgisayarlara ver.**
-
----
-
-## Sonuç
-
-```
-Render.com (7/24 açık)
-    └── PostgreSQL veritabanı
-         ├── Ana Mac masaüstü programı
-         ├── PC-1
-         ├── PC-2
-         └── Telefon (mobil web arayüzü)
-```
-
-Mac açık/kapalı fark etmez.
-Herkes kendi şifresiyle girer.
-Tüm veriler bulutta güvende.
-
----
-
-## Aylık Maliyet
-
-| Servis | Plan | Ücret |
-|--------|------|-------|
-| Web Service | Starter | $7/ay |
-| PostgreSQL | Free→Paid | $0→$7/ay |
-| **Toplam** | | **~$7-14/ay** |
-
-(İlk 90 gün PostgreSQL ücretsiz = ilk 90 gün $7/ay)
+- **Yedek:** Render panel → servis → Disks → Snapshots ile disk
+  yedeği alınabilir. Ayrıca arada bir programdan Excel'e dışa
+  aktarmak ucuz bir ek güvencedir.
+- **Yerel sunucu artık gerekmez:** `sunucu_baslat.sh` ve ngrok
+  kullanımı bulut devredeyken gereksizdir.
+- **Güncelleme:** Koda yeni özellik eklenip GitHub'a push edilince
+  Render otomatik yeniden deploy eder (Auto-Deploy açık olmalı).
+  Veritabanı kalıcı diskte olduğu için veriler korunur.

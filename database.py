@@ -2,7 +2,9 @@ import sqlite3
 import os
 import hashlib
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stok.db")
+# Bulut sunucuda kalıcı diske yazmak için STOK_DB_PATH ortam değişkeni kullanılır
+DB_PATH = os.environ.get("STOK_DB_PATH") or os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "stok.db")
 
 
 def get_connection():

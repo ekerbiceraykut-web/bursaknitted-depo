@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: bursaknitted-depo
+    runtime: python
+    buildCommand: "echo 'standart kutuphaneler yeterli'"
+    startCommand: python server.py
+    plan: starter           # ~$7/ay — her zaman açık (uyumaz)
+    disk:
+      name: stokdb
+      mountPath: /var/data
+      sizeGB: 1             # veritabanı kalıcı diskte — yeniden kurulumda silinmez
+    envVars:
+      - key: STOK_DB_PATH
+        value: /var/data/stok.db

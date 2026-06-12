@@ -8,11 +8,11 @@ Başlatmak için: python3 server.py
 import sys, os, json, hashlib, uuid, threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, HTTPServer, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs, unquote_plus
 import database as db
 
-PORT = 5060
+PORT = int(os.environ.get("PORT", "5060"))   # bulutta Render PORT verir
 _tokens: dict = {}  # {token: user_dict}
 
 
@@ -326,7 +326,8 @@ def get_local_ip():
 def start_server():
     db.init_db()
     ip = get_local_ip()
-    server = HTTPServer(("0.0.0.0", PORT), APIHandler)
+    # Threading: yavaş bir istemci diğerlerini bekletmesin
+    server = ThreadingHTTPServer(("0.0.0.0", PORT), APIHandler)
     print(f"""
 ╔══════════════════════════════════════════════════╗
 ║   Bursa Knitted Depo — API Sunucusu Başladı      ║
