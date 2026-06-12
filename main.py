@@ -1672,14 +1672,50 @@ class DailyMovementsDialog(QDialog):
         from PyQt6.QtWidgets import QDateEdit
         from PyQt6.QtCore import QDate
 
-        # Hazır aralık butonları
+        # Hazır aralık butonları (Tümü = kalitenin girişten tükenişe tüm geçmişi)
         presets = QHBoxLayout()
-        for label, days in [("Bugün", 0), ("Son 7 Gün", 7), ("Son 15 Gün", 15), ("Son 30 Gün", 30)]:
+        for label, days in [("Bugün", 0), ("Son 7 Gün", 7), ("Son 15 Gün", 15),
+                            ("Son 30 Gün", 30), ("Tümü", None)]:
             b = QPushButton(label)
             b.clicked.connect(lambda _, d=days: self._set_preset(d))
             presets.addWidget(b)
         presets.addStretch()
         layout.addLayout(presets)
+
+        # Filtreler — ürün/lokasyon/tip/tür
+        filt = QHBoxLayout()
+        filt.addWidget(QLabel("Ara:"))
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Ürün kodu, renk, lot, not, hedef...")
+        self.search_box.setMinimumWidth(200)
+        self.search_box.textChanged.connect(self._load)
+        filt.addWidget(self.search_box)
+
+        filt.addWidget(QLabel("Lokasyon:"))
+        self.loc_filter = QComboBox()
+        self.loc_filter.addItem("Tümü", "")
+        for l in db.get_active_locations():
+            self.loc_filter.addItem(l["name"], l["name"])
+        self.loc_filter.currentIndexChanged.connect(self._load)
+        filt.addWidget(self.loc_filter)
+
+        filt.addWidget(QLabel("Tip:"))
+        self.tip_filter = QComboBox()
+        self.tip_filter.addItem("Tümü", "")
+        for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
+            self.tip_filter.addItem(t, t)
+        self.tip_filter.currentIndexChanged.connect(self._load)
+        filt.addWidget(self.tip_filter)
+
+        filt.addWidget(QLabel("Tür:"))
+        self.tur_filter = QComboBox()
+        self.tur_filter.addItem("Tümü", "")
+        for t in ["GİRİŞ", "ÇIKIŞ", "SİLME"]:
+            self.tur_filter.addItem(t, t)
+        self.tur_filter.currentIndexChanged.connect(self._load)
+        filt.addWidget(self.tur_filter)
+        filt.addStretch()
+        layout.addLayout(filt)
 
         # Tarih aralığı seçici
         top = QHBoxLayout()
@@ -1715,7 +1751,10 @@ class DailyMovementsDialog(QDialog):
         # Sinyalleri kapat, iki tarihi birden ayarla, tek seferde yükle
         self.start_edit.blockSignals(True)
         self.end_edit.blockSignals(True)
-        self.start_edit.setDate(today.addDays(-days))
+        if days is None:   # Tümü — geçmişin tamamı
+            self.start_edit.setDate(QDate(2000, 1, 1))
+        else:
+            self.start_edit.setDate(today.addDays(-days))
         self.end_edit.setDate(today)
         self.start_edit.blockSignals(False)
         self.end_edit.blockSignals(False)
@@ -1726,16 +1765,41 @@ class DailyMovementsDialog(QDialog):
         end = self.end_edit.date().toString("yyyy-MM-dd")
         if start > end:
             start, end = end, start
-        movements = db.get_movements_by_range(start, end)
+        all_mv = db.get_movements_by_range(start, end)
+
+        # Filtreler
+        q   = self.search_box.text().strip().lower()
+        loc = self.loc_filter.currentData() or ""
+        tip = self.tip_filter.currentData() or ""
+        tur = self.tur_filter.currentData() or ""
+        movements = []
+        for m in all_mv:
+            md = dict(m)
+            if tur and md["movement_type"] != tur:
+                continue
+            if loc and (md.get("location") or md.get("fabric_location") or "") != loc:
+                continue
+            if tip and (md.get("fabric_type") or "") != tip:
+                continue
+            if q:
+                hay = " ".join(str(md.get(k) or "") for k in
+                               ("product_code", "product_name", "color", "out_color",
+                                "lot", "notes", "destination", "lab_no", "parti_no",
+                                "user_name", "entry_location")).lower()
+                if q not in hay:
+                    continue
+            movements.append(m)
+
         _fill_movement_table(self.table, movements, show_product=True)
         if movements:
             in_m = sum(m["meter"] or 0 for m in movements if m["movement_type"] == "GİRİŞ")
             out_m = sum(m["meter"] or 0 for m in movements if m["movement_type"] == "ÇIKIŞ")
+            suffix = f" / toplam {len(all_mv)}" if len(movements) != len(all_mv) else ""
             self.count_lbl.setText(
-                f"{len(movements)} hareket — Giriş: {in_m:,.0f} mt, Çıkış: {out_m:,.0f} mt"
+                f"{len(movements)} hareket{suffix} — Giriş: {in_m:,.0f} mt, Çıkış: {out_m:,.0f} mt"
             )
         else:
-            self.count_lbl.setText("Bu tarih aralığında hareket yok")
+            self.count_lbl.setText("Bu kriterlere uyan hareket yok")
 
 
 COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Giriş Lok.", "Açıklama"]
