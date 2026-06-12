@@ -6,9 +6,13 @@ import subprocess, os, sys, threading
 
 REPO_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# Windows'ta git komutları konsol penceresi parlatmasın
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 def _run(cmd):
-    return subprocess.run(cmd, cwd=REPO_DIR, capture_output=True, text=True)
+    return subprocess.run(cmd, cwd=REPO_DIR, capture_output=True, text=True,
+                          creationflags=_NO_WINDOW)
 
 
 def check_update():
