@@ -35,6 +35,10 @@ def save_config(data):
 def get_ngrok_token():  return load_config().get("ngrok_token", "")
 def set_ngrok_token(t): save_config({"ngrok_token": t.strip()})
 
+def is_readonly():
+    """Mobil arayüz salt-izleme modu (varsayılan: açık)."""
+    return load_config().get("web_readonly", True)
+
 
 def get_local_ip():
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -69,21 +73,27 @@ def _delete_session(req_headers):
 # ── HTML Şablonları ──────────────────────────────────────────────
 
 def _page(title, content, user=None, active=""):
+    ro = is_readonly()
     nav_items = [
         ("/"        , "📊 Dashboard" , "dashboard"),
         ("/stok"    , "📦 Stok"      , "stok"),
         ("/hareket" , "📋 Hareketler", "hareket"),
-        ("/giris"   , "↑ Stok Giriş" , "giris"),
-        ("/cikis"   , "↓ Stok Çıkış" , "cikis"),
     ]
-    if user and user.get("role") == "admin":
-        nav_items.append(("/yeni", "＋ Yeni Kumaş", "yeni"))
+    if not ro:
+        nav_items += [
+            ("/giris"   , "↑ Stok Giriş" , "giris"),
+            ("/cikis"   , "↓ Stok Çıkış" , "cikis"),
+        ]
+        if user and user.get("role") == "admin":
+            nav_items.append(("/yeni", "＋ Yeni Kumaş", "yeni"))
 
     nav_html = "".join(
         f'<a href="{href}" class="nav-item {"active" if active==key else ""}">{label}</a>'
         for href, label, key in nav_items
     )
-    user_bar = f'<span style="opacity:.8">{user["full_name"]}</span> &nbsp; <a href="/logout" style="color:rgba(255,255,255,.7);font-size:12px">Çıkış</a>' if user else ""
+    ro_badge = '<span style="background:rgba(255,255,255,.2);border-radius:4px;padding:3px 8px;font-size:11px;margin-right:10px">👁 İzleme Modu</span>' if ro else ""
+    user_bar = (ro_badge +
+                f'<span style="opacity:.8">{user["full_name"]}</span> &nbsp; <a href="/logout" style="color:rgba(255,255,255,.7);font-size:12px">Çıkış</a>') if user else ""
 
     return f"""<!DOCTYPE html>
 <html lang="tr"><head>
@@ -115,6 +125,7 @@ tr:nth-child(even) td{{background:#f8f9ff}}
 tr:hover td{{background:#e3f2fd}}
 .badge{{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700}}
 .b-ham{{background:#EFEBE9;color:#5D4037}}
+.b-pfd{{background:#E0F2F1;color:#00695C}}
 .b-boyali{{background:#E3F2FD;color:#1565C0}}
 .b-baskili{{background:#F3E5F5;color:#6A1B9A}}
 .b-giris{{background:#E8F5E9;color:#2E7D32}}
@@ -261,10 +272,10 @@ def _stok_page(user, search="", location="", ftype=""):
 
     type_opts = "".join(
         f'<option value="{t}" {"selected" if ftype==t else ""}>{t}</option>'
-        for t in ["","HAM","BOYALI","BASKILI"]
+        for t in ["","HAM","PFD","BOYALI","BASKILI"]
     )
 
-    TYPE_BADGES = {"HAM":"b-ham","BOYALI":"b-boyali","BASKILI":"b-baskili"}
+    TYPE_BADGES = {"HAM":"b-ham","PFD":"b-pfd","BOYALI":"b-boyali","BASKILI":"b-baskili"}
     table_rows = ""
     for r in rows:
         mt  = r["meter"] or 0
@@ -273,7 +284,7 @@ def _stok_page(user, search="", location="", ftype=""):
         val = mt*fiy if mt>0 else kg*fiy
         tip = r["fabric_type"] or ""
         tip_badge = f'<span class="badge {TYPE_BADGES.get(tip,"")}">{tip}</span>' if tip else ""
-        can_edit = user and user.get("role") == "admin"
+        can_edit = user and user.get("role") == "admin" and not is_readonly()
         actions = f'''<a href="/duzenle?id={r["id"]}" class="btn btn-warn btn-sm">✎</a>
                       <a href="/sil?id={r["id"]}" class="btn btn-danger btn-sm" onclick="return confirm('Silinsin mi?')">✕</a>''' if can_edit else ""
         table_rows += f"""<tr>
@@ -289,7 +300,7 @@ def _stok_page(user, search="", location="", ftype=""):
           <td><a href="/detay?id={r['id']}" class="btn btn-primary btn-sm">Detay</a> {actions}</td>
         </tr>"""
 
-    add_btn = '<a href="/yeni" class="btn btn-success" style="margin-left:8px">＋ Yeni Kumaş</a>' if user and user.get("role")=="admin" else ""
+    add_btn = '<a href="/yeni" class="btn btn-success" style="margin-left:8px">＋ Yeni Kumaş</a>' if user and user.get("role")=="admin" and not is_readonly() else ""
     content = f"""
 <div class="search-bar">
   <form method="get" action="/stok" style="display:contents">
@@ -338,11 +349,11 @@ def _detay_page(user, fabric_id):
         </tr>"""
 
     tip = fabric['fabric_type'] or ''
-    TYPE_BADGES = {"HAM":"b-ham","BOYALI":"b-boyali","BASKILI":"b-baskili"}
+    TYPE_BADGES = {"HAM":"b-ham","PFD":"b-pfd","BOYALI":"b-boyali","BASKILI":"b-baskili"}
     tip_badge = f'<span class="badge {TYPE_BADGES.get(tip,"")}">{tip}</span>' if tip else "—"
 
     actions = ""
-    if user and user.get("role") == "admin":
+    if user and user.get("role") == "admin" and not is_readonly():
         actions = f'''
         <a href="/giris?id={fabric_id}" class="btn btn-success">↑ Stok Giriş</a>
         <a href="/cikis?id={fabric_id}" class="btn btn-danger" style="margin-left:8px">↓ Stok Çıkış</a>
@@ -488,7 +499,7 @@ def _fabric_form(user, fabric=None, error="", post_data=None):
     cur_type = pd.get("fabric_type") or (fabric["fabric_type"] if fabric else "")
     type_opts = '<option value="">— Seçiniz —</option>' + "".join(
         f'<option value="{t}" {"selected" if cur_type==t else ""}>{t}</option>'
-        for t in ["HAM","BOYALI","BASKILI"]
+        for t in ["HAM","PFD","BOYALI","BASKILI"]
     )
 
     def v(key, default=""):
@@ -610,6 +621,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send("", redirect="/login")
             return
 
+        # İzleme modunda işlem sayfaları kapalı
+        if is_readonly() and path in ("/giris", "/cikis", "/yeni", "/duzenle", "/sil"):
+            self._send("", redirect="/stok")
+            return
+
         try:
             if path in ("/", "/dashboard"):
                 self._send(_dashboard(user))
@@ -673,6 +689,10 @@ class Handler(BaseHTTPRequestHandler):
 
             if not user:
                 self._send("", redirect="/login"); return
+
+            # İzleme modunda hiçbir değişiklik kabul edilmez
+            if is_readonly():
+                self._send("", redirect="/"); return
 
             if path == "/giris":
                 fid = int(qs.get("id",[0])[0])

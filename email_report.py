@@ -72,62 +72,170 @@ def _build_html():
     total_kg    = s["total_kg"] or 0
     total_value = s["total_value"] or 0
 
-    # Bugünün hareketleri
-    movements = db.get_all_movements(500)
+    # Bugünün tüm hareketleri
     today_str = date.today().isoformat()
-    today_mv  = [m for m in movements if str(m["movement_date"]).startswith(today_str)]
+    today_mv  = [dict(m) for m in db.get_movements_by_range(today_str, today_str)]
 
     mv_rows = ""
     for m in today_mv:
         t   = m["movement_type"]
         clr = "#2E7D32" if t == "GİRİŞ" else ("#880E4F" if t == "SİLME" else "#C62828")
+        dest = m.get("destination") or ""
+        dest_type = m.get("destination_type") or ""
+        dest_lbl = f"{dest_type}: {dest}" if dest and dest_type else dest
+        extra = []
+        if m.get("out_color"): extra.append(f"Renk: {m['out_color']}")
+        if m.get("lab_no"):    extra.append(f"Lab: {m['lab_no']}")
+        if m.get("parti_no"):  extra.append(f"Parti: {m['parti_no']}")
+        notes = m.get("notes") or ""
+        if extra:
+            notes = (notes + "  |  " if notes else "") + "  ".join(extra)
         mv_rows += f"""<tr>
           <td style="padding:6px 10px;border-bottom:1px solid #eee">{str(m['movement_date'])[:16]}</td>
           <td style="padding:6px 10px;border-bottom:1px solid #eee;color:{clr};font-weight:700">{t}</td>
           <td style="padding:6px 10px;border-bottom:1px solid #eee"><b>{m['product_code'] or ''}</b> {m['color'] or ''}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">{m['meter']:,.2f} mt</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">{(m['meter'] or 0):,.2f} mt</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">{(m['kg'] or 0):,.2f} kg</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;color:#1565C0">{dest_lbl}</td>
           <td style="padding:6px 10px;border-bottom:1px solid #eee">{m['user_name'] or '—'}</td>
-          <td style="padding:6px 10px;border-bottom:1px solid #eee;color:#555">{m['notes'] or ''}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;color:#555">{notes}</td>
         </tr>"""
 
     mv_section = f"""
     <h2 style="color:#1565C0;font-size:16px;margin:28px 0 10px">Bugünkü Hareketler ({len(today_mv)} işlem)</h2>
     {"<p style='color:#9E9E9E'>Bugün hareket kaydedilmemiş.</p>" if not mv_rows else f'''
+    <div style="overflow-x:auto">
     <table width="100%" style="border-collapse:collapse;font-size:13px">
       <tr style="background:#1565C0;color:white">
         <th style="padding:7px 10px;text-align:left">Tarih</th>
         <th style="padding:7px 10px;text-align:left">Tür</th>
         <th style="padding:7px 10px;text-align:left">Ürün</th>
-        <th style="padding:7px 10px;text-align:right">Miktar</th>
+        <th style="padding:7px 10px;text-align:right">Metre</th>
+        <th style="padding:7px 10px;text-align:right">Kilo</th>
+        <th style="padding:7px 10px;text-align:left">Hedef</th>
         <th style="padding:7px 10px;text-align:left">Kullanıcı</th>
         <th style="padding:7px 10px;text-align:left">Not</th>
       </tr>
       {mv_rows}
-    </table>'''}"""
+    </table>
+    </div>'''}"""
 
-    # Tüm stok listesi
+    # Bugünün fire kayıtları
+    fire_all = [dict(r) for r in db.get_fire_records()]
+    today_fire = [r for r in fire_all if str(r.get("created_at", "")).startswith(today_str)]
+
+    fire_rows = ""
+    for r in today_fire:
+        is_total = r["record_type"] == "LOT TOPLAMI"
+        elle = " (elle)" if r.get("manual_pct") else ""
+        pre_m, out_m = r["pre_meter"] or 0, r["out_meter"] or 0
+        pre_k, out_k = r["pre_kg"] or 0, r["out_kg"] or 0
+        fire_m, fire_k = max(0, pre_m - out_m), max(0, pre_k - out_k)
+        pct_m = (fire_m / pre_m * 100) if pre_m > 0 else 0
+        pct_k = (fire_k / pre_k * 100) if pre_k > 0 else 0
+        bg = "#FFF8E1" if is_total else "#FFFFFF"
+        bold = "font-weight:700;" if is_total else ""
+        fire_rows += f"""<tr style="background:{bg};{bold}">
+          <td style="padding:6px 8px;border-bottom:1px solid #eee">{r['boyahane'] or ''}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee"><b>{r['product_code'] or ''}</b> {r.get('out_color') or r['color'] or ''}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee">{r['lot'] or ''}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee">{r.get('lab_no') or ''} {r.get('parti_no') or ''}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee">{r['customer'] or ''}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">{pre_m:,.2f}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right">{out_m:,.2f}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;color:#C62828;font-weight:700">{fire_m:,.2f} (%{pct_m:.1f}){elle}</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee;text-align:right;color:#C62828">{fire_k:,.2f} kg (%{pct_k:.1f})</td>
+          <td style="padding:6px 8px;border-bottom:1px solid #eee">{r['record_type']}</td>
+        </tr>"""
+
+    fire_section = f"""
+    <h2 style="color:#C62828;font-size:16px;margin:28px 0 10px">🔥 Bugünkü Boyahane Fire Oranları ({len(today_fire)} kayıt)</h2>
+    {"<p style='color:#9E9E9E'>Bugün fire kaydı yok.</p>" if not fire_rows else f'''
+    <div style="overflow-x:auto">
+    <table width="100%" style="border-collapse:collapse;font-size:12px">
+      <tr style="background:#C62828;color:white">
+        <th style="padding:7px 8px;text-align:left">Boyahane</th>
+        <th style="padding:7px 8px;text-align:left">Ürün</th>
+        <th style="padding:7px 8px;text-align:left">Lot</th>
+        <th style="padding:7px 8px;text-align:left">Lab/Parti</th>
+        <th style="padding:7px 8px;text-align:left">Hedef</th>
+        <th style="padding:7px 8px;text-align:right">Öncesi mt</th>
+        <th style="padding:7px 8px;text-align:right">Çıkış mt</th>
+        <th style="padding:7px 8px;text-align:right">Fire mt (%)</th>
+        <th style="padding:7px 8px;text-align:right">Fire kg (%)</th>
+        <th style="padding:7px 8px;text-align:left">Tür</th>
+      </tr>
+      {fire_rows}
+    </table>
+    </div>'''}"""
+
+    # Kumaş tipi özeti (HAM / PFD / BOYALI / BASKILI)
     fabrics = db.get_all_fabrics()
-    stok_rows = ""
-    for i, r in enumerate(fabrics):
+    tip_colors = {"HAM": "#5D4037", "PFD": "#00695C", "BOYALI": "#1565C0", "BASKILI": "#6A1B9A"}
+    tip_bgs    = {"HAM": "#EFEBE9", "PFD": "#E0F2F1", "BOYALI": "#E3F2FD", "BASKILI": "#F3E5F5"}
+    tip_stats  = {t: {"count": 0, "meter": 0.0, "kg": 0.0} for t in tip_colors}
+    for r in fabrics:
+        t = r["fabric_type"] or ""
+        if t in tip_stats:
+            tip_stats[t]["count"] += 1
+            tip_stats[t]["meter"] += r["meter"] or 0
+            tip_stats[t]["kg"]    += r["kg"] or 0
+
+    tip_cards = ""
+    for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
+        st = tip_stats[t]
+        tip_cards += f"""
+      <td width="25%" style="padding:0 4px">
+        <div style="background:{tip_bgs[t]};border-radius:8px;padding:14px;text-align:center">
+          <div style="font-size:13px;font-weight:700;color:{tip_colors[t]}">{t}</div>
+          <div style="font-size:22px;font-weight:700;color:{tip_colors[t]};margin-top:4px">{st['meter']:,.0f} mt</div>
+          <div style="font-size:12px;color:#555;margin-top:4px">{st['kg']:,.0f} kg · {st['count']} kalem</div>
+        </div>
+      </td>"""
+
+    tip_section = f"""
+    <h2 style="color:#1565C0;font-size:16px;margin:28px 0 10px">🧵 Kumaş Tipi Dağılımı</h2>
+    <table width="100%"><tr>{tip_cards}</tr></table>"""
+
+    # Depo / dış depo özeti
+    dis_depolar = {l["name"] for l in db.get_active_locations() if l["group_name"] != "DEPO"}
+    depots = {}
+    for r in fabrics:
+        loc = r["location"] or ""
+        key = loc if loc in dis_depolar else "DEPO"
         mt  = r["meter"] or 0
         kg  = r["kg"] or 0
         fiy = r["birim_fiyat"] or 0
         val = mt * fiy if mt > 0 else kg * fiy
-        bg  = "#F8F9FF" if i % 2 else "#FFFFFF"
-        tip = r['fabric_type'] or ''
-        tip_clr = {"HAM":"#5D4037","BOYALI":"#1565C0","BASKILI":"#6A1B9A"}.get(tip,"#555")
-        stok_rows += f"""<tr style="background:{bg}">
-          <td style="padding:5px 8px;border-bottom:1px solid #eee">{r['product_code'] or ''}</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee">{r['product_name'] or ''}</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee">{r['color'] or ''}</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee">{r['location'] or ''}</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee;color:{tip_clr};font-weight:600">{tip}</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee;text-align:right;color:#2E7D32;font-weight:600">{mt:,.2f}</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee;text-align:right;color:#6A1B9A">{kg:,.2f}</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee;text-align:right">{fiy:,.2f} $</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee;text-align:right;color:#B71C1C;font-weight:700">{"" if not val else f"{val:,.0f} $"}</td>
-          <td style="padding:5px 8px;border-bottom:1px solid #eee;color:#757575;font-size:12px">{r['description'] or ''}</td>
+        d = depots.setdefault(key, {"count": 0, "meter": 0.0, "kg": 0.0, "value": 0.0})
+        d["count"] += 1; d["meter"] += mt; d["kg"] += kg; d["value"] += val
+
+    depot_rows = ""
+    keys = (["DEPO"] if "DEPO" in depots else []) + sorted(k for k in depots if k != "DEPO")
+    for i, key in enumerate(keys):
+        d = depots[key]
+        bg = "#F8F9FF" if i % 2 else "#FFFFFF"
+        grp = "DEPO" if key == "DEPO" else "DIŞ DEPO"
+        grp_clr = "#1565C0" if key == "DEPO" else "#E65100"
+        depot_rows += f"""<tr style="background:{bg}">
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;font-weight:700">{key}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;color:{grp_clr};font-weight:600">{grp}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right">{d['count']}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;color:#2E7D32;font-weight:600">{d['meter']:,.2f}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;color:#6A1B9A">{d['kg']:,.2f}</td>
+          <td style="padding:6px 10px;border-bottom:1px solid #eee;text-align:right;color:#B71C1C;font-weight:700">{d['value']:,.0f} $</td>
         </tr>"""
+    t_count = sum(d["count"] for d in depots.values())
+    t_meter = sum(d["meter"] for d in depots.values())
+    t_kg    = sum(d["kg"] for d in depots.values())
+    t_value = sum(d["value"] for d in depots.values())
+    depot_rows += f"""<tr style="background:#E3F2FD;font-weight:700">
+      <td style="padding:7px 10px" colspan="2">TOPLAM</td>
+      <td style="padding:7px 10px;text-align:right">{t_count}</td>
+      <td style="padding:7px 10px;text-align:right;color:#2E7D32">{t_meter:,.2f}</td>
+      <td style="padding:7px 10px;text-align:right;color:#6A1B9A">{t_kg:,.2f}</td>
+      <td style="padding:7px 10px;text-align:right;color:#B71C1C">{t_value:,.0f} $</td>
+    </tr>"""
 
     html = f"""<!DOCTYPE html>
 <html lang="tr">
@@ -172,27 +280,25 @@ def _build_html():
       </td>
     </tr></table>
 
+    {tip_section}
+
+    <!-- Depo / Dış Depo Özeti -->
+    <h2 style="color:#1565C0;font-size:16px;margin:28px 0 10px">🗂 Depo / Dış Depo Özeti</h2>
+    <table width="100%" style="border-collapse:collapse;font-size:13px">
+      <tr style="background:#1565C0;color:white">
+        <th style="padding:7px 10px;text-align:left">Depo / Lokasyon</th>
+        <th style="padding:7px 10px;text-align:left">Grup</th>
+        <th style="padding:7px 10px;text-align:right">Kalem</th>
+        <th style="padding:7px 10px;text-align:right">Toplam Metre</th>
+        <th style="padding:7px 10px;text-align:right">Toplam Kilo</th>
+        <th style="padding:7px 10px;text-align:right">Toplam Değer $</th>
+      </tr>
+      {depot_rows}
+    </table>
+
     {mv_section}
 
-    <!-- Tüm Stok -->
-    <h2 style="color:#1565C0;font-size:16px;margin:28px 0 10px">📦 Tüm Stok Listesi ({len(fabrics)} kalem)</h2>
-    <div style="overflow-x:auto">
-    <table width="100%" style="border-collapse:collapse;font-size:12px">
-      <tr style="background:#1565C0;color:white">
-        <th style="padding:7px 8px;text-align:left">Kodu</th>
-        <th style="padding:7px 8px;text-align:left">Adı</th>
-        <th style="padding:7px 8px;text-align:left">Renk</th>
-        <th style="padding:7px 8px;text-align:left">Lokasyon</th>
-        <th style="padding:7px 8px;text-align:left">Tip</th>
-        <th style="padding:7px 8px;text-align:right">Metre</th>
-        <th style="padding:7px 8px;text-align:right">Kilo</th>
-        <th style="padding:7px 8px;text-align:right">Birim $</th>
-        <th style="padding:7px 8px;text-align:right">Değer $</th>
-        <th style="padding:7px 8px;text-align:left">Açıklama</th>
-      </tr>
-      {stok_rows}
-    </table>
-    </div>
+    {fire_section}
 
   </div>
 

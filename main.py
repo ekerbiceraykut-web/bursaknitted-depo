@@ -35,20 +35,6 @@ def _get_db():
 # Giriş yapmış kullanıcı (global)
 CURRENT_USER = {"id": 0, "username": "sistem", "full_name": "Sistem", "role": "admin"}
 
-# Geri al yığıtı  — her eleman: (açıklama: str, geri_al_fn: callable)
-_UNDO_STACK = []
-_UNDO_CALLBACKS = []   # refresh çağrısı için StockTable kaydeder kendini
-
-def push_undo(description, fn):
-    _UNDO_STACK.append((description, fn))
-    if len(_UNDO_STACK) > 20:
-        _UNDO_STACK.pop(0)
-    for cb in _UNDO_CALLBACKS:
-        cb()          # undo butonunu güncelle
-
-def pop_undo():
-    return _UNDO_STACK.pop() if _UNDO_STACK else None
-
 import database as _local_db
 db = _local_db   # başlangıçta yerel; login sonrası proxy ile değiştirilir
 
@@ -986,10 +972,14 @@ class FabricDialog(QDialog):
         self.product_name = QLineEdit()
         self.color = QLineEdit()
 
-        # Lokasyon — seçmeli combobox
-        self.location = QComboBox()
-        self.location.setEditable(False)
+        # Lokasyon — iki kademeli: önce depo (DEPO / dış depolar), DEPO seçilirse raf
+        self.depo = QComboBox()
+        self.depo.setEditable(False)
+        self.raf = QComboBox()
+        self.raf.setEditable(False)
+        self.raf_label = QLabel("Raf *:")
         self._load_locations()
+        self.depo.currentIndexChanged.connect(self._on_depo_change)
 
         self.meter = QDoubleSpinBox()
         self.meter.setRange(0, 999999)
@@ -1008,12 +998,12 @@ class FabricDialog(QDialog):
         # Kumaş tipi — zorunlu
         self.fabric_type = QComboBox()
         self.fabric_type.addItem("— Seçiniz —", "")
-        for t in ["HAM", "BOYALI", "BASKILI"]:
+        for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
             self.fabric_type.addItem(t, t)
         self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
 
         self.lot = QLineEdit()
-        self.lot.setPlaceholderText("İsteğe bağlı")
+        self.lot.setPlaceholderText("Boş bırakılırsa otomatik verilir (LOT-20260610-001)")
 
         self.description = QTextEdit()
         self.description.setMaximumHeight(70)
@@ -1021,7 +1011,10 @@ class FabricDialog(QDialog):
         form.addRow("Ürün Kodu *:", self.product_code)
         form.addRow("Ürün Bilgisi:", self.product_name)
         form.addRow("Renk:", self.color)
-        form.addRow("Lokasyon *:", self.location)
+        form.addRow("Lokasyon *:", self.depo)
+        form.addRow(self.raf_label, self.raf)
+        self.raf_label.setVisible(False)
+        self.raf.setVisible(False)
         form.addRow("Kumaş Tipi *:", self.fabric_type)
         form.addRow("Lot:", self.lot)
         form.addRow("Metre:", self.meter)
@@ -1043,35 +1036,50 @@ class FabricDialog(QDialog):
         layout.addWidget(buttons)
 
     def _load_locations(self):
-        """Locations tablosundan gruplu yükle."""
-        self.location.clear()
-        self.location.addItem("— Seçiniz —", "")
+        """İlk kademe: DEPO + dış depolar. İkinci kademe: DEPO'nun rafları."""
         locs = db.get_active_locations()
-        from collections import defaultdict
-        groups = defaultdict(list)
-        for l in locs:
-            groups[l["group_name"]].append(l["name"])
-        for grp in sorted(groups.keys()):
-            # Grup ayracı (seçilemez)
-            self.location.addItem(f"── {grp} ──", "__SEP__")
-            idx = self.location.count() - 1
-            self.location.model().item(idx).setEnabled(False)
-            self.location.model().item(idx).setForeground(
-                QColor("#545454") if grp == "DEPO" else QColor("#545454"))
-            f = QFont(); f.setBold(True)
-            self.location.model().item(idx).setFont(f)
-            for name in sorted(groups[grp]):
-                self.location.addItem(f"  {name}", name)
+        self._depo_rafs = sorted(l["name"] for l in locs if l["group_name"] == "DEPO")
+        dis_depolar    = sorted(l["name"] for l in locs if l["group_name"] != "DEPO")
+
+        self.depo.clear()
+        self.depo.addItem("— Seçiniz —", "")
+        self.depo.addItem("DEPO", "__DEPO__")
+        for name in dis_depolar:
+            self.depo.addItem(name, name)
+
+        self.raf.clear()
+        self.raf.addItem("— Raf Seçiniz —", "")
+        for name in self._depo_rafs:
+            self.raf.addItem(name, name)
+
+    def _on_depo_change(self, idx):
+        is_depo = self.depo.currentData() == "__DEPO__"
+        self.raf_label.setVisible(is_depo)
+        self.raf.setVisible(is_depo)
+        if not is_depo:
+            self.raf.setCurrentIndex(0)
+
+    def _selected_location(self):
+        d = self.depo.currentData() or ""
+        if d == "__DEPO__":
+            return self.raf.currentData() or ""
+        return d
 
     def _populate(self, f):
         self.product_code.setText(f["product_code"] or "")
         self.product_name.setText(f["product_name"] or "")
         self.color.setText(f["color"] or "")
-        # Lokasyonu seç
+        # Lokasyonu seç — raf ise DEPO + raf, değilse doğrudan
         loc_val = f["location"] or ""
-        idx = self.location.findData(loc_val)
-        if idx >= 0:
-            self.location.setCurrentIndex(idx)
+        if loc_val in self._depo_rafs:
+            self.depo.setCurrentIndex(self.depo.findData("__DEPO__"))
+            self.raf.setCurrentIndex(self.raf.findData(loc_val))
+        elif loc_val:
+            idx = self.depo.findData(loc_val)
+            if idx < 0:   # listede olmayan eski lokasyon — kaybolmasın
+                self.depo.addItem(loc_val, loc_val)
+                idx = self.depo.count() - 1
+            self.depo.setCurrentIndex(idx)
         self.meter.setValue(f["meter"] or 0)
         self.kg.setValue(f["kg"] or 0)
         self.piece_count.setText(f["piece_count"] or "")
@@ -1086,10 +1094,12 @@ class FabricDialog(QDialog):
         errors = []
         if not self.product_code.text().strip():
             errors.append("• Ürün kodu zorunludur")
-        if not self.location.currentData() or self.location.currentData() in ("", "__SEP__"):
+        if not self.depo.currentData():
             errors.append("• Lokasyon seçilmelidir")
+        elif self.depo.currentData() == "__DEPO__" and not self.raf.currentData():
+            errors.append("• Raf seçilmelidir")
         if not self.fabric_type.currentData():
-            errors.append("• Kumaş tipi seçilmelidir (Ham / Boyalı / Baskılı)")
+            errors.append("• Kumaş tipi seçilmelidir (Ham / PFD / Boyalı / Baskılı)")
             self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
         else:
             self.fabric_type.setStyleSheet("")
@@ -1108,7 +1118,7 @@ class FabricDialog(QDialog):
             "product_code": self.product_code.text().strip().upper(),
             "product_name": self.product_name.text().strip(),
             "color": self.color.text().strip().upper(),
-            "location": self.location.currentData() or "",
+            "location": self._selected_location(),
             "fabric_type": self.fabric_type.currentData() or "",
             "lot": self.lot.text().strip(),
             "meter": self.meter.value(),
@@ -1119,10 +1129,129 @@ class FabricDialog(QDialog):
         }
 
 
+class CellEditDialog(QDialog):
+    """Tek bir alanı düzenleyen küçük pencere — çift tıklamayla açılır.
+    count > 1 ise toplu düzenleme: aynı değer seçili tüm kayıtlara yazılır."""
+    def __init__(self, parent, fabric, field, label, count=1):
+        super().__init__(parent)
+        self.fabric = fabric
+        self.field = field
+        self.setWindowTitle(f"{label} Düzenle" if count == 1 else f"{label} — Toplu Düzenle")
+        self.setMinimumWidth(360)
+
+        layout = QVBoxLayout(self)
+        if count > 1:
+            info = QLabel(f"⚠ <b>{count} kayıt</b> birden güncellenecek — "
+                          f"girilen değer seçili tüm satırlara yazılır.")
+            info.setStyleSheet("background:#FFF3E0; padding:6px; border-radius:4px; color:#E65100;")
+        else:
+            info = QLabel(f"<b>{fabric['product_code']}</b> — {fabric['color']}  "
+                          f"<span style='color:#555'>({fabric['location']})</span>")
+            info.setStyleSheet("background:#FFF8E1; padding:6px; border-radius:4px;")
+        layout.addWidget(info)
+
+        form = QFormLayout()
+        cur = fabric[field]
+
+        if field == "fabric_type":
+            self.widget = QComboBox()
+            self.widget.addItem("— Seçiniz —", "")
+            for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
+                self.widget.addItem(t, t)
+            idx = self.widget.findData(cur or "")
+            if idx >= 0:
+                self.widget.setCurrentIndex(idx)
+        elif field == "location":
+            locs = db.get_active_locations()
+            self._rafs = sorted(l["name"] for l in locs if l["group_name"] == "DEPO")
+            dis = sorted(l["name"] for l in locs if l["group_name"] != "DEPO")
+            self.depo = QComboBox()
+            self.depo.addItem("— Seçiniz —", "")
+            self.depo.addItem("DEPO", "__DEPO__")
+            for n in dis:
+                self.depo.addItem(n, n)
+            self.raf = QComboBox()
+            self.raf.addItem("— Raf Seçiniz —", "")
+            for n in self._rafs:
+                self.raf.addItem(n, n)
+            self.raf_label = QLabel("Raf:")
+            cur_loc = cur or ""
+            if cur_loc in self._rafs:
+                self.depo.setCurrentIndex(self.depo.findData("__DEPO__"))
+                self.raf.setCurrentIndex(self.raf.findData(cur_loc))
+            elif cur_loc:
+                i = self.depo.findData(cur_loc)
+                if i < 0:
+                    self.depo.addItem(cur_loc, cur_loc)
+                    i = self.depo.count() - 1
+                self.depo.setCurrentIndex(i)
+            self.depo.currentIndexChanged.connect(self._on_depo_change)
+            self.widget = self.depo
+        elif field in ("meter", "kg", "birim_fiyat"):
+            self.widget = QDoubleSpinBox()
+            self.widget.setRange(0, 9999999)
+            self.widget.setDecimals(2)
+            if field == "birim_fiyat":
+                self.widget.setSuffix(" $")
+            self.widget.setValue(cur or 0)
+        else:
+            self.widget = QLineEdit(str(cur or ""))
+
+        form.addRow(f"{label}:", self.widget)
+        if field == "location":
+            form.addRow(self.raf_label, self.raf)
+        layout.addLayout(form)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        if field == "location":
+            self._on_depo_change(0)
+        self.widget.setFocus()
+
+    def _on_depo_change(self, idx):
+        is_depo = self.depo.currentData() == "__DEPO__"
+        self.raf_label.setVisible(is_depo)
+        self.raf.setVisible(is_depo)
+
+    def _validate(self):
+        v = self.value()
+        if self.field == "product_code" and not str(v).strip():
+            QMessageBox.warning(self, "Eksik Bilgi", "Ürün kodu boş olamaz.")
+            return
+        if self.field == "location" and not v:
+            QMessageBox.warning(self, "Eksik Bilgi", "Lokasyon (DEPO ise raf) seçilmelidir.")
+            return
+        if self.field == "fabric_type" and not v:
+            QMessageBox.warning(self, "Eksik Bilgi", "Kumaş tipi seçilmelidir.")
+            return
+        if self.field == "birim_fiyat" and v <= 0:
+            QMessageBox.warning(self, "Eksik Bilgi", "Birim fiyat 0'dan büyük olmalıdır.")
+            return
+        self.accept()
+
+    def value(self):
+        if self.field == "fabric_type":
+            return self.widget.currentData() or ""
+        if self.field == "location":
+            d = self.depo.currentData() or ""
+            return (self.raf.currentData() or "") if d == "__DEPO__" else d
+        if self.field in ("meter", "kg", "birim_fiyat"):
+            return self.widget.value()
+        text = self.widget.text().strip()
+        if self.field in ("product_code", "color"):
+            return text.upper()
+        return text
+
+
 class MovementDialog(QDialog):
     def __init__(self, parent, fabric, movement_type):
         super().__init__(parent)
+        self.fabric = fabric
         self.movement_type = movement_type
+        self._manual_pct = None   # fire oranı elle girildiyse yüzdesi
+        self._skip_fire = False   # kullanıcı fire takibi istemedi
         label = "GİRİŞ" if movement_type == "GİRİŞ" else "ÇIKIŞ"
         self.setWindowTitle(f"Stok {label} — {fabric['product_code']} / {fabric['color']}")
         self.setMinimumWidth(440)
@@ -1132,9 +1261,11 @@ class MovementDialog(QDialog):
         layout = QVBoxLayout(self)
 
         bg = "#E3F2FD" if self.movement_type == "GİRİŞ" else "#FFEBEE"
+        pieces = dict(fabric).get("piece_count") or "-"
         info = QLabel(f"<b>{fabric['product_name'] or fabric['product_code']}</b>  |  "
                       f"Renk: {fabric['color']}  |  Lokasyon: {fabric['location']}<br>"
-                      f"Mevcut: <b>{fabric['meter']:.2f} mt</b>  /  <b>{fabric['kg']:.2f} kg</b>")
+                      f"Mevcut: <b>{fabric['meter']:.2f} mt</b>  /  <b>{fabric['kg']:.2f} kg</b>"
+                      f"  /  <b>{pieces} top</b>")
         info.setStyleSheet(f"background:{bg}; padding:8px; border-radius:4px;")
         layout.addWidget(info)
 
@@ -1145,9 +1276,47 @@ class MovementDialog(QDialog):
         self.piece_count = QLineEdit()
         self.notes = QLineEdit()
 
-        form.addRow("Metre:", self.meter)
-        form.addRow("Kilo:", self.kg)
+        # Dış depodan müşteriye sevk = boyahane fire takibi
+        self._is_dis_depo = False
+        if self.movement_type == "ÇIKIŞ":
+            dis = {l["name"] for l in db.get_active_locations() if l["group_name"] != "DEPO"}
+            self._is_dis_depo = (fabric["location"] or "") in dis
+
+        if self._is_dis_depo:
+            self.pre_meter = QDoubleSpinBox(); self.pre_meter.setRange(0, 999999); self.pre_meter.setDecimals(2)
+            self.pre_kg    = QDoubleSpinBox(); self.pre_kg.setRange(0, 999999);    self.pre_kg.setDecimals(2)
+            self.lbl_pre_m = QLabel("Çıkış Öncesi:")
+            self.lbl_pre_k = QLabel("Çıkış Öncesi:")
+
+            mrow = QWidget(); ml = QHBoxLayout(mrow); ml.setContentsMargins(0, 0, 0, 0)
+            ml.addWidget(self.meter, 1); ml.addWidget(self.lbl_pre_m); ml.addWidget(self.pre_meter, 1)
+            krow = QWidget(); kl = QHBoxLayout(krow); kl.setContentsMargins(0, 0, 0, 0)
+            kl.addWidget(self.kg, 1); kl.addWidget(self.lbl_pre_k); kl.addWidget(self.pre_kg, 1)
+            form.addRow("Metre:", mrow)
+            form.addRow("Kilo:", krow)
+
+            self.lbl_fire = QLabel("Fire:")
+            self.fire_label = QLabel("—")
+            self.fire_label.setStyleSheet("color:#C62828; font-weight:bold;")
+            form.addRow(self.lbl_fire, self.fire_label)
+
+            for w in (self.meter, self.kg, self.pre_meter, self.pre_kg):
+                w.valueChanged.connect(self._update_fire_label)
+        else:
+            form.addRow("Metre:", self.meter)
+            form.addRow("Kilo:", self.kg)
+
         form.addRow("Top/Adet:", self.piece_count)
+
+        # Çıkışta renk / lab / parti bilgileri
+        if self.movement_type == "ÇIKIŞ":
+            self.out_color = QLineEdit()
+            self.lab_no = QLineEdit()
+            self.parti_no = QLineEdit()
+            form.addRow("Renk:", self.out_color)
+            form.addRow("Lab No:", self.lab_no)
+            form.addRow("Parti No:", self.parti_no)
+
         form.addRow("Not:", self.notes)
 
         # Çıkış ise hedef seçimi
@@ -1157,26 +1326,97 @@ class MovementDialog(QDialog):
             self.dest_type.currentIndexChanged.connect(self._on_dest_type_change)
 
             self.dest_customer = QComboBox()
+            self.lbl_customer = QLabel("Müşteri:")
             self._load_customers()
 
-            self.dest_location = QComboBox()
+            # Lokasyon — iki kademeli: DEPO / dış depolar, DEPO seçilirse raf
+            self.dest_depo = QComboBox()
+            self.lbl_depo = QLabel("Lokasyon:")
+            self.dest_raf = QComboBox()
+            self.lbl_raf = QLabel("Raf:")
             self._load_locations()
-            self.dest_location.setVisible(False)
+            self.dest_depo.currentIndexChanged.connect(self._on_dest_depo_change)
 
             self.dest_other = QLineEdit()
             self.dest_other.setPlaceholderText("Hedef açıklayınız...")
-            self.dest_other.setVisible(False)
+            self.lbl_other = QLabel("Diğer:")
 
             form.addRow("Çıkış Hedefi:", self.dest_type)
-            form.addRow("Müşteri:", self.dest_customer)
-            form.addRow("Lokasyon:", self.dest_location)
-            form.addRow("Diğer:", self.dest_other)
+            form.addRow(self.lbl_customer, self.dest_customer)
+            form.addRow(self.lbl_depo, self.dest_depo)
+            form.addRow(self.lbl_raf, self.dest_raf)
+            form.addRow(self.lbl_other, self.dest_other)
+            self._on_dest_type_change(0)
 
         layout.addLayout(form)
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        buttons.accepted.connect(self.accept)
+        buttons.accepted.connect(self._on_ok)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
+        if self._is_dis_depo:
+            self._update_fire_visibility()
+
+    def _fire_active(self):
+        """Fire takibi: dış depodan yapılan her çıkışta (hedef ne olursa olsun)."""
+        return self._is_dis_depo and self.movement_type == "ÇIKIŞ"
+
+    def _update_fire_visibility(self):
+        on = self._fire_active()
+        for w in (self.lbl_pre_m, self.pre_meter, self.lbl_pre_k, self.pre_kg,
+                  self.lbl_fire, self.fire_label):
+            w.setVisible(on)
+
+    def _update_fire_label(self):
+        if not self._is_dis_depo:
+            return
+        pre_m, m = self.pre_meter.value(), self.meter.value()
+        pre_k, k = self.pre_kg.value(), self.kg.value()
+        parts = []
+        if pre_m > 0:
+            if pre_m < m:
+                self.fire_label.setText("⚠ Çıkış öncesi metre, çıkış metresinden küçük olamaz")
+                return
+            parts.append(f"{pre_m - m:,.2f} mt (%{(pre_m - m) / pre_m * 100:.1f})")
+        if pre_k > 0:
+            if pre_k < k:
+                self.fire_label.setText("⚠ Çıkış öncesi kilo, çıkış kilosundan küçük olamaz")
+                return
+            parts.append(f"{pre_k - k:,.2f} kg (%{(pre_k - k) / pre_k * 100:.1f})")
+        self.fire_label.setText("  |  ".join(parts) if parts else "—")
+
+    def _on_ok(self):
+        if self._fire_active() and not self._skip_fire:
+            pre_m, pre_k = self.pre_meter.value(), self.pre_kg.value()
+            m, k = self.meter.value(), self.kg.value()
+            if pre_m <= 0 and pre_k <= 0:
+                reply = QMessageBox.question(
+                    self, "Fire Oranı",
+                    "Çıkış öncesi metre/kilo girilmedi.\n\nFire oranını elle girmek ister misiniz?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+                if reply == QMessageBox.StandardButton.Yes:
+                    from PyQt6.QtWidgets import QInputDialog
+                    pct, ok = QInputDialog.getDouble(
+                        self, "Fire Oranı", "Fire oranı (%):", 0, 0, 99.9, 1)
+                    if not ok:
+                        return
+                    factor = 1 - pct / 100
+                    if m > 0:
+                        self.pre_meter.setValue(m / factor)
+                    if k > 0:
+                        self.pre_kg.setValue(k / factor)
+                    self._manual_pct = pct
+                    style = "color:#C62828; font-weight:bold; border:1px solid #C62828; border-radius:3px;"
+                    self.pre_meter.setStyleSheet(style)
+                    self.pre_kg.setStyleSheet(style)
+                    self._update_fire_label()
+                    return   # hesaplananı göster, kullanıcı tekrar OK'a basınca kaydedilir
+                else:
+                    self._skip_fire = True   # fire takibi olmadan normal çıkış
+            elif (m > 0 and pre_m > 0 and pre_m < m) or (k > 0 and pre_k > 0 and pre_k < k):
+                QMessageBox.warning(self, "Hatalı Değer",
+                                    "Çıkış öncesi miktar, çıkış miktarından küçük olamaz.")
+                return
+        self.accept()
 
     def _load_customers(self):
         self.dest_customer.clear()
@@ -1186,18 +1426,40 @@ class MovementDialog(QDialog):
             self.dest_customer.addItem(label, str(c["id"]))
 
     def _load_locations(self):
-        self.dest_location.clear()
-        self.dest_location.addItem("— Seçiniz —", "")
-        for l in db.get_active_locations():
-            self.dest_location.addItem(l["name"], l["name"])
+        locs = db.get_active_locations()
+        rafs        = sorted(l["name"] for l in locs if l["group_name"] == "DEPO")
+        dis_depolar = sorted(l["name"] for l in locs if l["group_name"] != "DEPO")
+
+        self.dest_depo.clear()
+        self.dest_depo.addItem("— Seçiniz —", "")
+        self.dest_depo.addItem("DEPO", "__DEPO__")
+        for name in dis_depolar:
+            self.dest_depo.addItem(name, name)
+
+        self.dest_raf.clear()
+        self.dest_raf.addItem("— Raf Seçiniz —", "")
+        for name in rafs:
+            self.dest_raf.addItem(name, name)
 
     def _on_dest_type_change(self, idx):
         t = self.dest_type.currentText()
-        self.dest_customer.setVisible(t == "Müşteri")
-        self.dest_location.setVisible(t == "Lokasyon")
-        self.dest_other.setVisible(t == "Diğer")
-        # Etiket satırlarını güncelle
-        form = self.layout().itemAt(1)
+        for w in (self.lbl_customer, self.dest_customer):
+            w.setVisible(t == "Müşteri")
+        for w in (self.lbl_depo, self.dest_depo):
+            w.setVisible(t == "Lokasyon")
+        for w in (self.lbl_other, self.dest_other):
+            w.setVisible(t == "Diğer")
+        self._on_dest_depo_change(0)
+        if self._is_dis_depo:
+            self._update_fire_visibility()
+
+    def _on_dest_depo_change(self, idx):
+        show_raf = (self.dest_type.currentText() == "Lokasyon"
+                    and self.dest_depo.currentData() == "__DEPO__")
+        self.lbl_raf.setVisible(show_raf)
+        self.dest_raf.setVisible(show_raf)
+        if not show_raf:
+            self.dest_raf.setCurrentIndex(0)
 
     def get_data(self):
         d = {
@@ -1206,16 +1468,34 @@ class MovementDialog(QDialog):
             "piece_count": self.piece_count.text().strip(),
             "notes":       self.notes.text().strip(),
             "destination": "", "destination_type": "",
+            "fire_active": False, "pre_meter": 0.0, "pre_kg": 0.0,
+            "fire_pct": 0.0, "fire_manual": False,
+            "out_color": "", "lab_no": "", "parti_no": "",
         }
         if self.movement_type == "ÇIKIŞ":
+            d["out_color"] = self.out_color.text().strip().upper()
+            d["lab_no"] = self.lab_no.text().strip()
+            d["parti_no"] = self.parti_no.text().strip()
             t = self.dest_type.currentText()
             d["destination_type"] = t
             if t == "Müşteri":
                 d["destination"] = self.dest_customer.currentText() if self.dest_customer.currentData() else ""
             elif t == "Lokasyon":
-                d["destination"] = self.dest_location.currentData() or ""
+                depo = self.dest_depo.currentData() or ""
+                d["destination"] = (self.dest_raf.currentData() or "") if depo == "__DEPO__" else depo
             else:
                 d["destination"] = self.dest_other.text().strip()
+
+            if self._fire_active() and not self._skip_fire:
+                pre_m, pre_k = self.pre_meter.value(), self.pre_kg.value()
+                if pre_m > 0 or pre_k > 0:
+                    d["fire_active"] = True
+                    d["pre_meter"] = pre_m
+                    d["pre_kg"] = pre_k
+                    base = pre_m if pre_m > 0 else pre_k
+                    out  = d["meter"] if pre_m > 0 else d["kg"]
+                    d["fire_pct"] = max(0.0, (base - out) / base * 100) if base > 0 else 0.0
+                    d["fire_manual"] = self._manual_pct is not None
         return d
 
 
@@ -1240,6 +1520,7 @@ def _fill_movement_table(table, movements, show_product=False):
     table.setRowCount(len(movements))
 
     for i, m in enumerate(movements):
+        m = dict(m)   # sqlite3.Row'da .get yok; dict'e çevirince iki kaynak da çalışır
         col = 0
         def _set(val, align=None, color=None, bold=False):
             nonlocal col
@@ -1268,7 +1549,17 @@ def _fill_movement_table(table, movements, show_product=False):
         dest_label = f"{dest_type}: {dest}" if dest and dest_type else dest
         _set(dest_label, color="#1565C0" if dest else None)
         _set(m["user_name"] or "")
-        _set(m["notes"] or "")
+        extra = []
+        if m.get("out_color") and m.get("out_color") != m.get("color"):
+            extra.append(f"Renk: {m['out_color']}")
+        if m.get("lab_no"):
+            extra.append(f"Lab: {m['lab_no']}")
+        if m.get("parti_no"):
+            extra.append(f"Parti: {m['parti_no']}")
+        notes = m["notes"] or ""
+        if extra:
+            notes = (notes + "  |  " if notes else "") + "  ".join(extra)
+        _set(notes)
 
 
 class MovementsDialog(QDialog):
@@ -1493,6 +1784,10 @@ def _export_widget_table_to_excel(parent, table_widget, title="Rapor"):
         QMessageBox.critical(parent, "Hata", f"Dışa aktarma hatası:\n{e}")
 
 
+import re
+_AUTO_LOT = re.compile(r"^LOT-\d{8}-\d+$")   # otomatik üretilen lot formatı
+
+
 class FabricModel(QAbstractTableModel):
     def __init__(self):
         super().__init__()
@@ -1583,8 +1878,15 @@ class FabricModel(QAbstractTableModel):
                 return QBrush(QColor("#1A237E"))
             if col == 5:
                 return QBrush({"HAM": QColor("#5D4037"),
+                                "PFD": QColor("#00695C"),
                                 "BOYALI": QColor("#545454"),
                                 "BASKILI": QColor("#6A1B9A")}.get(r[5], QColor("#333")))
+            if col == 6 and _AUTO_LOT.match(r[6]):
+                return QBrush(QColor("#78909C"))
+
+        if role == Qt.ItemDataRole.FontRole:
+            if col == 6 and _AUTO_LOT.match(r[6]):
+                f = QFont(); f.setItalic(True); return f
 
         if role == Qt.ItemDataRole.BackgroundRole:
             if row % 2 == 1:
@@ -1596,6 +1898,8 @@ class FabricModel(QAbstractTableModel):
             if col in (7, 8): return f"{val:.2f}"
             if col == 10: return f"{val:,.2f} $" if val else "Fiyat girilmemiş"
             if col == 11: return f"{val:,.2f} $" if val else "—"
+            if col == 6 and _AUTO_LOT.match(r[6]):
+                return f"{val}\n(Otomatik verilen lot numarası)"
             return str(val) if val else ""
 
         return None
@@ -1631,7 +1935,7 @@ class StockTable(QWidget):
         self.type_filter = QComboBox()
         self.type_filter.setMinimumWidth(100)
         self.type_filter.addItem("Tüm Tipler", "")
-        for t in ["HAM", "BOYALI", "BASKILI"]:
+        for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
             self.type_filter.addItem(t, t)
         self.type_filter.currentIndexChanged.connect(self.refresh)
 
@@ -1643,11 +1947,6 @@ class StockTable(QWidget):
         btn_hist  = QPushButton("☰ Hareketler"); btn_hist.clicked.connect(self._history)
         btn_hist.setToolTip("Satır seçiliyse: o ürünün tüm hareketleri\nSeçili satır yoksa: tarih aralığına göre hareketler")
 
-        self.btn_undo = QPushButton("↩ Geri Al")
-        self.btn_undo.setEnabled(False)
-        self.btn_undo.setStyleSheet("background:#5C6BC0; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
-        self.btn_undo.clicked.connect(self._undo)
-
         btn_giris.setStyleSheet(f"background:{COLORS['success']}; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
         btn_cikis.setStyleSheet(f"background:{COLORS['danger']}; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
         btn_edit.setStyleSheet("background:#F57F17; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
@@ -1657,23 +1956,20 @@ class StockTable(QWidget):
         toolbar.addWidget(QLabel("Lokasyon:")); toolbar.addWidget(self.location_filter)
         toolbar.addWidget(QLabel("Tip:")); toolbar.addWidget(self.type_filter)
         toolbar.addStretch()
-        for b in (btn_add, btn_giris, btn_cikis, btn_edit, btn_del, btn_hist, self.btn_undo):
+        for b in (btn_add, btn_giris, btn_cikis, btn_edit, btn_del, btn_hist):
             toolbar.addWidget(b)
         layout.addLayout(toolbar)
-
-        # Undo stack değişince butonu güncelle
-        _UNDO_CALLBACKS.append(self._refresh_undo_btn)
 
         # QTableView — sadece görünen satırları render eder
         self.table = QTableView()
         self.table.setModel(self._model)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(True)
         self.table.setGridStyle(Qt.PenStyle.SolidLine)
-        self.table.doubleClicked.connect(self._history)
+        self.table.doubleClicked.connect(self._cell_edit)
         self.table.verticalHeader().setDefaultSectionSize(26)
         self.table.setMouseTracking(True)
         self.table.setWordWrap(False)
@@ -1746,29 +2042,6 @@ class StockTable(QWidget):
     def _on_search_change(self):
         self._search_timer.start(250)
 
-    def _refresh_undo_btn(self):
-        if _UNDO_STACK:
-            desc = _UNDO_STACK[-1][0]
-            self.btn_undo.setEnabled(True)
-            self.btn_undo.setText(f"↩ Geri Al: {desc}")
-            self.btn_undo.setToolTip(f"Son işlemi geri al:\n{desc}")
-        else:
-            self.btn_undo.setEnabled(False)
-            self.btn_undo.setText("↩ Geri Al")
-            self.btn_undo.setToolTip("")
-
-    def _undo(self):
-        item = pop_undo()
-        if not item:
-            return
-        desc, fn = item
-        try:
-            fn()
-            self.refresh_with_locations()
-            self._refresh_undo_btn()
-        except Exception as e:
-            QMessageBox.critical(self, "Geri Al Hatası", str(e))
-
     def _first_load(self):
         self._reload_locations()
         self._fill_table()
@@ -1825,7 +2098,25 @@ class StockTable(QWidget):
         else:
             rows = db.get_all_fabrics(search, loc, ftype)
 
+        # Mevcut sıralama, seçim ve kaydırma konumunu koru
+        hdr = self.table.horizontalHeader()
+        sort_col = hdr.sortIndicatorSection()
+        sort_ord = hdr.sortIndicatorOrder()
+        idx = self.table.selectionModel().currentIndex() if self.table.selectionModel() else None
+        sel_id = self._model.id_at(idx.row()) if idx is not None and idx.isValid() else None
+        scroll = self.table.verticalScrollBar().value()
+
         self._model.load(rows)
+        if sort_col > 0:
+            self._model.sort(sort_col, sort_ord)
+
+        if sel_id is not None:
+            for row in range(self._model.rowCount()):
+                if self._model.id_at(row) == sel_id:
+                    self.table.selectRow(row)
+                    break
+        self.table.verticalScrollBar().setValue(scroll)
+
         self._update_totals(rows)
 
         summary = db.get_summary()
@@ -1877,8 +2168,6 @@ class StockTable(QWidget):
         if dlg.exec():
             d = dlg.get_data()
             fid = db.add_fabric(**d, user_name=CURRENT_USER["full_name"])
-            push_undo(f"Eklendi: {d['product_code']}",
-                      lambda fid=fid: db.soft_delete_fabric(fid, "UNDO"))
             self.refresh_with_locations()
 
     def _edit(self):
@@ -1905,8 +2194,6 @@ class StockTable(QWidget):
         )
         if reply == QMessageBox.StandardButton.Yes:
             db.soft_delete_fabric(fid, user_name=CURRENT_USER["full_name"])
-            push_undo(f"Silindi: {fabric['product_code']} / {fabric['color']}",
-                      lambda fid=fid: db.restore_fabric(fid))
             self.refresh_with_locations()
 
     def _giris(self):
@@ -1917,10 +2204,8 @@ class StockTable(QWidget):
         dlg = MovementDialog(self, fabric, "GİRİŞ")
         if dlg.exec():
             d = dlg.get_data()
-            mid = db.add_movement(fid, "GİRİŞ", d["meter"], d["kg"], d["piece_count"],
-                                  d["notes"], user_name=CURRENT_USER["full_name"])
-            push_undo(f"Giriş: {fabric['product_code']} +{d['meter']:.1f}mt",
-                      lambda mid=mid: db.reverse_movement(mid))
+            db.add_movement(fid, "GİRİŞ", d["meter"], d["kg"], d["piece_count"],
+                            d["notes"], user_name=CURRENT_USER["full_name"])
             self.refresh()
 
     def _cikis(self):
@@ -1931,13 +2216,57 @@ class StockTable(QWidget):
         dlg = MovementDialog(self, fabric, "ÇIKIŞ")
         if dlg.exec():
             d = dlg.get_data()
+            notes = d["notes"]
+            deduct_m = deduct_k = None
+            if d["fire_active"]:
+                # Depodan çıkış öncesi miktar düşülür (fire dahil)
+                deduct_m, deduct_k = d["pre_meter"] or None, d["pre_kg"] or None
+                fire_note = f"Fire: %{d['fire_pct']:.1f}" + (" (elle)" if d["fire_manual"] else "")
+                notes = f"{notes} | {fire_note}" if notes else fire_note
             mid = db.add_movement(fid, "ÇIKIŞ", d["meter"], d["kg"], d["piece_count"],
-                                  d["notes"], user_name=CURRENT_USER["full_name"],
+                                  notes, user_name=CURRENT_USER["full_name"],
                                   destination=d.get("destination",""),
-                                  destination_type=d.get("destination_type",""))
-            push_undo(f"Çıkış: {fabric['product_code']} -{d['meter']:.1f}mt",
-                      lambda mid=mid: db.reverse_movement(mid))
+                                  destination_type=d.get("destination_type",""),
+                                  deduct_meter=deduct_m, deduct_kg=deduct_k,
+                                  out_color=d["out_color"], lab_no=d["lab_no"],
+                                  parti_no=d["parti_no"])
+            if d["fire_active"]:
+                db.add_fire_record(
+                    fid, mid, fabric["product_code"], fabric["color"] or "",
+                    fabric["lot"] or "", fabric["location"] or "", d["destination"],
+                    d["pre_meter"], d["pre_kg"], d["meter"], d["kg"], d["fire_pct"],
+                    manual_pct=d["fire_manual"], user_name=CURRENT_USER["full_name"],
+                    out_color=d["out_color"], lab_no=d["lab_no"], parti_no=d["parti_no"])
+                if db.finalize_lot_if_consumed(fid, CURRENT_USER["full_name"]):
+                    QMessageBox.information(
+                        self, "Lot Tükendi",
+                        f"<b>{fabric['product_code']} / {fabric['lot'] or '-'}</b> lotu tükendi.<br>"
+                        f"Toplam fire 'Boyahane Fire Oranları' sekmesine işlendi.")
             self.refresh()
+
+    # Çift tıklanabilen sütunlar → veritabanı alanı
+    CELL_FIELDS = {1: "product_code", 2: "product_name", 3: "color", 4: "location",
+                   5: "fabric_type", 6: "lot", 7: "meter", 8: "kg",
+                   9: "piece_count", 10: "birim_fiyat", 13: "description"}
+
+    def _cell_edit(self, index):
+        if not index.isValid():
+            return
+        field = self.CELL_FIELDS.get(index.column())
+        if not field:   # #, Toplam Değer, Son Güncelleme — düzenlenemez
+            return
+        fid = self._model.id_at(index.row())
+        if not fid:
+            return
+        fabric = db.get_fabric(fid)
+        dlg = CellEditDialog(self, fabric, field, COLS[index.column()])
+        if dlg.exec():
+            d = {k: dict(fabric).get(k) for k in
+                 ("product_name", "product_code", "color", "location", "meter", "kg",
+                  "piece_count", "birim_fiyat", "fabric_type", "lot", "description")}
+            d[field] = dlg.value()
+            db.update_fabric(fid, **d)
+            self.refresh_with_locations()
 
     def _history(self):
         idx = self.table.selectionModel().currentIndex()
@@ -1952,13 +2281,43 @@ class StockTable(QWidget):
     def _context_menu(self, pos):
         from PyQt6.QtWidgets import QMenu
         menu = QMenu(self)
+
+        # Çok satır seçiliyse: tıklanan sütunu toplu düzenle
+        act_bulk = None
+        idx = self.table.indexAt(pos)
+        sel_rows = self.table.selectionModel().selectedRows()
+        field = self.CELL_FIELDS.get(idx.column()) if idx.isValid() else None
+        if field and len(sel_rows) > 1:
+            act_bulk = menu.addAction(f"✎ {COLS[idx.column()]} — {len(sel_rows)} satırı toplu düzenle")
+            menu.addSeparator()
+
         act_export = menu.addAction("📥 Excel'e Aktar (görünen liste)")
         act_export_all = menu.addAction("📥 Excel'e Aktar (tüm stok)")
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
-        if action == act_export:
+        if act_bulk and action == act_bulk:
+            self._bulk_cell_edit(idx.column(), field, sel_rows)
+        elif action == act_export:
             self._export_visible()
         elif action == act_export_all:
             self._export_all()
+
+    def _bulk_cell_edit(self, col, field, sel_rows):
+        fids = [self._model.id_at(r.row()) for r in sel_rows]
+        fids = [f for f in fids if f]
+        if not fids:
+            return
+        first = db.get_fabric(fids[0])
+        dlg = CellEditDialog(self, first, field, COLS[col], count=len(fids))
+        if dlg.exec():
+            val = dlg.value()
+            keys = ("product_name", "product_code", "color", "location", "meter", "kg",
+                    "piece_count", "birim_fiyat", "fabric_type", "lot", "description")
+            for fid in fids:
+                fabric = db.get_fabric(fid)
+                d = {k: dict(fabric).get(k) for k in keys}
+                d[field] = val
+                db.update_fabric(fid, **d)
+            self.refresh_with_locations()
 
     def _export_visible(self):
         """Tabloda şu an görünen satırları dışa aktar."""
@@ -1971,6 +2330,210 @@ class StockTable(QWidget):
         tmp_model = FabricModel()
         tmp_model.load(all_rows)
         _export_table_to_excel(self, tmp_model, self.table, title="Tüm Stok")
+
+
+class _FireSortItem(QTableWidgetItem):
+    """Sayısal sütunlar için doğru sıralama: UserRole'daki değere göre karşılaştırır."""
+    def __lt__(self, other):
+        a = self.data(Qt.ItemDataRole.UserRole)
+        b = other.data(Qt.ItemDataRole.UserRole)
+        if a is not None and b is not None:
+            return a < b
+        return super().__lt__(other)
+
+
+class FireView(QWidget):
+    """Boyahane fire oranları — dış depodan müşteriye sevklerin fire kayıtları."""
+    COLS = ["Tarih", "Boyahane", "Ürün Kodu", "Renk", "Lot", "Lab No", "Parti No", "Hedef",
+            "Öncesi mt", "Çıkış mt", "Fire mt", "Fire mt %",
+            "Öncesi kg", "Çıkış kg", "Fire kg", "Fire kg %", "Tür"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+        self.refresh()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("Ara:"))
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Ürün, renk, lot, lab, parti, hedef...")
+        self.search_box.setMaximumWidth(260)
+        self.search_box.textChanged.connect(self.refresh)
+        toolbar.addWidget(self.search_box)
+
+        toolbar.addWidget(QLabel("Boyahane:"))
+        self.boyahane_filter = QComboBox()
+        self.boyahane_filter.addItem("Tümü", "")
+        self.boyahane_filter.currentIndexChanged.connect(self.refresh)
+        toolbar.addWidget(self.boyahane_filter)
+
+        toolbar.addWidget(QLabel("Tür:"))
+        self.type_filter = QComboBox()
+        for t in ["Tümü", "ÇIKIŞ", "LOT TOPLAMI"]:
+            self.type_filter.addItem(t, "" if t == "Tümü" else t)
+        self.type_filter.currentIndexChanged.connect(self.refresh)
+        toolbar.addWidget(self.type_filter)
+
+        toolbar.addStretch()
+        btn_reset = QPushButton("🔄 Lot Sıfırla")
+        btn_reset.setToolTip("Seçili satırın lotunu kapatır: dış depoda kalan stok fire yazılır,\n"
+                             "lotun toplam firesi ayrı satır olarak eklenir.")
+        btn_reset.clicked.connect(self._reset_lot)
+        btn_refresh = QPushButton("⟳ Yenile")
+        btn_refresh.clicked.connect(self.refresh)
+        toolbar.addWidget(btn_reset)
+        toolbar.addWidget(btn_refresh)
+        layout.addLayout(toolbar)
+
+        info = QLabel("Dış depolardan yapılan çıkışların fire kayıtları. "
+                      "<i>(elle)</i> işaretli oranlar elle girilmiştir; "
+                      "<b>LOT TOPLAMI</b> satırları kapanan lotların toplam firesidir.")
+        info.setStyleSheet("color:#555; font-size:11px;")
+        layout.addWidget(info)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)   # elle genişlik ayarı
+        hdr.setStretchLastSection(True)
+        self._cols_sized = False   # ilk veri yüklemesinde bir kez otomatik boyutlandır
+        layout.addWidget(self.table)
+
+        self.count_lbl = QLabel()
+        self.count_lbl.setStyleSheet("color:#555; font-size:12px;")
+        layout.addWidget(self.count_lbl)
+
+    def refresh(self):
+        all_rows = [dict(r) for r in db.get_fire_records()]
+
+        # Boyahane filtresini doldur (seçim korunur)
+        cur_b = self.boyahane_filter.currentData() or ""
+        names = sorted({r["boyahane"] for r in all_rows if r["boyahane"]})
+        self.boyahane_filter.blockSignals(True)
+        self.boyahane_filter.clear()
+        self.boyahane_filter.addItem("Tümü", "")
+        for n in names:
+            self.boyahane_filter.addItem(n, n)
+        idx = self.boyahane_filter.findData(cur_b)
+        if idx >= 0:
+            self.boyahane_filter.setCurrentIndex(idx)
+        self.boyahane_filter.blockSignals(False)
+
+        # Filtrele
+        q = self.search_box.text().strip().lower()
+        b = self.boyahane_filter.currentData() or ""
+        t = self.type_filter.currentData() or ""
+        rows = []
+        for r in all_rows:
+            if b and r["boyahane"] != b:
+                continue
+            if t and r["record_type"] != t:
+                continue
+            if q:
+                hay = " ".join(str(r.get(k) or "") for k in
+                               ("boyahane", "product_code", "color", "out_color",
+                                "lot", "lab_no", "parti_no", "customer")).lower()
+                if q not in hay:
+                    continue
+            rows.append(r)
+
+        self._rows = rows
+        self.table.setSortingEnabled(False)   # doldururken sıralamayı kapat
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            is_total = r["record_type"] == "LOT TOPLAMI"
+            elle = " (elle)" if r["manual_pct"] else ""
+            pre_m, out_m = r["pre_meter"] or 0, r["out_meter"] or 0
+            pre_k, out_k = r["pre_kg"] or 0, r["out_kg"] or 0
+            fire_m, fire_k = max(0, pre_m - out_m), max(0, pre_k - out_k)
+            pct_m = (fire_m / pre_m * 100) if pre_m > 0 else 0
+            pct_k = (fire_k / pre_k * 100) if pre_k > 0 else 0
+            vals = [
+                str(r["created_at"] or "")[:16],
+                r["boyahane"] or "",
+                r["product_code"] or "",
+                r.get("out_color") or r["color"] or "",
+                r["lot"] or "",
+                r.get("lab_no") or "",
+                r.get("parti_no") or "",
+                r["customer"] or "",
+                f"{pre_m:,.2f}" if pre_m else "",
+                f"{out_m:,.2f}" if out_m else "",
+                f"{fire_m:,.2f}" if pre_m else "",
+                f"%{pct_m:.1f}{elle}" if pre_m else "",
+                f"{pre_k:,.2f}" if pre_k else "",
+                f"{out_k:,.2f}" if out_k else "",
+                f"{fire_k:,.2f}" if pre_k else "",
+                f"%{pct_k:.1f}{elle}" if pre_k else "",
+                r["record_type"],
+            ]
+            sort_keys = {8: pre_m, 9: out_m, 10: fire_m, 11: pct_m,
+                         12: pre_k, 13: out_k, 14: fire_k, 15: pct_k}
+            for j, v in enumerate(vals):
+                item = _FireSortItem(v)
+                if j in sort_keys:
+                    item.setData(Qt.ItemDataRole.UserRole, sort_keys[j])
+                if j == 0:   # sıralamadan bağımsız kayıt eşlemesi için id sakla
+                    item.setData(Qt.ItemDataRole.UserRole + 1, r["id"])
+                if 8 <= j <= 15:
+                    item.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
+                if j in (10, 11, 14, 15):   # fire sütunları — kırmızı, elle girilenler turuncu
+                    item.setForeground(QBrush(QColor("#E65100" if r["manual_pct"] else "#C62828")))
+                    f = QFont(); f.setBold(True); item.setFont(f)
+                if is_total:
+                    f = QFont(); f.setBold(True); item.setFont(f)
+                    item.setBackground(QBrush(QColor("#FFF8E1")))
+                self.table.setItem(i, j, item)
+        self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar, mevcut sıralamayı uygular
+        if rows and not self._cols_sized:
+            self.table.resizeColumnsToContents()   # ilk yüklemede makul genişlikler
+            self._cols_sized = True
+        self.count_lbl.setText(f"{len(rows)} kayıt" + (f" / toplam {len(all_rows)}" if len(rows) != len(all_rows) else ""))
+
+    def _reset_lot(self):
+        row = self.table.currentRow()
+        item0 = self.table.item(row, 0) if row >= 0 else None
+        rid = item0.data(Qt.ItemDataRole.UserRole + 1) if item0 else None
+        r = next((x for x in self._rows if x["id"] == rid), None)
+        if r is None:
+            QMessageBox.information(self, "Bilgi", "Önce tablodan sıfırlanacak lota ait bir satır seçin.")
+            return
+        if r["record_type"] == "LOT TOPLAMI":
+            QMessageBox.information(self, "Bilgi", "Bu lot zaten kapatılmış (LOT TOPLAMI satırı).")
+            return
+        if db.lot_total_exists(r["product_code"], r["color"], r["lot"], r["boyahane"]):
+            QMessageBox.warning(self, "Lot Sıfırlama",
+                                f"<b>{r['product_code']} / {r['lot'] or '-'}</b> — {r['boyahane']}<br><br>"
+                                f"Bu lot daha önce sıfırlanmıştır.")
+            return
+        fabric = db.get_fabric(r["fabric_id"]) if r["fabric_id"] else None
+        if not fabric:
+            QMessageBox.warning(self, "Hata", "Lota ait stok kaydı bulunamadı.")
+            return
+        rem_m, rem_k = fabric["meter"] or 0, fabric["kg"] or 0
+        reply = QMessageBox.question(
+            self, "Lot Sıfırlama",
+            f"<b>{r['product_code']} / {r['lot'] or '-'}</b> — {r['boyahane']}<br><br>"
+            f"Kalan stok: <b>{rem_m:,.2f} mt / {rem_k:,.2f} kg</b><br><br>"
+            f"Lot kapatılsın mı? Kalan stok <span style='color:#C62828'>fire olarak yazılacak</span> "
+            f"ve toplam fire ayrı satır olarak eklenecek.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        db.reset_lot_fire(r["fabric_id"], CURRENT_USER["full_name"])
+        self.refresh()
+        QMessageBox.information(self, "Tamamlandı",
+                                "Lot kapatıldı, toplam fire satırı eklendi.")
 
 
 class LocationView(QWidget):
@@ -2242,11 +2805,13 @@ class DashboardWidget(QWidget):
 
         # Satır 2 — Tip dağılımı
         self.stat_ham    = QLabel("—")
+        self.stat_pfd    = QLabel("—")
         self.stat_boyali = QLabel("—")
         self.stat_baskili= QLabel("—")
         row2 = QHBoxLayout()
         for icon, lbl, color, wgt in [
             ("🟫","HAM (Metre)","#5D4037",   self.stat_ham),
+            ("🟩","PFD (Metre)","#00695C",   self.stat_pfd),
             ("🟦","BOYALI (Metre)","#1565C0", self.stat_boyali),
             ("🟪","BASKILI (Metre)","#6A1B9A",self.stat_baskili),
         ]:
@@ -2310,12 +2875,13 @@ class DashboardWidget(QWidget):
 
         # ── Kumaş Tipi Özet Kartları ─────────────────────────────
         all_rows = db.get_all_fabrics()
-        tip_mt = {"HAM": 0.0, "BOYALI": 0.0, "BASKILI": 0.0}
+        tip_mt = {"HAM": 0.0, "PFD": 0.0, "BOYALI": 0.0, "BASKILI": 0.0}
         for r in all_rows:
             t = r["fabric_type"] or ""
             if t in tip_mt:
                 tip_mt[t] += r["meter"] or 0
         self.stat_ham.setText(f"{tip_mt['HAM']:,.0f} mt")
+        self.stat_pfd.setText(f"{tip_mt['PFD']:,.0f} mt")
         self.stat_boyali.setText(f"{tip_mt['BOYALI']:,.0f} mt")
         self.stat_baskili.setText(f"{tip_mt['BASKILI']:,.0f} mt")
 
@@ -2383,12 +2949,14 @@ class MainWindow(QMainWindow):
         self.dashboard = DashboardWidget()
         self.stock_table = StockTable(self)
         self.location_view = LocationView()
+        self.fire_view = FireView()
 
         # Dashboard sadece admin'e göster
         if CURRENT_USER.get("role") == "admin":
             self.tabs.addTab(self.dashboard, "📊 Dashboard")
         self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
         self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
+        self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
         self.tabs.currentChanged.connect(self._on_tab_change)
         layout.addWidget(self.tabs)
 
@@ -2479,6 +3047,7 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(self.dashboard, "📊 Dashboard")
         self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
         self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
+        self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
         self.stock_table.refresh_with_locations()
 
     def _toggle_web(self):
@@ -2682,15 +3251,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.critical(self, "Güncelleme Hatası", msg)
 
     def _on_tab_change(self, idx):
-        is_admin = CURRENT_USER.get("role") == "admin"
-        if is_admin:
-            if idx == 0:   self.dashboard.refresh()
-            elif idx == 1: self.stock_table.refresh()
-            elif idx == 2: self.location_view.refresh()
-        else:
-            # Admin değil: dashboard yok, idx 0=stok, 1=lokasyon
-            if idx == 0:   self.stock_table.refresh()
-            elif idx == 1: self.location_view.refresh()
+        w = self.tabs.widget(idx)
+        if w is not None and hasattr(w, "refresh"):
+            w.refresh()
 
     def update_status(self, count, summary):
         if not hasattr(self, "status"):

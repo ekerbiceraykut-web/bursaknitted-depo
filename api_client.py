@@ -134,6 +134,11 @@ def get_movements(fid):
 def get_all_movements(limit=300):
     return _get("/api/movements", {"limit": str(limit)})
 
+def get_movements_by_range(start_date, end_date):
+    # Sunucuda aralık endpoint'i yok; tümünü çekip istemci tarafında filtrele
+    rows = _get("/api/movements", {"limit": "5000"}) or []
+    return [m for m in rows if start_date <= str(m.get("movement_date", ""))[:10] <= end_date]
+
 
 # ── Locations ────────────────────────────────────────────────────
 
