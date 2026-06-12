@@ -63,24 +63,24 @@ def _get(path, params=None, auth=True):
         if encoded:
             url += "?" + encoded
     req = urllib.request.Request(url, headers=_headers() if auth else {})
-    return _request(req, 15)
+    return _request(req, 30)   # bulut sunucu yanıtı yerel ağdan yavaş olabilir
 
 def _post(path, data, auth=True):
     url = _server_url + path
     body = json.dumps(data, ensure_ascii=False).encode()
     req  = urllib.request.Request(url, data=body, method="POST",
                                   headers=_headers() if auth else {"Content-Type":"application/json"})
-    return _request(req, 10)
+    return _request(req, 30)
 
 def _put(path, data):
     url  = _server_url + path
     body = json.dumps(data, ensure_ascii=False).encode()
     req  = urllib.request.Request(url, data=body, method="PUT", headers=_headers())
-    return _request(req, 10)
+    return _request(req, 30)
 
 def _delete(path):
     req = urllib.request.Request(_server_url + path, method="DELETE", headers=_headers())
-    return _request(req, 10)
+    return _request(req, 30)
 
 
 # ── Fabrics ──────────────────────────────────────────────────────
