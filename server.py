@@ -110,6 +110,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
 
             # ── Locations ────────────────────────────────────────
+            elif path == "/api/locations/all":
+                rows = db.get_all_locations()
+                self._send(_ok([dict(r) for r in rows]))
+
             elif path == "/api/locations":
                 rows = db.get_active_locations()
                 self._send(_ok([dict(r) for r in rows]))
@@ -211,6 +215,16 @@ class APIHandler(BaseHTTPRequestHandler):
                 done = db.finalize_lot_if_consumed(body.get("fabric_id"), user["full_name"])
                 self._send(_ok({"finalized": bool(done)}))
 
+            # ── Lokasyon ekle / senkronize ────────────────────────
+            elif path == "/api/locations":
+                db.add_location(body.get("name",""), body.get("group_name","DEPO"),
+                                body.get("description",""))
+                self._send(_ok())
+
+            elif path == "/api/locations/sync":
+                db.sync_locations()
+                self._send(_ok())
+
             # ── Müşteri ekle / toplu aktar ────────────────────────
             elif path == "/api/customers":
                 cid = db.add_customer(body.get("name",""), body.get("code",""),
@@ -259,6 +273,11 @@ class APIHandler(BaseHTTPRequestHandler):
                                    body.get("phone",""), body.get("address",""),
                                    body.get("active",1))
                 self._send(_ok())
+            elif path.startswith("/api/locations/"):
+                lid = int(path.split("/")[-1])
+                db.update_location(lid, body.get("name",""), body.get("group_name","DEPO"),
+                                   body.get("description",""), body.get("active",1))
+                self._send(_ok())
             elif path.startswith("/api/users/") and path.endswith("/password"):
                 uid = int(path.split("/")[-2])
                 if user.get("role") != "admin":
@@ -283,6 +302,10 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/customers/"):
                 cid = int(path.split("/")[-1])
                 db.delete_customer(cid)
+                self._send(_ok())
+            elif path.startswith("/api/locations/"):
+                lid = int(path.split("/")[-1])
+                db.delete_location(lid)
                 self._send(_ok())
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)

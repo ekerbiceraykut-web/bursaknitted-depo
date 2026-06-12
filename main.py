@@ -349,22 +349,24 @@ class CustomerManagementDialog(QDialog):
 
     def _load(self, search=""):
         rows = db.get_all_customers(search=search, active_only=False)
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(rows))
-        self._ids = []
         for i, r in enumerate(rows):
-            self._ids.append(r["id"])
-            self.table.setItem(i, 0, QTableWidgetItem(r["name"] or ""))
+            name_item = QTableWidgetItem(r["name"] or "")
+            name_item.setData(Qt.ItemDataRole.UserRole, r["id"])
+            self.table.setItem(i, 0, name_item)
             self.table.setItem(i, 1, QTableWidgetItem(r["code"] or ""))
             self.table.setItem(i, 2, QTableWidgetItem(r["phone"] or ""))
             self.table.setItem(i, 3, QTableWidgetItem(r["address"] or ""))
             s = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
             s.setForeground(QBrush(QColor("#2E7D32" if r["active"] else "#C62828")))
             self.table.setItem(i, 4, s)
+        self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
 
     def _selected_id(self):
         row = self.table.currentRow()
         if row < 0: QMessageBox.information(self,"Bilgi","Müşteri seçin."); return None
-        return self._ids[row]
+        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
 
     def _customer_dialog(self, c=None):
         dlg = QDialog(self); dlg.setWindowTitle("Müşteri" + (" Düzenle" if c else " Ekle"))
@@ -490,11 +492,12 @@ class LocationManagementDialog(QDialog):
 
     def _load(self):
         rows = db.get_all_locations()
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(rows))
-        self._ids = []
         for i, r in enumerate(rows):
-            self._ids.append(r["id"])
-            self.table.setItem(i, 0, QTableWidgetItem(r["name"]))
+            name_item = QTableWidgetItem(r["name"])
+            name_item.setData(Qt.ItemDataRole.UserRole, r["id"])
+            self.table.setItem(i, 0, name_item)
             grp_item = QTableWidgetItem(r["group_name"])
             grp_item.setForeground(QBrush(QColor("#545454") if r["group_name"] == "DEPO" else QColor("#545454")))
             grp_item.setFont(QFont("", -1, QFont.Weight.Bold))
@@ -503,13 +506,14 @@ class LocationManagementDialog(QDialog):
             status = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
             status.setForeground(QBrush(QColor("#2E7D32") if r["active"] else QColor("#C62828")))
             self.table.setItem(i, 3, status)
+        self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
 
     def _selected_id(self):
         row = self.table.currentRow()
         if row < 0:
             QMessageBox.information(self, "Bilgi", "Bir lokasyon seçin.")
             return None
-        return self._ids[row]
+        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
 
     def _add(self):
         dlg = self._loc_dialog()
@@ -878,24 +882,26 @@ class UserManagementDialog(QDialog):
 
     def _load(self):
         users = db.get_all_users()
+        self.table.setSortingEnabled(False)
         self.table.setRowCount(len(users))
-        self._ids = []
         for i, u in enumerate(users):
-            self._ids.append(u["id"])
-            self.table.setItem(i, 0, QTableWidgetItem(u["username"]))
+            uname_item = QTableWidgetItem(u["username"])
+            uname_item.setData(Qt.ItemDataRole.UserRole, u["id"])
+            self.table.setItem(i, 0, uname_item)
             self.table.setItem(i, 1, QTableWidgetItem(u["full_name"] or ""))
             self.table.setItem(i, 2, QTableWidgetItem(u["role"]))
             status = QTableWidgetItem("✅ Aktif" if u["active"] else "⛔ Pasif")
             status.setForeground(QBrush(QColor("#2E7D32") if u["active"] else QColor("#C62828")))
             self.table.setItem(i, 3, status)
             self.table.setItem(i, 4, QTableWidgetItem(str(u["created_at"])[:10]))
+        self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
 
     def _selected_id(self):
         row = self.table.currentRow()
         if row < 0:
             QMessageBox.information(self, "Bilgi", "Kullanıcı seçin.")
             return None
-        return self._ids[row]
+        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
 
     def _add(self):
         dlg = QDialog(self); dlg.setWindowTitle("Yeni Kullanıcı"); dlg.setMinimumWidth(320)

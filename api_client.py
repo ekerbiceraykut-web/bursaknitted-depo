@@ -216,16 +216,22 @@ def get_locations():
     return [r["name"] for r in rows] if rows else []
 
 def add_location(name, group_name="DEPO", description=""):
-    pass  # Uzak modda lokasyon yönetimi masaüstü uygulamadan yapılır
+    _post("/api/locations", {"name": name, "group_name": group_name,
+                             "description": description})
 
 def sync_locations():
-    pass
+    _post("/api/locations/sync", {})
 
 def get_all_locations():
-    return get_active_locations()
+    return _get("/api/locations/all") or []
 
-def update_location(*a, **kw): pass
-def delete_location(*a, **kw): pass
+def update_location(loc_id, name, group_name, description, active):
+    _put(f"/api/locations/{loc_id}", {"name": name, "group_name": group_name,
+                                      "description": description,
+                                      "active": 1 if active else 0})
+
+def delete_location(loc_id):
+    _delete(f"/api/locations/{loc_id}")
 
 
 # ── Summary ──────────────────────────────────────────────────────
