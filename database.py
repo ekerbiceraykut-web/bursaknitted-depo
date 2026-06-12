@@ -128,12 +128,19 @@ def init_db():
         "ALTER TABLE fire_records ADD COLUMN out_color TEXT DEFAULT ''",
         "ALTER TABLE fire_records ADD COLUMN lab_no TEXT DEFAULT ''",
         "ALTER TABLE fire_records ADD COLUMN parti_no TEXT DEFAULT ''",
+        "ALTER TABLE fabrics ADD COLUMN entry_location TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
             c.execute(sql)
         except Exception:
             pass
+
+    # Giriş lokasyonu boş olan mevcut kayıtlara şimdiki lokasyonunu yaz
+    try:
+        c.execute("UPDATE fabrics SET entry_location=location WHERE IFNULL(entry_location,'')=''")
+    except Exception:
+        pass
 
     conn.commit()
 
@@ -401,17 +408,22 @@ def _generate_lot(conn):
 
 
 def add_fabric(product_name, product_code, color, location, meter, kg,
-               piece_count, birim_fiyat, fabric_type, lot, description, user_name=""):
+               piece_count, birim_fiyat, fabric_type, lot, description, user_name="",
+               entry_location=""):
     conn = get_connection()
     c = conn.cursor()
     if not (lot or "").strip():
         lot = _generate_lot(conn)
+    if not (entry_location or "").strip():
+        entry_location = location   # belirtilmediyse ilk lokasyonu = giriş lokasyonu
     c.execute("""
         INSERT INTO fabrics (product_name, product_code, color, location,
-                             meter, kg, piece_count, birim_fiyat, fabric_type, lot, description)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             meter, kg, piece_count, birim_fiyat, fabric_type, lot,
+                             description, entry_location)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (product_name, product_code, color, location,
-          meter or 0, kg or 0, piece_count, birim_fiyat or 0, fabric_type, lot, description))
+          meter or 0, kg or 0, piece_count, birim_fiyat or 0, fabric_type, lot,
+          description, entry_location))
     fabric_id = c.lastrowid
     if meter or kg:
         c.execute("""
@@ -424,15 +436,19 @@ def add_fabric(product_name, product_code, color, location, meter, kg,
 
 
 def update_fabric(fabric_id, product_name, product_code, color, location,
-                  meter, kg, piece_count, birim_fiyat, fabric_type, lot, description):
+                  meter, kg, piece_count, birim_fiyat, fabric_type, lot, description,
+                  entry_location=None):
+    """entry_location None ise mevcut değer korunur."""
     conn = get_connection()
     conn.execute("""
         UPDATE fabrics SET product_name=?, product_code=?, color=?, location=?,
         meter=?, kg=?, piece_count=?, birim_fiyat=?, fabric_type=?, lot=?, description=?,
+        entry_location=COALESCE(?, entry_location),
         updated_at=datetime('now','localtime')
         WHERE id=?
     """, (product_name, product_code, color, location,
-          meter or 0, kg or 0, piece_count, birim_fiyat or 0, fabric_type, lot, description, fabric_id))
+          meter or 0, kg or 0, piece_count, birim_fiyat or 0, fabric_type, lot, description,
+          entry_location, fabric_id))
     conn.commit()
     conn.close()
 
@@ -587,15 +603,20 @@ def _transfer_in(conn, src_fabric, dest_location, meter, kg, piece_count, user_n
             UPDATE fabrics SET meter=?, kg=?, piece_count=?, updated_at=datetime('now','localtime') WHERE id=?
         """, (new_meter, new_kg, new_pieces, dest_id))
     else:
+        src_entry = ""
+        if "entry_location" in src_fabric.keys():
+            src_entry = src_fabric["entry_location"] or ""
         cur = conn.execute("""
             INSERT INTO fabrics (product_name, product_code, color, location, meter, kg,
-                                 piece_count, description, birim_fiyat, fabric_type, lot)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 piece_count, description, birim_fiyat, fabric_type, lot,
+                                 entry_location)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (src_fabric["product_name"] or "", src_fabric["product_code"],
               src_fabric["color"] or "", dest_location, meter or 0, kg or 0,
               str(_pieces(piece_count) or "") if _pieces(piece_count) else "",
               src_fabric["description"] or "", src_fabric["birim_fiyat"] or 0,
-              src_fabric["fabric_type"] or "", src_fabric["lot"] or ""))
+              src_fabric["fabric_type"] or "", src_fabric["lot"] or "",
+              src_entry or src_fabric["location"] or ""))
         dest_id = cur.lastrowid
 
     # Hedef tarafta GİRİŞ hareketi kaydet ve iki hareketi birbirine bağla

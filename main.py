@@ -1039,6 +1039,17 @@ class FabricDialog(QDialog):
         form.addRow(self.raf_label, self.raf)
         self.raf_label.setVisible(False)
         self.raf.setVisible(False)
+
+        # Giriş lokasyonu — köken takibi (taşınsa bile değişmez)
+        self.entry_loc = QComboBox()
+        self.entry_loc.addItem("— Lokasyon ile aynı —", "")
+        for name in self._depo_rafs:
+            self.entry_loc.addItem(name, name)
+        for i in range(self.depo.count()):
+            d = self.depo.itemData(i)
+            if d and d != "__DEPO__":
+                self.entry_loc.addItem(d, d)
+        form.addRow("Giriş Lokasyonu:", self.entry_loc)
         form.addRow("Kumaş Tipi *:", self.fabric_type)
         form.addRow("Lot:", self.lot)
         form.addRow("Metre:", self.meter)
@@ -1104,6 +1115,13 @@ class FabricDialog(QDialog):
                 self.depo.addItem(loc_val, loc_val)
                 idx = self.depo.count() - 1
             self.depo.setCurrentIndex(idx)
+        entry = dict(f).get("entry_location") or ""
+        if entry:
+            i = self.entry_loc.findData(entry)
+            if i < 0:
+                self.entry_loc.addItem(entry, entry)
+                i = self.entry_loc.count() - 1
+            self.entry_loc.setCurrentIndex(i)
         self.meter.setValue(f["meter"] or 0)
         self.kg.setValue(f["kg"] or 0)
         self.piece_count.setText(f["piece_count"] or "")
@@ -1138,6 +1156,7 @@ class FabricDialog(QDialog):
             "product_name": self.product_name.text().strip(),
             "color": self.color.text().strip().upper(),
             "location": self._selected_location(),
+            "entry_location": self.entry_loc.currentData() or self._selected_location(),
             "fabric_type": self.fabric_type.currentData() or "",
             "lot": self.lot.text().strip(),
             "meter": self.meter.value(),
@@ -1206,6 +1225,17 @@ class CellEditDialog(QDialog):
                 self.depo.setCurrentIndex(i)
             self.depo.currentIndexChanged.connect(self._on_depo_change)
             self.widget = self.depo
+        elif field == "entry_location":
+            self.widget = QComboBox()
+            locs = db.get_active_locations()
+            for l in sorted(locs, key=lambda x: (x["group_name"] != "DEPO", x["name"])):
+                self.widget.addItem(l["name"], l["name"])
+            idx = self.widget.findData(cur or "")
+            if idx < 0 and cur:
+                self.widget.addItem(cur, cur)
+                idx = self.widget.count() - 1
+            if idx >= 0:
+                self.widget.setCurrentIndex(idx)
         elif field in ("meter", "kg", "birim_fiyat"):
             self.widget = QDoubleSpinBox()
             self.widget.setRange(0, 9999999)
@@ -1248,7 +1278,7 @@ class CellEditDialog(QDialog):
         self.accept()
 
     def value(self):
-        if self.field == "fabric_type":
+        if self.field in ("fabric_type", "entry_location"):
             return self.widget.currentData() or ""
         if self.field == "location":
             d = self.depo.currentData() or ""
@@ -1686,7 +1716,7 @@ class DailyMovementsDialog(QDialog):
             self.count_lbl.setText("Bu tarih aralığında hareket yok")
 
 
-COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Açıklama"]
+COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Giriş Lok.", "Açıklama"]
 _GREEN = QColor("#1B5E20")
 _GREY  = QColor("#BDBDBD")
 _ALT   = QColor("#F0F4FF")
@@ -1810,7 +1840,7 @@ class FabricModel(QAbstractTableModel):
         self._rows = []
         self._ids  = []
 
-    # tuple: 0=id,1=code,2=name,3=color,4=loc,5=tip,6=lot,7=mt,8=kg,9=piece,10=fiyat,11=deger,12=date,13=desc
+    # tuple: 0=id,1=code,2=name,3=color,4=loc,5=tip,6=lot,7=mt,8=kg,9=piece,10=fiyat,11=deger,12=date,13=girisLok,14=desc
     def load(self, rows):
         self.beginResetModel()
         self._rows = []
@@ -1833,6 +1863,7 @@ class FabricModel(QAbstractTableModel):
                 fiy,
                 deger,
                 str(r["updated_at"] or "")[:16],
+                dict(r).get("entry_location") or "",
                 r["description"] or "",
             ))
         self._ids = [r[0] for r in self._rows]
@@ -1873,7 +1904,7 @@ class FabricModel(QAbstractTableModel):
         row, col = index.row(), index.column()
         r = self._rows[row]
 
-        # col: 0=#,1=code,2=name,3=color,4=loc,5=tip,6=lot,7=mt,8=kg,9=piece,10=fiyat,11=deger,12=date,13=desc
+        # col: 0=#,1=code,2=name,3=color,4=loc,5=tip,6=lot,7=mt,8=kg,9=piece,10=fiyat,11=deger,12=date,13=girisLok,14=desc
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0: return str(row + 1)
             val = r[col]
@@ -2263,7 +2294,8 @@ class StockTable(QWidget):
     # Çift tıklanabilen sütunlar → veritabanı alanı
     CELL_FIELDS = {1: "product_code", 2: "product_name", 3: "color", 4: "location",
                    5: "fabric_type", 6: "lot", 7: "meter", 8: "kg",
-                   9: "piece_count", 10: "birim_fiyat", 13: "description"}
+                   9: "piece_count", 10: "birim_fiyat", 13: "entry_location",
+                   14: "description"}
 
     def _cell_edit(self, index):
         if not index.isValid():

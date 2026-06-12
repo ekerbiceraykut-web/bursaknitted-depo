@@ -92,21 +92,25 @@ def get_fabric(fid):
     return _get(f"/api/fabrics/{fid}")
 
 def add_fabric(product_name, product_code, color, location, meter, kg,
-               piece_count, birim_fiyat, fabric_type, lot, description, user_name=""):
+               piece_count, birim_fiyat, fabric_type, lot, description, user_name="",
+               entry_location=""):
     return _post("/api/fabrics", {
         "product_name": product_name, "product_code": product_code,
         "color": color, "location": location, "meter": meter, "kg": kg,
         "piece_count": piece_count, "birim_fiyat": birim_fiyat,
         "fabric_type": fabric_type, "lot": lot, "description": description,
+        "entry_location": entry_location,
     })["id"]
 
 def update_fabric(fid, product_name, product_code, color, location, meter, kg,
-                  piece_count, birim_fiyat, fabric_type, lot, description):
+                  piece_count, birim_fiyat, fabric_type, lot, description,
+                  entry_location=None):
     _put(f"/api/fabrics/{fid}", {
         "product_name": product_name, "product_code": product_code,
         "color": color, "location": location, "meter": meter, "kg": kg,
         "piece_count": piece_count, "birim_fiyat": birim_fiyat,
         "fabric_type": fabric_type, "lot": lot, "description": description,
+        "entry_location": entry_location,
     })
 
 def soft_delete_fabric(fid, user_name=""):
