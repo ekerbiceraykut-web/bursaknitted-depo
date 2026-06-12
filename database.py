@@ -177,11 +177,14 @@ def get_customer(cid):
 
 def add_customer(name, code="", phone="", address=""):
     conn = get_connection()
-    conn.execute(
+    c = conn.execute(
         "INSERT INTO customers (name, code, phone, address) VALUES (?,?,?,?)",
         (name.strip(), code.strip(), phone.strip(), address.strip())
     )
-    conn.commit(); conn.close()
+    conn.commit()
+    cid = c.lastrowid
+    conn.close()
+    return cid
 
 def update_customer(cid, name, code, phone, address, active=1):
     conn = get_connection()

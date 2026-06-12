@@ -97,6 +97,18 @@ class APIHandler(BaseHTTPRequestHandler):
                     qs.get("lot",[""])[0], qs.get("boyahane",[""])[0])
                 self._send(_ok({"exists": exists}))
 
+            # ── Customers ────────────────────────────────────────
+            elif path == "/api/customers":
+                rows = db.get_all_customers(
+                    search=qs.get("search",[""])[0],
+                    active_only=qs.get("active_only",["1"])[0] == "1")
+                self._send(_ok([dict(r) for r in rows]))
+
+            elif path.startswith("/api/customers/"):
+                cid = int(path.split("/")[-1])
+                r = db.get_customer(cid)
+                self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
+
             # ── Locations ────────────────────────────────────────
             elif path == "/api/locations":
                 rows = db.get_active_locations()
@@ -199,6 +211,16 @@ class APIHandler(BaseHTTPRequestHandler):
                 done = db.finalize_lot_if_consumed(body.get("fabric_id"), user["full_name"])
                 self._send(_ok({"finalized": bool(done)}))
 
+            # ── Müşteri ekle / toplu aktar ────────────────────────
+            elif path == "/api/customers":
+                cid = db.add_customer(body.get("name",""), body.get("code",""),
+                                      body.get("phone",""), body.get("address",""))
+                self._send(_ok({"id": cid}))
+
+            elif path == "/api/customers/bulk":
+                n = db.import_customers_bulk(body.get("records", []))
+                self._send(_ok({"count": n}))
+
             # ── Kullanıcı ekle (admin) ────────────────────────────
             elif path == "/api/users":
                 if user.get("role") != "admin":
@@ -231,6 +253,12 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("description","")
                 )
                 self._send(_ok())
+            elif path.startswith("/api/customers/"):
+                cid = int(path.split("/")[-1])
+                db.update_customer(cid, body.get("name",""), body.get("code",""),
+                                   body.get("phone",""), body.get("address",""),
+                                   body.get("active",1))
+                self._send(_ok())
             elif path.startswith("/api/users/") and path.endswith("/password"):
                 uid = int(path.split("/")[-2])
                 if user.get("role") != "admin":
@@ -251,6 +279,10 @@ class APIHandler(BaseHTTPRequestHandler):
             if path.startswith("/api/fabrics/"):
                 fid = int(path.split("/")[-1])
                 db.soft_delete_fabric(fid, user["full_name"])
+                self._send(_ok())
+            elif path.startswith("/api/customers/"):
+                cid = int(path.split("/")[-1])
+                db.delete_customer(cid)
                 self._send(_ok())
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)

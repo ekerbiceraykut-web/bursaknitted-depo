@@ -134,6 +134,32 @@ def add_movement(fid, movement_type, meter, kg, piece_count, notes, user_name=""
     return (r or {}).get("id")
 
 
+# ── Customers ────────────────────────────────────────────────────
+
+def get_all_customers(search="", active_only=True):
+    return _get("/api/customers", {"search": search,
+                                   "active_only": "1" if active_only else "0"}) or []
+
+def get_customer(cid):
+    return _get(f"/api/customers/{cid}")
+
+def add_customer(name, code="", phone="", address=""):
+    r = _post("/api/customers", {"name": name, "code": code,
+                                 "phone": phone, "address": address})
+    return (r or {}).get("id")
+
+def update_customer(cid, name, code, phone, address, active=1):
+    _put(f"/api/customers/{cid}", {"name": name, "code": code, "phone": phone,
+                                   "address": address, "active": active})
+
+def delete_customer(cid):
+    _delete(f"/api/customers/{cid}")
+
+def import_customers_bulk(records):
+    r = _post("/api/customers/bulk", {"records": records})
+    return (r or {}).get("count", 0)
+
+
 # ── Fire kayıtları ───────────────────────────────────────────────
 
 def get_fire_records():
