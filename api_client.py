@@ -121,12 +121,52 @@ def reverse_movement(mid):
 
 # ── Movements ────────────────────────────────────────────────────
 
-def add_movement(fid, movement_type, meter, kg, piece_count, notes, user_name=""):
+def add_movement(fid, movement_type, meter, kg, piece_count, notes, user_name="",
+                 destination="", destination_type="", deduct_meter=None, deduct_kg=None,
+                 out_color="", lab_no="", parti_no=""):
     r = _post("/api/movements", {
         "fabric_id": fid, "movement_type": movement_type,
         "meter": meter, "kg": kg, "piece_count": piece_count, "notes": notes,
+        "destination": destination, "destination_type": destination_type,
+        "deduct_meter": deduct_meter, "deduct_kg": deduct_kg,
+        "out_color": out_color, "lab_no": lab_no, "parti_no": parti_no,
     })
     return (r or {}).get("id")
+
+
+# ── Fire kayıtları ───────────────────────────────────────────────
+
+def get_fire_records():
+    return _get("/api/fire") or []
+
+def add_fire_record(fabric_id, movement_id, product_code, color, lot, boyahane,
+                    customer, pre_meter, pre_kg, out_meter, out_kg, fire_pct,
+                    manual_pct=False, record_type="ÇIKIŞ", user_name="",
+                    out_color="", lab_no="", parti_no=""):
+    r = _post("/api/fire", {
+        "fabric_id": fabric_id, "movement_id": movement_id,
+        "product_code": product_code, "color": color, "lot": lot,
+        "boyahane": boyahane, "customer": customer,
+        "pre_meter": pre_meter, "pre_kg": pre_kg,
+        "out_meter": out_meter, "out_kg": out_kg, "fire_pct": fire_pct,
+        "manual_pct": manual_pct, "record_type": record_type,
+        "out_color": out_color, "lab_no": lab_no, "parti_no": parti_no,
+    })
+    return (r or {}).get("id")
+
+def reset_lot_fire(fabric_id, user_name=""):
+    return _post("/api/fire/reset", {"fabric_id": fabric_id})
+
+def finalize_lot_if_consumed(fabric_id, user_name=""):
+    r = _post("/api/fire/finalize", {"fabric_id": fabric_id})
+    return (r or {}).get("finalized", False)
+
+def lot_total_exists(product_code, color, lot, boyahane):
+    r = _get("/api/fire/total_exists", {
+        "product_code": product_code, "color": color,
+        "lot": lot, "boyahane": boyahane,
+    })
+    return (r or {}).get("exists", False)
 
 def get_movements(fid):
     return _get("/api/movements", {"fabric_id": str(fid)})
