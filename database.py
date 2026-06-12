@@ -658,7 +658,7 @@ def get_all_movements(limit=200):
     conn = get_connection()
     rows = conn.execute("""
         SELECT m.*, f.product_code, f.product_name, f.color,
-               f.location AS fabric_location
+               f.location AS fabric_location, f.entry_location AS entry_location
         FROM movements m
         LEFT JOIN fabrics f ON m.fabric_id = f.id
         ORDER BY m.movement_date DESC LIMIT ?
@@ -672,7 +672,7 @@ def get_movements_by_range(start_date, end_date):
     conn = get_connection()
     rows = conn.execute("""
         SELECT m.*, f.product_code, f.product_name, f.color,
-               f.location AS fabric_location
+               f.location AS fabric_location, f.entry_location AS entry_location
         FROM movements m
         LEFT JOIN fabrics f ON m.fabric_id = f.id
         WHERE date(m.movement_date) BETWEEN ? AND ?

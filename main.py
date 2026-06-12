@@ -1552,7 +1552,7 @@ def _fill_movement_table(table, movements, show_product=False):
     """Hareket tablosunu doldur. show_product=True ise ürün sütunu eklenir.
     Sütunlar elle ayarlanabilir, başlıklar taşınabilir, tıklayınca sıralanır."""
     if show_product:
-        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
+        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Giriş Lok.", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
     else:
         cols = ["Tarih", "Tür", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
 
@@ -1594,6 +1594,7 @@ def _fill_movement_table(table, movements, show_product=False):
         if show_product:
             _set(m["product_code"] or "")
             _set(m["color"] or "")
+            _set(m.get("entry_location") or "", color="#00695C")   # köken
             # Hareketin yapıldığı lokasyon; eski kayıtlarda kumaşın güncel lokasyonu
             _set(m.get("location") or m.get("fabric_location") or "")
         _set(f"{m['meter']:,.2f}" if m["meter"] else "", sort_key=m["meter"] or 0)
@@ -1634,9 +1635,12 @@ class MovementsDialog(QDialog):
         self.setMinimumSize(750, 480)
         layout = QVBoxLayout(self)
 
+        entry = dict(fabric).get("entry_location") or ""
+        entry_html = f" — <span style='color:#00695C'>Giriş Lok: {entry}</span>" if entry else ""
         info = QLabel(
             f"<b>{fabric['product_name'] or ''} {fabric['product_code']}</b>"
             f" — {fabric['color']} — <span style='color:#545454'>{fabric['location']}</span>"
+            f"{entry_html}"
         )
         info.setStyleSheet("font-size:14px; padding:6px; background:#E3F2FD; border-radius:4px;")
         layout.addWidget(info)
