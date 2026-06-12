@@ -79,7 +79,8 @@ def _build_html():
     mv_rows = ""
     for m in today_mv:
         t   = m["movement_type"]
-        clr = "#2E7D32" if t == "GİRİŞ" else ("#880E4F" if t == "SİLME" else "#C62828")
+        clr = {"GİRİŞ": "#2E7D32", "SATINALMA GİRİŞİ": "#1565C0",
+               "SİLME": "#880E4F"}.get(t, "#C62828")
         dest = m.get("destination") or ""
         dest_type = m.get("destination_type") or ""
         dest_lbl = f"{dest_type}: {dest}" if dest and dest_type else dest

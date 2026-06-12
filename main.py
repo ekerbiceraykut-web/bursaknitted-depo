@@ -1035,21 +1035,22 @@ class FabricDialog(QDialog):
         form.addRow("Ürün Kodu *:", self.product_code)
         form.addRow("Ürün Bilgisi:", self.product_name)
         form.addRow("Renk:", self.color)
-        form.addRow("Lokasyon *:", self.depo)
-        form.addRow(self.raf_label, self.raf)
-        self.raf_label.setVisible(False)
-        self.raf.setVisible(False)
 
-        # Giriş lokasyonu — köken takibi (taşınsa bile değişmez)
+        # Satın alma lokasyonu — köken takibi (taşınsa bile değişmez)
         self.entry_loc = QComboBox()
-        self.entry_loc.addItem("— Lokasyon ile aynı —", "")
+        self.entry_loc.addItem("— Hedef lokasyon ile aynı —", "")
         for name in self._depo_rafs:
             self.entry_loc.addItem(name, name)
         for i in range(self.depo.count()):
             d = self.depo.itemData(i)
             if d and d != "__DEPO__":
                 self.entry_loc.addItem(d, d)
-        form.addRow("Giriş Lokasyonu:", self.entry_loc)
+        form.addRow("Satın Alma Lokasyonu:", self.entry_loc)
+
+        form.addRow("Hedef Lokasyon *:", self.depo)
+        form.addRow(self.raf_label, self.raf)
+        self.raf_label.setVisible(False)
+        self.raf.setVisible(False)
         form.addRow("Kumaş Tipi *:", self.fabric_type)
         form.addRow("Lot:", self.lot)
         form.addRow("Metre:", self.meter)
@@ -1137,7 +1138,7 @@ class FabricDialog(QDialog):
         if not self.product_code.text().strip():
             errors.append("• Ürün kodu zorunludur")
         if not self.depo.currentData():
-            errors.append("• Lokasyon seçilmelidir")
+            errors.append("• Hedef lokasyon seçilmelidir")
         elif self.depo.currentData() == "__DEPO__" and not self.raf.currentData():
             errors.append("• Raf seçilmelidir")
         if not self.fabric_type.currentData():
@@ -1545,14 +1546,15 @@ class MovementDialog(QDialog):
         return d
 
 
-TYPE_COLORS = {"GİRİŞ": "#2E7D32", "ÇIKIŞ": "#C62828", "SİLME": "#880E4F"}
+TYPE_COLORS = {"GİRİŞ": "#2E7D32", "SATINALMA GİRİŞİ": "#1565C0",
+               "ÇIKIŞ": "#C62828", "SİLME": "#880E4F"}
 
 
 def _fill_movement_table(table, movements, show_product=False):
     """Hareket tablosunu doldur. show_product=True ise ürün sütunu eklenir.
     Sütunlar elle ayarlanabilir, başlıklar taşınabilir, tıklayınca sıralanır."""
     if show_product:
-        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Giriş Lok.", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
+        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Satın Alma Lok.", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
     else:
         cols = ["Tarih", "Tür", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
 
@@ -1622,9 +1624,23 @@ def _fill_movement_table(table, movements, show_product=False):
         _set(notes)
 
     table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
-    if not table.property("cols_sized"):
-        table.resizeColumnsToContents()   # ilk dolduruşta makul genişlik
-        table.setProperty("cols_sized", True)
+
+    # Sütun düzeni (sıra + genişlik) kalıcı: kapatıp açınca aynı kalır
+    if not table.property("hdr_wired"):
+        from PyQt6.QtCore import QSettings
+        key = "mv_header_p" if show_product else "mv_header_s"
+        settings = QSettings("BursaKnitted", "DepoTakip")
+        st = settings.value(key)
+        restored = False
+        if st is not None:
+            restored = hdr.restoreState(st)
+        if not restored:
+            table.resizeColumnsToContents()   # kayıt yoksa makul genişlik
+        def _save_hdr(*a):
+            QSettings("BursaKnitted", "DepoTakip").setValue(key, hdr.saveState())
+        hdr.sectionMoved.connect(_save_hdr)
+        hdr.sectionResized.connect(_save_hdr)
+        table.setProperty("hdr_wired", True)
 
 
 class MovementsDialog(QDialog):
@@ -1636,7 +1652,7 @@ class MovementsDialog(QDialog):
         layout = QVBoxLayout(self)
 
         entry = dict(fabric).get("entry_location") or ""
-        entry_html = f" — <span style='color:#00695C'>Giriş Lok: {entry}</span>" if entry else ""
+        entry_html = f" — <span style='color:#00695C'>Satın Alma Lok: {entry}</span>" if entry else ""
         info = QLabel(
             f"<b>{fabric['product_name'] or ''} {fabric['product_code']}</b>"
             f" — {fabric['color']} — <span style='color:#545454'>{fabric['location']}</span>"
@@ -1710,7 +1726,7 @@ class DailyMovementsDialog(QDialog):
         filt.addWidget(QLabel("Tür:"))
         self.tur_filter = QComboBox()
         self.tur_filter.addItem("Tümü", "")
-        for t in ["GİRİŞ", "ÇIKIŞ", "SİLME"]:
+        for t in ["GİRİŞ", "SATINALMA GİRİŞİ", "ÇIKIŞ", "SİLME"]:
             self.tur_filter.addItem(t, t)
         self.tur_filter.currentIndexChanged.connect(self._load)
         filt.addWidget(self.tur_filter)
@@ -1792,7 +1808,8 @@ class DailyMovementsDialog(QDialog):
 
         _fill_movement_table(self.table, movements, show_product=True)
         if movements:
-            in_m = sum(m["meter"] or 0 for m in movements if m["movement_type"] == "GİRİŞ")
+            in_m = sum(m["meter"] or 0 for m in movements
+                       if m["movement_type"] in ("GİRİŞ", "SATINALMA GİRİŞİ"))
             out_m = sum(m["meter"] or 0 for m in movements if m["movement_type"] == "ÇIKIŞ")
             suffix = f" / toplam {len(all_mv)}" if len(movements) != len(all_mv) else ""
             self.count_lbl.setText(
@@ -1802,7 +1819,7 @@ class DailyMovementsDialog(QDialog):
             self.count_lbl.setText("Bu kriterlere uyan hareket yok")
 
 
-COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Giriş Lok.", "Açıklama"]
+COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok.", "Açıklama"]
 _GREEN = QColor("#1B5E20")
 _GREY  = QColor("#BDBDBD")
 _ALT   = QColor("#F0F4FF")
@@ -2078,7 +2095,7 @@ class StockTable(QWidget):
         btn_edit  = QPushButton("✎ Düzenle");    btn_edit.clicked.connect(self._edit)
         btn_del   = QPushButton("✕ Sil");        btn_del.clicked.connect(self._delete)
         btn_hist  = QPushButton("☰ Hareketler"); btn_hist.clicked.connect(self._history)
-        btn_hist.setToolTip("Satır seçiliyse: o ürünün tüm hareketleri\nSeçili satır yoksa: tarih aralığına göre hareketler")
+        btn_hist.setToolTip("Tüm hareketler — tarih aralığı ve filtrelerle\nSatır seçiliyse o ürünün geçmişi hazır gelir")
 
         btn_giris.setStyleSheet(f"background:{COLORS['success']}; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
         btn_cikis.setStyleSheet(f"background:{COLORS['danger']}; color:white; font-weight:bold; border-radius:4px; padding:7px 14px;")
@@ -2403,14 +2420,16 @@ class StockTable(QWidget):
             self.refresh_with_locations()
 
     def _history(self):
+        dlg = DailyMovementsDialog(self)
         idx = self.table.selectionModel().currentIndex()
         if idx.isValid():
             fid = self._model.id_at(idx.row())
             if fid:
                 fabric = db.get_fabric(fid)
-                MovementsDialog(self, fabric).exec()
-                return
-        DailyMovementsDialog(self).exec()
+                # Seçili ürünün tüm geçmişi hazır gelsin; filtreler değiştirilebilir
+                dlg.search_box.setText(fabric["product_code"] or "")
+                dlg._set_preset(None)
+        dlg.exec()
 
     def _context_menu(self, pos):
         from PyQt6.QtWidgets import QMenu

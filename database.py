@@ -153,6 +153,15 @@ def init_db():
     except Exception:
         pass
 
+    # Eski 'İlk stok girişi' hareketlerini satın alma girişi olarak işaretle
+    try:
+        c.execute("""
+            UPDATE movements SET movement_type='SATINALMA GİRİŞİ'
+            WHERE movement_type='GİRİŞ' AND notes='İlk stok girişi'
+        """)
+    except Exception:
+        pass
+
     conn.commit()
 
     # Mevcut fabric lokasyonlarından locations tablosunu otomatik doldur
@@ -438,9 +447,10 @@ def add_fabric(product_name, product_code, color, location, meter, kg,
     fabric_id = c.lastrowid
     if meter or kg:
         c.execute("""
-            INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count, notes, user_name)
-            VALUES (?, 'GİRİŞ', ?, ?, ?, 'İlk stok girişi', ?)
-        """, (fabric_id, meter or 0, kg or 0, piece_count, user_name))
+            INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count,
+                                   notes, user_name, location)
+            VALUES (?, 'SATINALMA GİRİŞİ', ?, ?, ?, 'Satın alma girişi', ?, ?)
+        """, (fabric_id, meter or 0, kg or 0, piece_count, user_name, location))
     conn.commit()
     conn.close()
     return fabric_id
@@ -495,7 +505,7 @@ def reverse_movement(movement_id):
         fabric = conn.execute("SELECT meter, kg, piece_count FROM fabrics WHERE id=?",
                               (mv["fabric_id"],)).fetchone()
         if fabric:
-            if mv["movement_type"] == "GİRİŞ":
+            if mv["movement_type"] in ("GİRİŞ", "SATINALMA GİRİŞİ"):
                 new_meter = max(0, (fabric["meter"] or 0) - (mv["meter"] or 0))
                 new_kg    = max(0, (fabric["kg"] or 0) - (mv["kg"] or 0))
                 new_pieces = _apply_piece_delta(fabric["piece_count"], mv["piece_count"], -1)
