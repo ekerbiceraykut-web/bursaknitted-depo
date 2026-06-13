@@ -18,13 +18,64 @@ from PyQt6.QtGui import QFont, QColor, QIcon, QBrush, QPixmap
 # Bağlantı modu: "local" veya "remote"
 CONNECTION_MODE = "local"
 
+# Liste döndüren api_client fonksiyonları: uzak çağrı hata verirse _load() metotlarının
+# `len(rows)`/`for r in rows` ile çökmemesi için boş liste döndürülür.
+_LIST_FUNCS = {
+    "get_all_fabrics", "get_all_customers", "get_all_suppliers",
+    "get_all_products", "get_all_locations", "get_active_locations",
+    "get_locations", "get_all_users", "get_fire_records",
+    "get_movements", "get_all_movements", "get_movements_by_range",
+}
+
+_REAUTH_IN_PROGRESS = False
+
+def _handle_remote_error(func_name, exc):
+    """Uzak API çağrısı başarısız olunca uygulamayı çökertmek yerine kullanıcıyı bilgilendirir;
+    oturum geçersizse (sunucu yeniden başlamış olabilir) yeniden giriş ekranını açar."""
+    global CONNECTION_MODE, _REAUTH_IN_PROGRESS
+    msg = str(exc)
+    parent = QApplication.activeWindow()
+
+    if "Yetkisiz" in msg:
+        if _REAUTH_IN_PROGRESS:
+            return
+        _REAUTH_IN_PROGRESS = True
+        try:
+            QMessageBox.warning(parent, "Oturum Sona Erdi",
+                "Sunucu oturumu geçersiz hale geldi (sunucu yeniden başlamış olabilir).\n"
+                "Lütfen yeniden giriş yapın.")
+            dlg = LoginDialog(parent)
+            dlg.setWindowModality(Qt.WindowModality.ApplicationModal)
+            if dlg.exec():
+                for w in QApplication.topLevelWidgets():
+                    if isinstance(w, MainWindow):
+                        w._update_user_label()
+                        w._rebuild_tabs()
+        finally:
+            _REAUTH_IN_PROGRESS = False
+    else:
+        QMessageBox.critical(parent, "Bağlantı Hatası",
+            f"Sunucu ile iletişim kurulamadı:\n\n{msg}")
+
 class _DbProxy:
-    """db.xxx çağrılarını CONNECTION_MODE'a göre local veya remote'a yönlendirir."""
+    """db.xxx çağrılarını CONNECTION_MODE'a göre local veya remote'a yönlendirir.
+    Uzak moddaki hatalar burada yakalanır, kullanıcıya gösterilir ve uygulamanın
+    çökmesi yerine güvenli bir varsayılan değer döndürülür."""
     def __getattr__(self, name):
-        if CONNECTION_MODE == "remote":
-            import api_client
-            return getattr(api_client, name)
-        return getattr(db, name)
+        if CONNECTION_MODE != "remote":
+            return getattr(db, name)
+        import api_client
+        attr = getattr(api_client, name)
+        if not callable(attr):
+            return attr
+
+        def wrapper(*args, **kwargs):
+            try:
+                return attr(*args, **kwargs)
+            except Exception as e:
+                _handle_remote_error(name, e)
+                return [] if name in _LIST_FUNCS else None
+        return wrapper
 
 _db = _DbProxy()   # tüm kod db yerine _db kullanır ama mevcut kod db değişkenini kullanıyor,
                    # bu yüzden modül seviyesinde db'yi proxy ile değiştiriyoruz

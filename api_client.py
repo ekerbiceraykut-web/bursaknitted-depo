@@ -43,7 +43,7 @@ def _headers():
     return h
 
 def _request(req, timeout):
-    """İsteği çalıştır; hata durumunda sunucunun mesajını ilet (HTTP 4xx/5xx dahil)."""
+    """İsteği çalıştır; hata durumunda sunucunun mesajını ilet (HTTP 4xx/5xx, ağ/timeout dahil)."""
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             resp = json.loads(r.read())
@@ -52,6 +52,8 @@ def _request(req, timeout):
             resp = json.loads(e.read())
         except Exception:
             raise Exception(f"Sunucu hatası (HTTP {e.code})")
+    except (urllib.error.URLError, OSError) as e:
+        raise Exception(f"Sunucuya bağlanılamadı: {getattr(e, 'reason', e)}")
     if not resp.get("ok"):
         raise Exception(resp.get("error", "API hatası"))
     return resp.get("data")
