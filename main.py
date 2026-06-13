@@ -1304,10 +1304,8 @@ class FabricDialog(QDialog):
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.product_code.currentIndexChanged.connect(self._on_product_change)
 
-        # Ürün bilgisi — seçilen ürün koduna göre katalogdan otomatik gelir
+        # Ürün açıklaması — serbest metin, elle girilir
         self.product_name = QLineEdit()
-        self.product_name.setReadOnly(True)
-        self.product_name.setStyleSheet("background:#F5F5F5; color:#616161;")
 
         self.color = QLineEdit()
         self._load_products()
@@ -1349,7 +1347,7 @@ class FabricDialog(QDialog):
         self.description.setMaximumHeight(70)
 
         form.addRow("Ürün Kodu *:", self.product_code)
-        form.addRow("Ürün Bilgisi:", self.product_name)
+        form.addRow("Ürün Açıklaması:", self.product_name)
         form.addRow("Renk:", self.color)
 
         # Satın alma lokasyonu — köken takibi (taşınsa bile değişmez)
@@ -1416,7 +1414,6 @@ class FabricDialog(QDialog):
         if code == "__NEW__":
             self._add_new_product()
             return
-        self.product_name.setText(self._products.get(code, ""))
 
     def _add_new_product(self):
         """Katalogda olmayan bir ürün kodu için hızlı ekleme."""
@@ -1481,6 +1478,7 @@ class FabricDialog(QDialog):
 
     def _populate(self, f):
         self._load_products(select_code=f["product_code"] or "", select_name=f["product_name"] or "")
+        self.product_name.setText(f["product_name"] or "")
         self.color.setText(f["color"] or "")
         # Lokasyonu seç — raf ise DEPO + raf, değilse doğrudan
         loc_val = f["location"] or ""
