@@ -444,8 +444,10 @@ def _excel_val_to_str(val):
     return str(val).strip()
 
 
-def _wire_header_persistence(table, key):
-    """Sütun sırası ve genişliği kalıcı: kapatıp açınca aynı kalır."""
+def _wire_header_persistence(table, key, default_fn=None):
+    """Sütun sırası ve genişliği kalıcı: kapatıp açınca aynı kalır.
+    default_fn: kayıtlı durum yoksa (ilk çalıştırma) uygulanacak varsayılan
+    sütun genişlikleri; verilmezse table.resizeColumnsToContents() kullanılır."""
     if table.property("hdr_wired"):
         return
     from PyQt6.QtCore import QSettings
@@ -456,7 +458,10 @@ def _wire_header_persistence(table, key):
     if st is not None:
         restored = hdr.restoreState(st)
     if not restored:
-        table.resizeColumnsToContents()
+        if default_fn:
+            default_fn()
+        else:
+            table.resizeColumnsToContents()
     # sectionResized, sürükleyerek yeniden boyutlandırma sırasında (mouseMoveEvent
     # içinden) art arda tetiklenir; o anda hdr.saveState() çağırmak macOS'ta
     # QHeaderView::resizeSection içinde yeniden girilebilirlik (reentrancy) sorunu
@@ -2455,7 +2460,7 @@ class DailyMovementsDialog(QDialog):
             self.count_lbl.setText("Bu kriterlere uyan hareket yok")
 
 
-COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok."]
+COLS = ["#", "Ürün Kodu", "Ürün Açıklaması", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok."]
 _GREEN = QColor("#1B5E20")
 _GREY  = QColor("#BDBDBD")
 _ALT   = QColor("#F0F4FF")
@@ -2769,10 +2774,12 @@ class StockTable(QWidget):
         hdr.setMinimumSectionSize(40)
         hdr.setSectionsMovable(True)   # sütun sürükle-bırak
 
-        # Başlangıç genişlikleri
+        # Başlangıç genişlikleri (kayıtlı sütun düzeni yoksa kullanılır)
         col_widths = [36, 100, 130, 160, 110, 90, 70, 90, 72, 65, 80, 110, 120, 130, 220]
-        for i, w in enumerate(col_widths):
-            self.table.setColumnWidth(i, w)
+        def _default_widths():
+            for i, w in enumerate(col_widths):
+                self.table.setColumnWidth(i, w)
+        _wire_header_persistence(self.table, "stock_header", _default_widths)
 
         layout.addWidget(self.table)
 
