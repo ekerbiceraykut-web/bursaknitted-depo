@@ -2455,7 +2455,7 @@ class DailyMovementsDialog(QDialog):
             self.count_lbl.setText("Bu kriterlere uyan hareket yok")
 
 
-COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok.", "Açıklama"]
+COLS = ["#", "Ürün Kodu", "Ürün Bilgisi", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok."]
 _GREEN = QColor("#1B5E20")
 _GREY  = QColor("#BDBDBD")
 _ALT   = QColor("#F0F4FF")
@@ -2579,7 +2579,7 @@ class FabricModel(QAbstractTableModel):
         self._rows = []
         self._ids  = []
 
-    # tuple: 0=id,1=code,2=name,3=color,4=loc,5=tip,6=lot,7=mt,8=kg,9=piece,10=fiyat,11=deger,12=date,13=girisLok,14=desc
+    # tuple: 0=id,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok
     def load(self, rows):
         self.beginResetModel()
         self._rows = []
@@ -2592,6 +2592,7 @@ class FabricModel(QAbstractTableModel):
                 r["id"],
                 r["product_code"] or "",
                 r["product_name"] or "",
+                r["description"] or "",
                 r["color"] or "",
                 r["location"] or "",
                 r["fabric_type"] or "",
@@ -2603,7 +2604,6 @@ class FabricModel(QAbstractTableModel):
                 deger,
                 str(r["updated_at"] or "")[:16],
                 dict(r).get("entry_location") or "",
-                r["description"] or "",
             ))
         self._ids = [r[0] for r in self._rows]
         self.endResetModel()
@@ -2626,8 +2626,8 @@ class FabricModel(QAbstractTableModel):
             return
         self.layoutAboutToBeChanged.emit()
         reverse = (order == Qt.SortOrder.DescendingOrder)
-        # Sayısal sütunlar: 7=mt, 8=kg, 10=fiyat, 11=değer
-        numeric = {7, 8, 10, 11}
+        # Sayısal sütunlar: 8=mt, 9=kg, 11=fiyat, 12=değer
+        numeric = {8, 9, 11, 12}
         def key(r):
             v = r[col]
             if col in numeric:
@@ -2643,35 +2643,35 @@ class FabricModel(QAbstractTableModel):
         row, col = index.row(), index.column()
         r = self._rows[row]
 
-        # col: 0=#,1=code,2=name,3=color,4=loc,5=tip,6=lot,7=mt,8=kg,9=piece,10=fiyat,11=deger,12=date,13=girisLok,14=desc
+        # col: 0=#,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0: return str(row + 1)
             val = r[col]
-            if col in (7, 8): return f"{val:.2f}"
-            if col == 10: return f"{val:,.2f} $" if val else "—"
+            if col in (8, 9): return f"{val:.2f}"
             if col == 11: return f"{val:,.2f} $" if val else "—"
+            if col == 12: return f"{val:,.2f} $" if val else "—"
             return str(val)
 
         if role == Qt.ItemDataRole.TextAlignmentRole:
-            if col in (7, 8, 10, 11):
+            if col in (8, 9, 11, 12):
                 return int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight)
             return int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft)
 
         if role == Qt.ItemDataRole.ForegroundRole:
-            if col in (7, 8):
+            if col in (8, 9):
                 return QBrush(_GREY if r[col] == 0 else _GREEN)
-            if col == 11 and r[11] > 0:
+            if col == 12 and r[12] > 0:
                 return QBrush(QColor("#1A237E"))
-            if col == 5:
+            if col == 6:
                 return QBrush({"HAM": QColor("#5D4037"),
                                 "PFD": QColor("#00695C"),
                                 "BOYALI": QColor("#545454"),
-                                "BASKILI": QColor("#6A1B9A")}.get(r[5], QColor("#333")))
-            if col == 6 and _AUTO_LOT.match(r[6]):
+                                "BASKILI": QColor("#6A1B9A")}.get(r[6], QColor("#333")))
+            if col == 7 and _AUTO_LOT.match(r[7]):
                 return QBrush(QColor("#78909C"))
 
         if role == Qt.ItemDataRole.FontRole:
-            if col == 6 and _AUTO_LOT.match(r[6]):
+            if col == 7 and _AUTO_LOT.match(r[7]):
                 f = QFont(); f.setItalic(True); return f
 
         if role == Qt.ItemDataRole.BackgroundRole:
@@ -2681,10 +2681,10 @@ class FabricModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.ToolTipRole:
             val = r[col]
             if col == 0: return str(row + 1)
-            if col in (7, 8): return f"{val:.2f}"
-            if col == 10: return f"{val:,.2f} $" if val else "Fiyat girilmemiş"
-            if col == 11: return f"{val:,.2f} $" if val else "—"
-            if col == 6 and _AUTO_LOT.match(r[6]):
+            if col in (8, 9): return f"{val:.2f}"
+            if col == 11: return f"{val:,.2f} $" if val else "Fiyat girilmemiş"
+            if col == 12: return f"{val:,.2f} $" if val else "—"
+            if col == 7 and _AUTO_LOT.match(r[7]):
                 return f"{val}\n(Otomatik verilen lot numarası)"
             return str(val) if val else ""
 
@@ -2770,7 +2770,7 @@ class StockTable(QWidget):
         hdr.setSectionsMovable(True)   # sütun sürükle-bırak
 
         # Başlangıç genişlikleri
-        col_widths = [36, 100, 130, 110, 90, 70, 90, 72, 65, 80, 110, 120, 130, 220]
+        col_widths = [36, 100, 130, 160, 110, 90, 70, 90, 72, 65, 80, 110, 120, 130, 220]
         for i, w in enumerate(col_widths):
             self.table.setColumnWidth(i, w)
 
@@ -3031,10 +3031,9 @@ class StockTable(QWidget):
             self.refresh()
 
     # Çift tıklanabilen sütunlar → veritabanı alanı
-    CELL_FIELDS = {1: "product_code", 2: "product_name", 3: "color", 4: "location",
-                   5: "fabric_type", 6: "lot", 7: "meter", 8: "kg",
-                   9: "piece_count", 10: "birim_fiyat", 13: "entry_location",
-                   14: "description"}
+    CELL_FIELDS = {1: "product_code", 2: "product_name", 3: "description", 4: "color",
+                   5: "location", 6: "fabric_type", 7: "lot", 8: "meter", 9: "kg",
+                   10: "piece_count", 11: "birim_fiyat", 14: "entry_location"}
 
     def _cell_edit(self, index):
         if not index.isValid():
