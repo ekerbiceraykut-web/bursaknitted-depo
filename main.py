@@ -919,6 +919,10 @@ class ProductManagementDialog(QDialog):
             s = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
             s.setForeground(QBrush(QColor("#2E7D32" if r["active"] else "#C62828")))
             self.table.setItem(i, 8, s)
+            for col in range(self.table.columnCount()):
+                cell = self.table.item(i, col)
+                if cell and cell.text():
+                    cell.setToolTip(cell.text())   # sığmayan yazılar üzerine gelince okunur
         self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
         _wire_header_persistence(self.table, "products_header")
 
