@@ -308,7 +308,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("product_code",""), body.get("product_name",""),
                     body.get("composition",""),  body.get("width",""),
                     body.get("gramaj",""),        body.get("shrinkage",""),
-                    body.get("price",0),          body.get("supplier","")
+                    body.get("price",0),          body.get("supplier",""),
+                    body.get("reference_code","")
                 )
                 self._send(_ok({"id": pid}))
 
@@ -368,7 +369,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("composition",""),  body.get("width",""),
                     body.get("gramaj",""),        body.get("shrinkage",""),
                     body.get("price",0),          body.get("supplier",""),
-                    body.get("active",1)
+                    body.get("active",1),         body.get("reference_code","")
                 )
                 self._send(_ok())
             elif path.startswith("/api/locations/"):

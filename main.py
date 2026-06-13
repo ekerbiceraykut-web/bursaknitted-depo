@@ -338,24 +338,26 @@ SUPPLIER_AUTO = {
 }
 
 PRODUCT_FIELDS = [
-    ("product_code", "Ürün Kodu",          True),
-    ("product_name", "Ürün Adı/Bilgisi",   False),
-    ("composition",  "Kompozisyon",        False),
-    ("width",        "En",                 False),
-    ("gramaj",       "Gramaj",             False),
-    ("shrinkage",    "Çekme",              False),
-    ("price",        "Fiyat",              False),
-    ("supplier",     "Tedarikçi/Fason",    False),
+    ("product_code",   "Ürün Kodu",          True),
+    ("reference_code", "Kumaş Kodu",         False),
+    ("product_name",   "Ürün Adı/Bilgisi",   False),
+    ("composition",    "Kompozisyon",        False),
+    ("width",          "En",                 False),
+    ("gramaj",         "Gramaj",             False),
+    ("shrinkage",      "Çekme",              False),
+    ("price",          "Fiyat",              False),
+    ("supplier",       "Tedarikçi/Fason",    False),
 ]
 PRODUCT_AUTO = {
-    "product_code": ["kumas","kumas_kodu","ürün kodu","urun kodu","product_code","kod"],
-    "product_name": ["kumas_on_adi","kumas_adi","ürün adı","urun adi","ürün bilgisi","product_name","ad"],
-    "composition":  ["kumas_bilesimi","bilesim","bileşim","kompozisyon","composition"],
-    "width":        ["kumas_en","en","width"],
-    "gramaj":       ["kumas_gramaj","gramaj","gsm"],
-    "shrinkage":    ["kumas_cekme","cekme","çekme","shrinkage"],
-    "price":        ["kumas_fiy","fiyat","price","birim_fiyat"],
-    "supplier":     ["kumas_fason_id","fason","tedarikci","tedarikçi","supplier"],
+    "product_code":   ["kumas","ürün kodu","urun kodu","product_code","kod"],
+    "reference_code": ["kumas_kodu","kumaş kodu","kumas kodu","referans"],
+    "product_name":   ["kumas_on_adi","kumas_adi","ürün adı","urun adi","ürün bilgisi","product_name","ad"],
+    "composition":    ["kumas_bilesimi","bilesim","bileşim","kompozisyon","composition"],
+    "width":          ["kumas_en","en","width"],
+    "gramaj":         ["kumas_gramaj","gramaj","gsm"],
+    "shrinkage":      ["kumas_cekme","cekme","çekme","shrinkage"],
+    "price":          ["kumas_fiy","fiyat","price","birim_fiyat"],
+    "supplier":       ["kumas_fason_id","fason","tedarikci","tedarikçi","supplier"],
 }
 
 
@@ -368,6 +370,26 @@ def _excel_val_to_str(val):
             return str(int(val))
         return str(val)
     return str(val).strip()
+
+
+def _wire_header_persistence(table, key):
+    """Sütun sırası ve genişliği kalıcı: kapatıp açınca aynı kalır."""
+    if table.property("hdr_wired"):
+        return
+    from PyQt6.QtCore import QSettings
+    hdr = table.horizontalHeader()
+    settings = QSettings("BursaKnitted", "DepoTakip")
+    st = settings.value(key)
+    restored = False
+    if st is not None:
+        restored = hdr.restoreState(st)
+    if not restored:
+        table.resizeColumnsToContents()
+    def _save_hdr(*a):
+        QSettings("BursaKnitted", "DepoTakip").setValue(key, hdr.saveState())
+    hdr.sectionMoved.connect(_save_hdr)
+    hdr.sectionResized.connect(_save_hdr)
+    table.setProperty("hdr_wired", True)
 
 
 class ExcelColumnMapDialog(QDialog):
@@ -768,15 +790,16 @@ class ProductManagementDialog(QDialog):
         lay.addLayout(top)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(8)
+        self.table.setColumnCount(9)
         self.table.setHorizontalHeaderLabels(
-            ["Ürün Kodu", "Ürün Adı/Bilgisi", "Kompozisyon", "En", "Gramaj", "Fiyat", "Tedarikçi/Fason", "Durum"])
+            ["Ürün Kodu", "Kumaş Kodu", "Ürün Adı/Bilgisi", "Kompozisyon", "En", "Gramaj", "Fiyat", "Tedarikçi/Fason", "Durum"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for i in (0,2,3,4,5,6,7): hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)   # elle genişlik
+        hdr.setStretchLastSection(False)
+        hdr.setSectionsMovable(True)   # sütun sürükle-bırak
         lay.addWidget(self.table)
 
         btn_row = QHBoxLayout()
@@ -802,17 +825,21 @@ class ProductManagementDialog(QDialog):
             code_item = QTableWidgetItem(r["product_code"] or "")
             code_item.setData(Qt.ItemDataRole.UserRole, r["id"])
             self.table.setItem(i, 0, code_item)
-            self.table.setItem(i, 1, QTableWidgetItem(r["product_name"] or ""))
-            self.table.setItem(i, 2, QTableWidgetItem(r["composition"] or ""))
-            self.table.setItem(i, 3, QTableWidgetItem(r["width"] or ""))
-            self.table.setItem(i, 4, QTableWidgetItem(r["gramaj"] or ""))
+            self.table.setItem(i, 1, QTableWidgetItem(r["reference_code"] or ""))
+            self.table.setItem(i, 2, QTableWidgetItem(r["product_name"] or ""))
+            self.table.setItem(i, 3, QTableWidgetItem(r["composition"] or ""))
+            self.table.setItem(i, 4, QTableWidgetItem(r["width"] or ""))
+            self.table.setItem(i, 5, QTableWidgetItem(r["gramaj"] or ""))
             price = r["price"] or 0
-            self.table.setItem(i, 5, QTableWidgetItem(f"{price:,.2f}" if price else ""))
-            self.table.setItem(i, 6, QTableWidgetItem(r["supplier"] or ""))
+            price_item = _FireSortItem(f"{price:,.2f}" if price else "")
+            price_item.setData(Qt.ItemDataRole.UserRole, price)
+            self.table.setItem(i, 6, price_item)
+            self.table.setItem(i, 7, QTableWidgetItem(r["supplier"] or ""))
             s = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
             s.setForeground(QBrush(QColor("#2E7D32" if r["active"] else "#C62828")))
-            self.table.setItem(i, 7, s)
+            self.table.setItem(i, 8, s)
         self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
+        _wire_header_persistence(self.table, "products_header")
 
     def _selected_id(self):
         row = self.table.currentRow()
@@ -823,6 +850,7 @@ class ProductManagementDialog(QDialog):
         dlg = QDialog(self); dlg.setWindowTitle("Ürün" + (" Düzenle" if p else " Ekle"))
         dlg.setMinimumWidth(380); lay = QVBoxLayout(dlg); form = QFormLayout(); form.setSpacing(8)
         dlg.code     = QLineEdit(p["product_code"] if p else "")
+        dlg.ref      = QLineEdit(p["reference_code"] if p else "")
         dlg.name     = QLineEdit(p["product_name"] if p else "")
         dlg.comp     = QLineEdit(p["composition"] if p else "")
         dlg.width    = QLineEdit(p["width"] if p else "")
@@ -832,6 +860,7 @@ class ProductManagementDialog(QDialog):
         dlg.price.setValue(p["price"] if (p and p["price"]) else 0)
         dlg.supplier = QLineEdit(p["supplier"] if p else "")
         form.addRow("Ürün Kodu *:", dlg.code)
+        form.addRow("Kumaş Kodu:", dlg.ref)
         form.addRow("Ürün Adı/Bilgisi:", dlg.name)
         form.addRow("Kompozisyon:", dlg.comp)
         form.addRow("En:", dlg.width)
@@ -853,7 +882,8 @@ class ProductManagementDialog(QDialog):
                 return QMessageBox.warning(self,"Hata","Ürün kodu zorunlu!")
             try:
                 db.add_product(code, dlg.name.text(), dlg.comp.text(), dlg.width.text(),
-                               dlg.gramaj.text(), dlg.shrink.text(), dlg.price.value(), dlg.supplier.text())
+                               dlg.gramaj.text(), dlg.shrink.text(), dlg.price.value(), dlg.supplier.text(),
+                               reference_code=dlg.ref.text())
                 self._load(self.search.text())
             except Exception as e:
                 QMessageBox.critical(self,"Hata",f"Eklenemedi:\n{e}")
@@ -869,7 +899,7 @@ class ProductManagementDialog(QDialog):
                 return QMessageBox.warning(self,"Hata","Ürün kodu zorunlu!")
             db.update_product(pid, code, dlg.name.text(), dlg.comp.text(), dlg.width.text(),
                               dlg.gramaj.text(), dlg.shrink.text(), dlg.price.value(), dlg.supplier.text(),
-                              p["active"])
+                              p["active"], reference_code=dlg.ref.text())
             self._load(self.search.text())
 
     def _delete(self):

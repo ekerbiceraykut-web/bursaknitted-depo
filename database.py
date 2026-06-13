@@ -106,6 +106,7 @@ def init_db():
         CREATE TABLE IF NOT EXISTS products (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             product_code TEXT UNIQUE NOT NULL,
+            reference_code TEXT DEFAULT '',
             product_name TEXT DEFAULT '',
             composition TEXT DEFAULT '',
             width TEXT DEFAULT '',
@@ -170,6 +171,7 @@ def init_db():
         "ALTER TABLE fabrics ADD COLUMN entry_location TEXT DEFAULT ''",
         "ALTER TABLE movements ADD COLUMN location TEXT DEFAULT ''",
         "ALTER TABLE customers ADD COLUMN tax_no TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN reference_code TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -361,9 +363,9 @@ def get_all_products(search="", active_only=True):
     if active_only:
         q += " AND active=1"
     if search:
-        q += " AND (product_code LIKE ? OR product_name LIKE ?)"
+        q += " AND (product_code LIKE ? OR product_name LIKE ? OR reference_code LIKE ?)"
         s = f"%{search}%"
-        params.extend([s, s])
+        params.extend([s, s, s])
     q += " ORDER BY product_code"
     rows = conn.execute(q, params).fetchall()
     conn.close()
@@ -381,11 +383,11 @@ def get_product_by_code(code):
     conn.close()
     return row
 
-def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier=""):
+def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier="", reference_code=""):
     conn = get_connection()
     c = conn.execute(
-        "INSERT INTO products (product_code, product_name, composition, width, gramaj, shrinkage, price, supplier) VALUES (?,?,?,?,?,?,?,?)",
-        (product_code.strip().upper(), product_name.strip(), composition.strip(), width.strip(),
+        "INSERT INTO products (product_code, reference_code, product_name, composition, width, gramaj, shrinkage, price, supplier) VALUES (?,?,?,?,?,?,?,?,?)",
+        (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip())
     )
     conn.commit()
@@ -393,11 +395,11 @@ def add_product(product_code, product_name="", composition="", width="", gramaj=
     conn.close()
     return pid
 
-def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1):
+def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1, reference_code=""):
     conn = get_connection()
     conn.execute(
-        "UPDATE products SET product_code=?, product_name=?, composition=?, width=?, gramaj=?, shrinkage=?, price=?, supplier=?, active=? WHERE id=?",
-        (product_code.strip().upper(), product_name.strip(), composition.strip(), width.strip(),
+        "UPDATE products SET product_code=?, reference_code=?, product_name=?, composition=?, width=?, gramaj=?, shrinkage=?, price=?, supplier=?, active=? WHERE id=?",
+        (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(), int(active), pid)
     )
     conn.commit(); conn.close()
@@ -408,7 +410,7 @@ def delete_product(pid):
     conn.commit(); conn.close()
 
 def import_products_bulk(records):
-    """records: [{"product_code":..., "product_name":..., "composition":..., "width":..., "gramaj":..., "shrinkage":..., "price":..., "supplier":...}]
+    """records: [{"product_code":..., "reference_code":..., "product_name":..., "composition":..., "width":..., "gramaj":..., "shrinkage":..., "price":..., "supplier":...}]
     Var olan ürün kodları güncellenir, yeni kodlar eklenir."""
     conn = get_connection()
     c = conn.cursor()
@@ -417,9 +419,10 @@ def import_products_bulk(records):
         code = str(r.get("product_code","")).strip().upper()
         if not code: continue
         c.execute("""
-            INSERT INTO products (product_code, product_name, composition, width, gramaj, shrinkage, price, supplier)
-            VALUES (?,?,?,?,?,?,?,?)
+            INSERT INTO products (product_code, reference_code, product_name, composition, width, gramaj, shrinkage, price, supplier)
+            VALUES (?,?,?,?,?,?,?,?,?)
             ON CONFLICT(product_code) DO UPDATE SET
+                reference_code=excluded.reference_code,
                 product_name=excluded.product_name,
                 composition=excluded.composition,
                 width=excluded.width,
@@ -428,12 +431,13 @@ def import_products_bulk(records):
                 price=excluded.price,
                 supplier=excluded.supplier
         """, (
-            code, str(r.get("product_name","")).strip(), str(r.get("composition","")).strip(),
+            code, str(r.get("reference_code","")).strip(), str(r.get("product_name","")).strip(), str(r.get("composition","")).strip(),
             str(r.get("width","")).strip(), str(r.get("gramaj","")).strip(), str(r.get("shrinkage","")).strip(),
             _to_float(r.get("price",0)), str(r.get("supplier","")).strip(),
         ))
         count += 1
     conn.commit(); conn.close()
+    return count
     return count
 
 

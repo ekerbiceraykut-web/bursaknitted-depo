@@ -215,21 +215,22 @@ def get_product_by_code(code):
             return p
     return None
 
-def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier=""):
+def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier="", reference_code=""):
     r = _post("/api/products", {
         "product_code": product_code, "product_name": product_name,
         "composition": composition, "width": width,
         "gramaj": gramaj, "shrinkage": shrinkage,
-        "price": price, "supplier": supplier,
+        "price": price, "supplier": supplier, "reference_code": reference_code,
     })
     return (r or {}).get("id")
 
-def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1):
+def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1, reference_code=""):
     _put(f"/api/products/{pid}", {
         "product_code": product_code, "product_name": product_name,
         "composition": composition, "width": width,
         "gramaj": gramaj, "shrinkage": shrinkage,
         "price": price, "supplier": supplier, "active": active,
+        "reference_code": reference_code,
     })
 
 def delete_product(pid):
