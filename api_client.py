@@ -174,6 +174,46 @@ def import_customers_bulk(records):
     return (r or {}).get("count", 0)
 
 
+# ── Ürün Kataloğu ────────────────────────────────────────────────
+
+def get_all_products(search="", active_only=True):
+    return _get("/api/products", {"search": search,
+                                  "active_only": "1" if active_only else "0"}) or []
+
+def get_product(pid):
+    return _get(f"/api/products/{pid}")
+
+def get_product_by_code(code):
+    for p in get_all_products(search=code, active_only=False):
+        if str(p.get("product_code","")).strip().upper() == code.strip().upper():
+            return p
+    return None
+
+def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier=""):
+    r = _post("/api/products", {
+        "product_code": product_code, "product_name": product_name,
+        "composition": composition, "width": width,
+        "gramaj": gramaj, "shrinkage": shrinkage,
+        "price": price, "supplier": supplier,
+    })
+    return (r or {}).get("id")
+
+def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1):
+    _put(f"/api/products/{pid}", {
+        "product_code": product_code, "product_name": product_name,
+        "composition": composition, "width": width,
+        "gramaj": gramaj, "shrinkage": shrinkage,
+        "price": price, "supplier": supplier, "active": active,
+    })
+
+def delete_product(pid):
+    _delete(f"/api/products/{pid}")
+
+def import_products_bulk(records):
+    r = _post("/api/products/bulk", {"records": records})
+    return (r or {}).get("count", 0)
+
+
 # ── Fire kayıtları ───────────────────────────────────────────────
 
 def get_fire_records():

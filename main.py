@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QHeaderView, QFileDialog, QSpinBox, QDoubleSpinBox,
     QTextEdit, QGroupBox, QSplitter, QListWidget, QListWidgetItem,
     QStatusBar, QFrame, QAbstractItemView, QTableView, QInputDialog,
-    QCheckBox
+    QCheckBox, QCompleter
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant
 from PyQt6.QtGui import QFont, QColor, QIcon, QBrush, QPixmap
@@ -304,6 +304,184 @@ class _NgrokActiveDialog(QDialog):
         lay.addLayout(row)
 
 
+# ── Excel sütun eşleştirme ───────────────────────────────────────
+
+# (alan_anahtarı, etiket, zorunlu_mu)
+CUSTOMER_FIELDS = [
+    ("name",    "Müşteri Adı", True),
+    ("code",    "Kodu",        False),
+    ("phone",   "Telefon",     False),
+    ("address", "Adres",       False),
+]
+CUSTOMER_AUTO = {
+    "name":    ["ad","isim","müşteri","musteri","name","unvan","firma"],
+    "code":    ["kod","code"],
+    "phone":   ["tel","phone","gsm","cep"],
+    "address": ["adres","address"],
+}
+
+PRODUCT_FIELDS = [
+    ("product_code", "Ürün Kodu",          True),
+    ("product_name", "Ürün Adı/Bilgisi",   False),
+    ("composition",  "Kompozisyon",        False),
+    ("width",        "En",                 False),
+    ("gramaj",       "Gramaj",             False),
+    ("shrinkage",    "Çekme",              False),
+    ("price",        "Fiyat",              False),
+    ("supplier",     "Tedarikçi/Fason",    False),
+]
+PRODUCT_AUTO = {
+    "product_code": ["kumas","kumas_kodu","ürün kodu","urun kodu","product_code","kod"],
+    "product_name": ["kumas_on_adi","kumas_adi","ürün adı","urun adi","ürün bilgisi","product_name","ad"],
+    "composition":  ["kumas_bilesimi","bilesim","bileşim","kompozisyon","composition"],
+    "width":        ["kumas_en","en","width"],
+    "gramaj":       ["kumas_gramaj","gramaj","gsm"],
+    "shrinkage":    ["kumas_cekme","cekme","çekme","shrinkage"],
+    "price":        ["kumas_fiy","fiyat","price","birim_fiyat"],
+    "supplier":     ["kumas_fason_id","fason","tedarikci","tedarikçi","supplier"],
+}
+
+
+def _excel_val_to_str(val):
+    import pandas as pd
+    if val is None or (hasattr(pd, "isna") and pd.isna(val)):
+        return ""
+    if isinstance(val, float):
+        if val == int(val):
+            return str(int(val))
+        return str(val)
+    return str(val).strip()
+
+
+class ExcelColumnMapDialog(QDialog):
+    """Excel dosyasından sütun eşleştirmesi yapıp kayıt listesi üretir.
+    fields: [(alan_anahtarı, etiket, zorunlu_mu), ...]
+    auto_keywords: {alan_anahtarı: [başlık eşleştirme anahtar kelimeleri]}
+    Kabul edildikten sonra self.records doldurulur."""
+
+    def __init__(self, path, fields, auto_keywords=None, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Excel Sütun Eşleştirme")
+        self.setMinimumSize(760, 540)
+        self.path = path
+        self.fields = fields
+        self.auto_keywords = auto_keywords or {}
+        self.df = None
+        self.records = []
+        self._build_ui()
+        self._load_preview()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+
+        self.chk_header = QCheckBox("İlk satır sütun başlığı içeriyor")
+        self.chk_header.setChecked(True)
+        self.chk_header.toggled.connect(self._load_preview)
+        lay.addWidget(self.chk_header)
+
+        lay.addWidget(QLabel("Önizleme (ilk 5 satır):"))
+        self.preview = QTableWidget()
+        self.preview.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.preview.verticalHeader().setVisible(False)
+        self.preview.setMaximumHeight(170)
+        lay.addWidget(self.preview)
+
+        lay.addWidget(QLabel("Hangi sütun hangi alana karşılık geliyor?"))
+        form = QFormLayout(); form.setSpacing(6)
+        self.combos = {}
+        for key, label, required in self.fields:
+            combo = QComboBox()
+            form.addRow((label + " *:") if required else (label + ":"), combo)
+            self.combos[key] = combo
+        lay.addLayout(form)
+
+        self.info_label = QLabel("")
+        self.info_label.setStyleSheet("color:#757575;")
+        lay.addWidget(self.info_label)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        lay.addWidget(btns)
+
+    def _load_preview(self):
+        import pandas as pd
+        header = 0 if self.chk_header.isChecked() else None
+        try:
+            df = pd.read_excel(self.path, header=header)
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Excel okunamadı:\n{e}")
+            return
+
+        if header is None:
+            df.columns = [f"Sütun {i+1}" for i in range(len(df.columns))]
+        else:
+            df.columns = [str(c).strip() for c in df.columns]
+        self.df = df
+        cols = list(df.columns)
+
+        # Önizleme tablosu
+        self.preview.setColumnCount(len(cols))
+        self.preview.setHorizontalHeaderLabels([str(c) for c in cols])
+        n = min(5, len(df))
+        self.preview.setRowCount(n)
+        for r in range(n):
+            for c in range(len(cols)):
+                self.preview.setItem(r, c, QTableWidgetItem(_excel_val_to_str(df.iat[r, c])))
+        self.preview.resizeColumnsToContents()
+
+        # Eşleştirme kutularını doldur
+        for combo in self.combos.values():
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("— Kullanılmıyor —", "")
+            for c in cols:
+                combo.addItem(str(c), c)
+            combo.blockSignals(False)
+
+        # Otomatik eşleştirme: önce tam eşleşme, sonra anahtar kelime içeriği
+        if header == 0:
+            used = set()
+            lower_cols = {c: str(c).strip().lower() for c in cols}
+            for pass_exact in (True, False):
+                for key, combo in self.combos.items():
+                    if combo.currentData():
+                        continue
+                    for kw in self.auto_keywords.get(key, []):
+                        match = None
+                        for c, lc in lower_cols.items():
+                            if c in used:
+                                continue
+                            if (pass_exact and lc == kw) or (not pass_exact and kw in lc):
+                                match = c; break
+                        if match:
+                            idx = combo.findData(match)
+                            if idx >= 0:
+                                combo.setCurrentIndex(idx)
+                                used.add(match)
+                            break
+
+        self.info_label.setText(f"Toplam {len(df)} satır bulundu.")
+
+    def _on_accept(self):
+        if self.df is None:
+            return self.reject()
+        mapping = {}
+        for key, label, required in self.fields:
+            col = self.combos[key].currentData()
+            if required and not col:
+                return QMessageBox.warning(self, "Hata", f"'{label}' sütunu seçilmelidir.")
+            mapping[key] = col
+
+        records = []
+        for _, row in self.df.iterrows():
+            rec = {key: (_excel_val_to_str(row.get(col, "")) if col else "") for key, col in mapping.items()}
+            if all(rec.get(key) for key, label, required in self.fields if required):
+                records.append(rec)
+        self.records = records
+        self.accept()
+
+
 class CustomerManagementDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -414,36 +592,160 @@ class CustomerManagementDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(self,"Müşteri Excel Dosyası","","Excel (*.xlsx *.xls)")
         if not path: return
         try:
-            import pandas as pd
-            df = pd.read_excel(path)
-            df.columns = [str(c).strip().lower() for c in df.columns]
-
-            # Sütun eşleştirme — esnek
-            col_map = {}
-            for col in df.columns:
-                if any(k in col for k in ["ad","isim","müşteri","musteri","name"]): col_map.setdefault("name", col)
-                elif any(k in col for k in ["kod","code"]): col_map.setdefault("code", col)
-                elif any(k in col for k in ["tel","phone","gsm","cep"]): col_map.setdefault("phone", col)
-                elif any(k in col for k in ["adres","address"]): col_map.setdefault("address", col)
-
-            if "name" not in col_map:
-                return QMessageBox.warning(self,"Hata",
-                    f"'Müşteri Adı' sütunu bulunamadı.\nMevcut sütunlar: {', '.join(df.columns)}")
-
-            records = []
-            for _, row in df.iterrows():
-                name = str(row.get(col_map["name"],"")).strip()
-                if not name or name.lower() == "nan": continue
-                records.append({
-                    "name":    name,
-                    "code":    str(row.get(col_map.get("code","_"),"")).strip() if "code" in col_map else "",
-                    "phone":   str(row.get(col_map.get("phone","_"),"")).strip() if "phone" in col_map else "",
-                    "address": str(row.get(col_map.get("address","_"),"")).strip() if "address" in col_map else "",
-                })
-
+            dlg = ExcelColumnMapDialog(path, CUSTOMER_FIELDS, CUSTOMER_AUTO, self)
+            if not dlg.exec():
+                return
+            records = dlg.records
+            if not records:
+                return QMessageBox.warning(self,"Hata","Eşleştirilen sütunda geçerli veri bulunamadı.")
             db.import_customers_bulk(records)
             self._load(self.search.text())
             QMessageBox.information(self,"Başarılı",f"{len(records)} müşteri içe aktarıldı.")
+        except Exception as e:
+            QMessageBox.critical(self,"Hata",f"İçe aktarma hatası:\n{e}")
+
+
+class ProductManagementDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Ürün Kataloğu Yönetimi")
+        self.setMinimumSize(920, 520)
+        self._build_ui(); self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+
+        top = QHBoxLayout()
+        self.search = QLineEdit(); self.search.setPlaceholderText("Ürün kodu veya adı...")
+        self.search.textChanged.connect(lambda: self._load(self.search.text()))
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.search); top.addStretch()
+        lay.addLayout(top)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(8)
+        self.table.setHorizontalHeaderLabels(
+            ["Ürün Kodu", "Ürün Adı/Bilgisi", "Kompozisyon", "En", "Gramaj", "Fiyat", "Tedarikçi/Fason", "Durum"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for i in (0,2,3,4,5,6,7): hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        btn_add   = QPushButton("+ Yeni Ürün");  btn_add.clicked.connect(self._add)
+        btn_edit  = QPushButton("✎ Düzenle");     btn_edit.clicked.connect(self._edit)
+        btn_del   = QPushButton("✕ Sil")
+        btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
+        btn_del.clicked.connect(self._delete)
+        btn_excel = QPushButton("📥 Excel'den İçe Aktar")
+        btn_excel.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
+        btn_excel.clicked.connect(self._import_excel)
+        btn_close = QPushButton("Kapat"); btn_close.clicked.connect(self.accept)
+        for b in (btn_add, btn_edit, btn_del, btn_excel):
+            btn_row.addWidget(b)
+        btn_row.addStretch(); btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+
+    def _load(self, search=""):
+        rows = db.get_all_products(search=search, active_only=False)
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            code_item = QTableWidgetItem(r["product_code"] or "")
+            code_item.setData(Qt.ItemDataRole.UserRole, r["id"])
+            self.table.setItem(i, 0, code_item)
+            self.table.setItem(i, 1, QTableWidgetItem(r["product_name"] or ""))
+            self.table.setItem(i, 2, QTableWidgetItem(r["composition"] or ""))
+            self.table.setItem(i, 3, QTableWidgetItem(r["width"] or ""))
+            self.table.setItem(i, 4, QTableWidgetItem(r["gramaj"] or ""))
+            price = r["price"] or 0
+            self.table.setItem(i, 5, QTableWidgetItem(f"{price:,.2f}" if price else ""))
+            self.table.setItem(i, 6, QTableWidgetItem(r["supplier"] or ""))
+            s = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
+            s.setForeground(QBrush(QColor("#2E7D32" if r["active"] else "#C62828")))
+            self.table.setItem(i, 7, s)
+        self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
+
+    def _selected_id(self):
+        row = self.table.currentRow()
+        if row < 0: QMessageBox.information(self,"Bilgi","Ürün seçin."); return None
+        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+
+    def _product_dialog(self, p=None):
+        dlg = QDialog(self); dlg.setWindowTitle("Ürün" + (" Düzenle" if p else " Ekle"))
+        dlg.setMinimumWidth(380); lay = QVBoxLayout(dlg); form = QFormLayout(); form.setSpacing(8)
+        dlg.code     = QLineEdit(p["product_code"] if p else "")
+        dlg.name     = QLineEdit(p["product_name"] if p else "")
+        dlg.comp     = QLineEdit(p["composition"] if p else "")
+        dlg.width    = QLineEdit(p["width"] if p else "")
+        dlg.gramaj   = QLineEdit(p["gramaj"] if p else "")
+        dlg.shrink   = QLineEdit(p["shrinkage"] if p else "")
+        dlg.price    = QDoubleSpinBox(); dlg.price.setRange(0, 999999); dlg.price.setDecimals(2)
+        dlg.price.setValue(p["price"] if (p and p["price"]) else 0)
+        dlg.supplier = QLineEdit(p["supplier"] if p else "")
+        form.addRow("Ürün Kodu *:", dlg.code)
+        form.addRow("Ürün Adı/Bilgisi:", dlg.name)
+        form.addRow("Kompozisyon:", dlg.comp)
+        form.addRow("En:", dlg.width)
+        form.addRow("Gramaj:", dlg.gramaj)
+        form.addRow("Çekme:", dlg.shrink)
+        form.addRow("Fiyat:", dlg.price)
+        form.addRow("Tedarikçi/Fason:", dlg.supplier)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        return dlg
+
+    def _add(self):
+        dlg = self._product_dialog()
+        if dlg.exec():
+            code = dlg.code.text().strip()
+            if not code:
+                return QMessageBox.warning(self,"Hata","Ürün kodu zorunlu!")
+            try:
+                db.add_product(code, dlg.name.text(), dlg.comp.text(), dlg.width.text(),
+                               dlg.gramaj.text(), dlg.shrink.text(), dlg.price.value(), dlg.supplier.text())
+                self._load(self.search.text())
+            except Exception as e:
+                QMessageBox.critical(self,"Hata",f"Eklenemedi:\n{e}")
+
+    def _edit(self):
+        pid = self._selected_id()
+        if not pid: return
+        p = db.get_product(pid)
+        dlg = self._product_dialog(p)
+        if dlg.exec():
+            code = dlg.code.text().strip()
+            if not code:
+                return QMessageBox.warning(self,"Hata","Ürün kodu zorunlu!")
+            db.update_product(pid, code, dlg.name.text(), dlg.comp.text(), dlg.width.text(),
+                              dlg.gramaj.text(), dlg.shrink.text(), dlg.price.value(), dlg.supplier.text(),
+                              p["active"])
+            self._load(self.search.text())
+
+    def _delete(self):
+        pid = self._selected_id()
+        if not pid: return
+        if QMessageBox.question(self,"Sil","Ürün silinsin mi?",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            db.delete_product(pid); self._load(self.search.text())
+
+    def _import_excel(self):
+        path, _ = QFileDialog.getOpenFileName(self,"Ürün Excel Dosyası","","Excel (*.xlsx *.xls)")
+        if not path: return
+        try:
+            dlg = ExcelColumnMapDialog(path, PRODUCT_FIELDS, PRODUCT_AUTO, self)
+            if not dlg.exec():
+                return
+            records = dlg.records
+            if not records:
+                return QMessageBox.warning(self,"Hata","Eşleştirilen sütunda geçerli veri bulunamadı.")
+            n = db.import_products_bulk(records)
+            self._load(self.search.text())
+            QMessageBox.information(self,"Başarılı",f"{n} ürün içe aktarıldı/güncellendi.")
         except Exception as e:
             QMessageBox.critical(self,"Hata",f"İçe aktarma hatası:\n{e}")
 
@@ -992,9 +1294,23 @@ class FabricDialog(QDialog):
         form = QFormLayout()
         form.setSpacing(10)
 
-        self.product_code = QLineEdit()
+        # Ürün kodu — katalogdan sadece seçim (aranabilir, serbest metin kabul edilmez)
+        self.product_code = QComboBox()
+        self.product_code.setEditable(True)
+        self.product_code.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        completer = self.product_code.completer()
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.product_code.currentIndexChanged.connect(self._on_product_change)
+
+        # Ürün bilgisi — seçilen ürün koduna göre katalogdan otomatik gelir
         self.product_name = QLineEdit()
+        self.product_name.setReadOnly(True)
+        self.product_name.setStyleSheet("background:#F5F5F5; color:#616161;")
+
         self.color = QLineEdit()
+        self._load_products()
 
         # Lokasyon — iki kademeli: önce depo (DEPO / dış depolar), DEPO seçilirse raf
         self.depo = QComboBox()
@@ -1071,6 +1387,68 @@ class FabricDialog(QDialog):
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def _load_products(self, select_code="", select_name=""):
+        """Ürün kodu kombosunu kataloğa göre doldurur. select_code katalogda
+        yoksa (eski kayıt), kaybolmaması için listeye eklenir."""
+        self._products = {}
+        self.product_code.blockSignals(True)
+        self.product_code.clear()
+        self.product_code.addItem("— Seçiniz —", "")
+        self.product_code.addItem("➕ Yeni ürün ekle...", "__NEW__")
+        for r in db.get_all_products(active_only=True):
+            code = r["product_code"]
+            name = r["product_name"] or ""
+            self._products[code] = name
+            self.product_code.addItem(f"{code} — {name}" if name else code, code)
+        if select_code:
+            idx = self.product_code.findData(select_code)
+            if idx < 0:
+                self._products[select_code] = select_name
+                label = f"{select_code} — {select_name}" if select_name else select_code
+                self.product_code.addItem(label, select_code)
+                idx = self.product_code.count() - 1
+            self.product_code.setCurrentIndex(idx)
+        self.product_code.blockSignals(False)
+        self._on_product_change()
+
+    def _on_product_change(self, idx=None):
+        code = self.product_code.currentData()
+        if code == "__NEW__":
+            self._add_new_product()
+            return
+        self.product_name.setText(self._products.get(code, ""))
+
+    def _add_new_product(self):
+        """Katalogda olmayan bir ürün kodu için hızlı ekleme."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Yeni Ürün Ekle")
+        dlg.setMinimumWidth(320)
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout(); form.setSpacing(8)
+        code_edit = QLineEdit()
+        name_edit = QLineEdit()
+        form.addRow("Ürün Kodu *:", code_edit)
+        form.addRow("Ürün Adı/Bilgisi:", name_edit)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec():
+            code = code_edit.text().strip().upper()
+            if not code:
+                QMessageBox.warning(self, "Hata", "Ürün kodu zorunlu!")
+                self.product_code.setCurrentIndex(0)
+                return
+            try:
+                db.add_product(code, name_edit.text().strip())
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Ürün eklenemedi:\n{e}")
+                self.product_code.setCurrentIndex(0)
+                return
+            self._load_products(select_code=code)
+        else:
+            self.product_code.setCurrentIndex(0)
+
     def _load_locations(self):
         """İlk kademe: DEPO + dış depolar. İkinci kademe: DEPO'nun rafları."""
         locs = db.get_active_locations()
@@ -1102,8 +1480,7 @@ class FabricDialog(QDialog):
         return d
 
     def _populate(self, f):
-        self.product_code.setText(f["product_code"] or "")
-        self.product_name.setText(f["product_name"] or "")
+        self._load_products(select_code=f["product_code"] or "", select_name=f["product_name"] or "")
         self.color.setText(f["color"] or "")
         # Lokasyonu seç — raf ise DEPO + raf, değilse doğrudan
         loc_val = f["location"] or ""
@@ -1135,8 +1512,8 @@ class FabricDialog(QDialog):
 
     def _validate(self):
         errors = []
-        if not self.product_code.text().strip():
-            errors.append("• Ürün kodu zorunludur")
+        if not self.product_code.currentData():
+            errors.append("• Ürün kodu katalogdan seçilmelidir")
         if not self.depo.currentData():
             errors.append("• Hedef lokasyon seçilmelidir")
         elif self.depo.currentData() == "__DEPO__" and not self.raf.currentData():
@@ -1153,7 +1530,7 @@ class FabricDialog(QDialog):
 
     def get_data(self):
         return {
-            "product_code": self.product_code.text().strip().upper(),
+            "product_code": (self.product_code.currentData() or "").strip().upper(),
             "product_name": self.product_name.text().strip(),
             "color": self.color.text().strip().upper(),
             "location": self._selected_location(),
@@ -3135,6 +3512,10 @@ class MainWindow(QMainWindow):
         cust_menu = menubar.addMenu("👥 Müşteriler")
         cust_menu.addAction("Müşteri Listesi...").triggered.connect(
             lambda: CustomerManagementDialog(self).exec())
+
+        prod_menu = menubar.addMenu("📦 Ürünler")
+        prod_menu.addAction("Ürün Kataloğu...").triggered.connect(
+            lambda: ProductManagementDialog(self).exec())
 
         loc_menu = menubar.addMenu("🗄 Lokasyonlar")
         loc_menu.addAction("Raf / Lokasyon Tanımlamaları...").triggered.connect(

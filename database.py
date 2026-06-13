@@ -91,9 +91,25 @@ def init_db():
             sort_order INTEGER DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS products (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            product_code TEXT UNIQUE NOT NULL,
+            product_name TEXT DEFAULT '',
+            composition TEXT DEFAULT '',
+            width TEXT DEFAULT '',
+            gramaj TEXT DEFAULT '',
+            shrinkage TEXT DEFAULT '',
+            price REAL DEFAULT 0,
+            supplier TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_fabrics_code ON fabrics(product_code);
         CREATE INDEX IF NOT EXISTS idx_fabrics_location ON fabrics(location);
         CREATE INDEX IF NOT EXISTS idx_movements_fabric ON movements(fabric_id);
+        CREATE INDEX IF NOT EXISTS idx_products_code ON products(product_code);
+        CREATE INDEX IF NOT EXISTS idx_products_name ON products(product_name);
     """)
 
     # Boyahane fire kayıtları
@@ -249,6 +265,102 @@ def import_customers_bulk(records):
             (name, r.get("code",""), r.get("phone",""), r.get("address",""))
         )
     conn.commit(); conn.close()
+
+
+# ── Ürün Kataloğu ──────────────────────────────────────────────
+
+def _to_float(val):
+    """'636.86 USD', '1.234,56', '%92' gibi birim/etiket içeren değerlerden sayıyı ayıklar."""
+    import re
+    m = re.search(r"-?\d+(?:[.,]\d+)?", str(val).strip())
+    if not m:
+        return 0
+    try:
+        return float(m.group(0).replace(",", "."))
+    except Exception:
+        return 0
+
+def get_all_products(search="", active_only=True):
+    conn = get_connection()
+    q = "SELECT * FROM products WHERE 1=1"
+    params = []
+    if active_only:
+        q += " AND active=1"
+    if search:
+        q += " AND (product_code LIKE ? OR product_name LIKE ?)"
+        s = f"%{search}%"
+        params.extend([s, s])
+    q += " ORDER BY product_code"
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    return rows
+
+def get_product(pid):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM products WHERE id=?", (pid,)).fetchone()
+    conn.close()
+    return row
+
+def get_product_by_code(code):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM products WHERE product_code=?", (code.strip().upper(),)).fetchone()
+    conn.close()
+    return row
+
+def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier=""):
+    conn = get_connection()
+    c = conn.execute(
+        "INSERT INTO products (product_code, product_name, composition, width, gramaj, shrinkage, price, supplier) VALUES (?,?,?,?,?,?,?,?)",
+        (product_code.strip().upper(), product_name.strip(), composition.strip(), width.strip(),
+         gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip())
+    )
+    conn.commit()
+    pid = c.lastrowid
+    conn.close()
+    return pid
+
+def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE products SET product_code=?, product_name=?, composition=?, width=?, gramaj=?, shrinkage=?, price=?, supplier=?, active=? WHERE id=?",
+        (product_code.strip().upper(), product_name.strip(), composition.strip(), width.strip(),
+         gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(), int(active), pid)
+    )
+    conn.commit(); conn.close()
+
+def delete_product(pid):
+    conn = get_connection()
+    conn.execute("DELETE FROM products WHERE id=?", (pid,))
+    conn.commit(); conn.close()
+
+def import_products_bulk(records):
+    """records: [{"product_code":..., "product_name":..., "composition":..., "width":..., "gramaj":..., "shrinkage":..., "price":..., "supplier":...}]
+    Var olan ürün kodları güncellenir, yeni kodlar eklenir."""
+    conn = get_connection()
+    c = conn.cursor()
+    count = 0
+    for r in records:
+        code = str(r.get("product_code","")).strip().upper()
+        if not code: continue
+        c.execute("""
+            INSERT INTO products (product_code, product_name, composition, width, gramaj, shrinkage, price, supplier)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(product_code) DO UPDATE SET
+                product_name=excluded.product_name,
+                composition=excluded.composition,
+                width=excluded.width,
+                gramaj=excluded.gramaj,
+                shrinkage=excluded.shrinkage,
+                price=excluded.price,
+                supplier=excluded.supplier
+        """, (
+            code, str(r.get("product_name","")).strip(), str(r.get("composition","")).strip(),
+            str(r.get("width","")).strip(), str(r.get("gramaj","")).strip(), str(r.get("shrinkage","")).strip(),
+            _to_float(r.get("price",0)), str(r.get("supplier","")).strip(),
+        ))
+        count += 1
+    conn.commit(); conn.close()
+    return count
 
 
 # ── Locations ───────────────────────────────────────────────────

@@ -127,6 +127,18 @@ class APIHandler(BaseHTTPRequestHandler):
                 r = db.get_customer(cid)
                 self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
 
+            # ── Ürünler ────────────────────────────────────────────
+            elif path == "/api/products":
+                rows = db.get_all_products(
+                    search=qs.get("search",[""])[0],
+                    active_only=qs.get("active_only",["1"])[0] == "1")
+                self._send(_ok([dict(r) for r in rows]))
+
+            elif path.startswith("/api/products/"):
+                pid = int(path.split("/")[-1])
+                r = db.get_product(pid)
+                self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
+
             # ── Locations ────────────────────────────────────────
             elif path == "/api/locations/all":
                 rows = db.get_all_locations()
@@ -266,6 +278,20 @@ class APIHandler(BaseHTTPRequestHandler):
                 n = db.import_customers_bulk(body.get("records", []))
                 self._send(_ok({"count": n}))
 
+            # ── Ürün ekle / toplu aktar ────────────────────────────
+            elif path == "/api/products":
+                pid = db.add_product(
+                    body.get("product_code",""), body.get("product_name",""),
+                    body.get("composition",""),  body.get("width",""),
+                    body.get("gramaj",""),        body.get("shrinkage",""),
+                    body.get("price",0),          body.get("supplier","")
+                )
+                self._send(_ok({"id": pid}))
+
+            elif path == "/api/products/bulk":
+                n = db.import_products_bulk(body.get("records", []))
+                self._send(_ok({"count": n}))
+
             # ── Kullanıcı ekle (admin) ────────────────────────────
             elif path == "/api/users":
                 if user.get("role") != "admin":
@@ -305,6 +331,16 @@ class APIHandler(BaseHTTPRequestHandler):
                                    body.get("phone",""), body.get("address",""),
                                    body.get("active",1))
                 self._send(_ok())
+            elif path.startswith("/api/products/"):
+                pid = int(path.split("/")[-1])
+                db.update_product(pid,
+                    body.get("product_code",""), body.get("product_name",""),
+                    body.get("composition",""),  body.get("width",""),
+                    body.get("gramaj",""),        body.get("shrinkage",""),
+                    body.get("price",0),          body.get("supplier",""),
+                    body.get("active",1)
+                )
+                self._send(_ok())
             elif path.startswith("/api/locations/"):
                 lid = int(path.split("/")[-1])
                 db.update_location(lid, body.get("name",""), body.get("group_name","DEPO"),
@@ -340,6 +376,10 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/customers/"):
                 cid = int(path.split("/")[-1])
                 db.delete_customer(cid)
+                self._send(_ok())
+            elif path.startswith("/api/products/"):
+                pid = int(path.split("/")[-1])
+                db.delete_product(pid)
                 self._send(_ok())
             elif path.startswith("/api/locations/"):
                 lid = int(path.split("/")[-1])
