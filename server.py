@@ -94,7 +94,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 import sqlite3, base64, tempfile
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
                 tmp.close()
-                src = sqlite3.connect(db.DB_PATH)
+                src = sqlite3.connect(db.DB_PATH, timeout=30)
                 dst = sqlite3.connect(tmp.name)
                 src.backup(dst)   # WAL dahil tutarlı kopya
                 dst.close(); src.close()
