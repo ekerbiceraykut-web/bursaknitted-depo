@@ -127,6 +127,18 @@ class APIHandler(BaseHTTPRequestHandler):
                 r = db.get_customer(cid)
                 self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
 
+            # ── Tedarikçiler ─────────────────────────────────────
+            elif path == "/api/suppliers":
+                rows = db.get_all_suppliers(
+                    search=qs.get("search",[""])[0],
+                    active_only=qs.get("active_only",["1"])[0] == "1")
+                self._send(_ok([dict(r) for r in rows]))
+
+            elif path.startswith("/api/suppliers/"):
+                sid = int(path.split("/")[-1])
+                r = db.get_supplier(sid)
+                self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
+
             # ── Ürünler ────────────────────────────────────────────
             elif path == "/api/products":
                 rows = db.get_all_products(
@@ -271,11 +283,23 @@ class APIHandler(BaseHTTPRequestHandler):
             # ── Müşteri ekle / toplu aktar ────────────────────────
             elif path == "/api/customers":
                 cid = db.add_customer(body.get("name",""), body.get("code",""),
-                                      body.get("phone",""), body.get("address",""))
+                                      body.get("phone",""), body.get("address",""),
+                                      body.get("tax_no",""))
                 self._send(_ok({"id": cid}))
 
             elif path == "/api/customers/bulk":
                 n = db.import_customers_bulk(body.get("records", []))
+                self._send(_ok({"count": n}))
+
+            # ── Tedarikçi ekle / toplu aktar ───────────────────────
+            elif path == "/api/suppliers":
+                sid = db.add_supplier(body.get("name",""), body.get("code",""),
+                                      body.get("phone",""), body.get("address",""),
+                                      body.get("tax_no",""))
+                self._send(_ok({"id": sid}))
+
+            elif path == "/api/suppliers/bulk":
+                n = db.import_suppliers_bulk(body.get("records", []))
                 self._send(_ok({"count": n}))
 
             # ── Ürün ekle / toplu aktar ────────────────────────────
@@ -329,7 +353,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 cid = int(path.split("/")[-1])
                 db.update_customer(cid, body.get("name",""), body.get("code",""),
                                    body.get("phone",""), body.get("address",""),
-                                   body.get("active",1))
+                                   body.get("tax_no",""), body.get("active",1))
+                self._send(_ok())
+            elif path.startswith("/api/suppliers/"):
+                sid = int(path.split("/")[-1])
+                db.update_supplier(sid, body.get("name",""), body.get("code",""),
+                                   body.get("phone",""), body.get("address",""),
+                                   body.get("tax_no",""), body.get("active",1))
                 self._send(_ok())
             elif path.startswith("/api/products/"):
                 pid = int(path.split("/")[-1])
@@ -376,6 +406,10 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/customers/"):
                 cid = int(path.split("/")[-1])
                 db.delete_customer(cid)
+                self._send(_ok())
+            elif path.startswith("/api/suppliers/"):
+                sid = int(path.split("/")[-1])
+                db.delete_supplier(sid)
                 self._send(_ok())
             elif path.startswith("/api/products/"):
                 pid = int(path.split("/")[-1])

@@ -78,6 +78,18 @@ def init_db():
             code TEXT DEFAULT '',
             phone TEXT DEFAULT '',
             address TEXT DEFAULT '',
+            tax_no TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            code TEXT DEFAULT '',
+            phone TEXT DEFAULT '',
+            address TEXT DEFAULT '',
+            tax_no TEXT DEFAULT '',
             active INTEGER DEFAULT 1,
             created_at TEXT DEFAULT (datetime('now','localtime'))
         );
@@ -157,6 +169,7 @@ def init_db():
         "ALTER TABLE fire_records ADD COLUMN parti_no TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN entry_location TEXT DEFAULT ''",
         "ALTER TABLE movements ADD COLUMN location TEXT DEFAULT ''",
+        "ALTER TABLE customers ADD COLUMN tax_no TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -229,22 +242,22 @@ def get_customer(cid):
     conn.close()
     return row
 
-def add_customer(name, code="", phone="", address=""):
+def add_customer(name, code="", phone="", address="", tax_no=""):
     conn = get_connection()
     c = conn.execute(
-        "INSERT INTO customers (name, code, phone, address) VALUES (?,?,?,?)",
-        (name.strip(), code.strip(), phone.strip(), address.strip())
+        "INSERT INTO customers (name, code, phone, address, tax_no) VALUES (?,?,?,?,?)",
+        (name.strip(), code.strip(), phone.strip(), address.strip(), tax_no.strip())
     )
     conn.commit()
     cid = c.lastrowid
     conn.close()
     return cid
 
-def update_customer(cid, name, code, phone, address, active=1):
+def update_customer(cid, name, code, phone, address, tax_no="", active=1):
     conn = get_connection()
     conn.execute(
-        "UPDATE customers SET name=?, code=?, phone=?, address=?, active=? WHERE id=?",
-        (name.strip(), code.strip(), phone.strip(), address.strip(), int(active), cid)
+        "UPDATE customers SET name=?, code=?, phone=?, address=?, tax_no=?, active=? WHERE id=?",
+        (name.strip(), code.strip(), phone.strip(), address.strip(), tax_no.strip(), int(active), cid)
     )
     conn.commit(); conn.close()
 
@@ -254,15 +267,76 @@ def delete_customer(cid):
     conn.commit(); conn.close()
 
 def import_customers_bulk(records):
-    """records: [{"name":..., "code":..., "phone":..., "address":...}]"""
+    """records: [{"name":..., "code":..., "phone":..., "address":..., "tax_no":...}]"""
     conn = get_connection()
     c = conn.cursor()
     for r in records:
         name = r.get("name","").strip()
         if not name: continue
         c.execute(
-            "INSERT OR IGNORE INTO customers (name, code, phone, address) VALUES (?,?,?,?)",
-            (name, r.get("code",""), r.get("phone",""), r.get("address",""))
+            "INSERT OR IGNORE INTO customers (name, code, phone, address, tax_no) VALUES (?,?,?,?,?)",
+            (name, r.get("code",""), r.get("phone",""), r.get("address",""), r.get("tax_no",""))
+        )
+    conn.commit(); conn.close()
+
+
+# ── Tedarikçiler ────────────────────────────────────────────────
+
+def get_all_suppliers(search="", active_only=True):
+    conn = get_connection()
+    q = "SELECT * FROM suppliers WHERE 1=1"
+    params = []
+    if active_only:
+        q += " AND active=1"
+    if search:
+        q += " AND (name LIKE ? OR code LIKE ? OR phone LIKE ?)"
+        s = f"%{search}%"
+        params.extend([s, s, s])
+    q += " ORDER BY name"
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    return rows
+
+def get_supplier(sid):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM suppliers WHERE id=?", (sid,)).fetchone()
+    conn.close()
+    return row
+
+def add_supplier(name, code="", phone="", address="", tax_no=""):
+    conn = get_connection()
+    c = conn.execute(
+        "INSERT INTO suppliers (name, code, phone, address, tax_no) VALUES (?,?,?,?,?)",
+        (name.strip(), code.strip(), phone.strip(), address.strip(), tax_no.strip())
+    )
+    conn.commit()
+    sid = c.lastrowid
+    conn.close()
+    return sid
+
+def update_supplier(sid, name, code, phone, address, tax_no="", active=1):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE suppliers SET name=?, code=?, phone=?, address=?, tax_no=?, active=? WHERE id=?",
+        (name.strip(), code.strip(), phone.strip(), address.strip(), tax_no.strip(), int(active), sid)
+    )
+    conn.commit(); conn.close()
+
+def delete_supplier(sid):
+    conn = get_connection()
+    conn.execute("DELETE FROM suppliers WHERE id=?", (sid,))
+    conn.commit(); conn.close()
+
+def import_suppliers_bulk(records):
+    """records: [{"name":..., "code":..., "phone":..., "address":..., "tax_no":...}]"""
+    conn = get_connection()
+    c = conn.cursor()
+    for r in records:
+        name = r.get("name","").strip()
+        if not name: continue
+        c.execute(
+            "INSERT OR IGNORE INTO suppliers (name, code, phone, address, tax_no) VALUES (?,?,?,?,?)",
+            (name, r.get("code",""), r.get("phone",""), r.get("address",""), r.get("tax_no",""))
         )
     conn.commit(); conn.close()
 

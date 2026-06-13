@@ -312,12 +312,29 @@ CUSTOMER_FIELDS = [
     ("code",    "Kodu",        False),
     ("phone",   "Telefon",     False),
     ("address", "Adres",       False),
+    ("tax_no",  "Vergi No",    False),
 ]
 CUSTOMER_AUTO = {
     "name":    ["ad","isim","müşteri","musteri","name","unvan","firma"],
     "code":    ["kod","code"],
     "phone":   ["tel","phone","gsm","cep"],
     "address": ["adres","address"],
+    "tax_no":  ["vergi","tax"],
+}
+
+SUPPLIER_FIELDS = [
+    ("name",    "Tedarikçi Adı", True),
+    ("code",    "Kodu",          False),
+    ("phone",   "Telefon",       False),
+    ("address", "Adres",         False),
+    ("tax_no",  "Vergi No",      False),
+]
+SUPPLIER_AUTO = {
+    "name":    ["ad","isim","tedarikçi","tedarikci","müşteri","musteri","name","unvan","firma"],
+    "code":    ["kod","code"],
+    "phone":   ["tel","phone","gsm","cep"],
+    "address": ["adres","address"],
+    "tax_no":  ["vergi","tax"],
 }
 
 PRODUCT_FIELDS = [
@@ -500,14 +517,14 @@ class CustomerManagementDialog(QDialog):
         lay.addLayout(top)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Müşteri Adı", "Kodu", "Telefon", "Adres", "Durum"])
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["Müşteri Adı", "Kodu", "Telefon", "Adres", "Vergi No", "Durum"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for i in (1,2,3,4): hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        for i in (1,2,3,4,5): hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         lay.addWidget(self.table)
 
         btn_row = QHBoxLayout()
@@ -536,9 +553,10 @@ class CustomerManagementDialog(QDialog):
             self.table.setItem(i, 1, QTableWidgetItem(r["code"] or ""))
             self.table.setItem(i, 2, QTableWidgetItem(r["phone"] or ""))
             self.table.setItem(i, 3, QTableWidgetItem(r["address"] or ""))
+            self.table.setItem(i, 4, QTableWidgetItem(r["tax_no"] or ""))
             s = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
             s.setForeground(QBrush(QColor("#2E7D32" if r["active"] else "#C62828")))
-            self.table.setItem(i, 4, s)
+            self.table.setItem(i, 5, s)
         self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
 
     def _selected_id(self):
@@ -549,14 +567,16 @@ class CustomerManagementDialog(QDialog):
     def _customer_dialog(self, c=None):
         dlg = QDialog(self); dlg.setWindowTitle("Müşteri" + (" Düzenle" if c else " Ekle"))
         dlg.setMinimumWidth(360); lay = QVBoxLayout(dlg); form = QFormLayout(); form.setSpacing(8)
-        dlg.name  = QLineEdit(c["name"]    if c else "")
-        dlg.code  = QLineEdit(c["code"]    if c else "")
-        dlg.phone = QLineEdit(c["phone"]   if c else "")
-        dlg.addr  = QLineEdit(c["address"] if c else "")
+        dlg.name   = QLineEdit(c["name"]    if c else "")
+        dlg.code   = QLineEdit(c["code"]    if c else "")
+        dlg.phone  = QLineEdit(c["phone"]   if c else "")
+        dlg.addr   = QLineEdit(c["address"] if c else "")
+        dlg.tax_no = QLineEdit(c["tax_no"]  if c else "")
         form.addRow("Müşteri Adı *:", dlg.name)
         form.addRow("Kodu:",          dlg.code)
         form.addRow("Telefon:",       dlg.phone)
         form.addRow("Adres:",         dlg.addr)
+        form.addRow("Vergi No:",      dlg.tax_no)
         lay.addLayout(form)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
@@ -568,7 +588,7 @@ class CustomerManagementDialog(QDialog):
         if dlg.exec():
             if not dlg.name.text().strip():
                 return QMessageBox.warning(self,"Hata","Müşteri adı zorunlu!")
-            db.add_customer(dlg.name.text(), dlg.code.text(), dlg.phone.text(), dlg.addr.text())
+            db.add_customer(dlg.name.text(), dlg.code.text(), dlg.phone.text(), dlg.addr.text(), dlg.tax_no.text())
             self._load(self.search.text())
 
     def _edit(self):
@@ -578,7 +598,7 @@ class CustomerManagementDialog(QDialog):
         dlg = self._customer_dialog(c)
         if dlg.exec():
             db.update_customer(cid, dlg.name.text(), dlg.code.text(),
-                               dlg.phone.text(), dlg.addr.text())
+                               dlg.phone.text(), dlg.addr.text(), dlg.tax_no.text())
             self._load(self.search.text())
 
     def _delete(self):
@@ -601,6 +621,132 @@ class CustomerManagementDialog(QDialog):
             db.import_customers_bulk(records)
             self._load(self.search.text())
             QMessageBox.information(self,"Başarılı",f"{len(records)} müşteri içe aktarıldı.")
+        except Exception as e:
+            QMessageBox.critical(self,"Hata",f"İçe aktarma hatası:\n{e}")
+
+
+class SupplierManagementDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Tedarikçi Yönetimi")
+        self.setMinimumSize(680, 460)
+        self._build_ui(); self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+
+        # Arama
+        top = QHBoxLayout()
+        self.search = QLineEdit(); self.search.setPlaceholderText("Tedarikçi adı, kodu, telefon...")
+        self.search.textChanged.connect(lambda: self._load(self.search.text()))
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.search); top.addStretch()
+        lay.addLayout(top)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["Tedarikçi Adı", "Kodu", "Telefon", "Adres", "Vergi No", "Durum"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for i in (1,2,3,4,5): hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        lay.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        btn_add   = QPushButton("+ Yeni Tedarikçi");  btn_add.clicked.connect(self._add)
+        btn_edit  = QPushButton("✎ Düzenle");          btn_edit.clicked.connect(self._edit)
+        btn_del   = QPushButton("✕ Sil")
+        btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
+        btn_del.clicked.connect(self._delete)
+        btn_excel = QPushButton("📥 Excel'den İçe Aktar")
+        btn_excel.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
+        btn_excel.clicked.connect(self._import_excel)
+        btn_close = QPushButton("Kapat"); btn_close.clicked.connect(self.accept)
+        for b in (btn_add, btn_edit, btn_del, btn_excel):
+            btn_row.addWidget(b)
+        btn_row.addStretch(); btn_row.addWidget(btn_close)
+        lay.addLayout(btn_row)
+
+    def _load(self, search=""):
+        rows = db.get_all_suppliers(search=search, active_only=False)
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            name_item = QTableWidgetItem(r["name"] or "")
+            name_item.setData(Qt.ItemDataRole.UserRole, r["id"])
+            self.table.setItem(i, 0, name_item)
+            self.table.setItem(i, 1, QTableWidgetItem(r["code"] or ""))
+            self.table.setItem(i, 2, QTableWidgetItem(r["phone"] or ""))
+            self.table.setItem(i, 3, QTableWidgetItem(r["address"] or ""))
+            self.table.setItem(i, 4, QTableWidgetItem(r["tax_no"] or ""))
+            s = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
+            s.setForeground(QBrush(QColor("#2E7D32" if r["active"] else "#C62828")))
+            self.table.setItem(i, 5, s)
+        self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
+
+    def _selected_id(self):
+        row = self.table.currentRow()
+        if row < 0: QMessageBox.information(self,"Bilgi","Tedarikçi seçin."); return None
+        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+
+    def _supplier_dialog(self, s=None):
+        dlg = QDialog(self); dlg.setWindowTitle("Tedarikçi" + (" Düzenle" if s else " Ekle"))
+        dlg.setMinimumWidth(360); lay = QVBoxLayout(dlg); form = QFormLayout(); form.setSpacing(8)
+        dlg.name   = QLineEdit(s["name"]    if s else "")
+        dlg.code   = QLineEdit(s["code"]    if s else "")
+        dlg.phone  = QLineEdit(s["phone"]   if s else "")
+        dlg.addr   = QLineEdit(s["address"] if s else "")
+        dlg.tax_no = QLineEdit(s["tax_no"]  if s else "")
+        form.addRow("Tedarikçi Adı *:", dlg.name)
+        form.addRow("Kodu:",            dlg.code)
+        form.addRow("Telefon:",         dlg.phone)
+        form.addRow("Adres:",           dlg.addr)
+        form.addRow("Vergi No:",        dlg.tax_no)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        return dlg
+
+    def _add(self):
+        dlg = self._supplier_dialog()
+        if dlg.exec():
+            if not dlg.name.text().strip():
+                return QMessageBox.warning(self,"Hata","Tedarikçi adı zorunlu!")
+            db.add_supplier(dlg.name.text(), dlg.code.text(), dlg.phone.text(), dlg.addr.text(), dlg.tax_no.text())
+            self._load(self.search.text())
+
+    def _edit(self):
+        sid = self._selected_id()
+        if not sid: return
+        s = db.get_supplier(sid)
+        dlg = self._supplier_dialog(s)
+        if dlg.exec():
+            db.update_supplier(sid, dlg.name.text(), dlg.code.text(),
+                               dlg.phone.text(), dlg.addr.text(), dlg.tax_no.text())
+            self._load(self.search.text())
+
+    def _delete(self):
+        sid = self._selected_id()
+        if not sid: return
+        if QMessageBox.question(self,"Sil","Tedarikçi silinsin mi?",
+                QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            db.delete_supplier(sid); self._load(self.search.text())
+
+    def _import_excel(self):
+        path, _ = QFileDialog.getOpenFileName(self,"Tedarikçi Excel Dosyası","","Excel (*.xlsx *.xls)")
+        if not path: return
+        try:
+            dlg = ExcelColumnMapDialog(path, SUPPLIER_FIELDS, SUPPLIER_AUTO, self)
+            if not dlg.exec():
+                return
+            records = dlg.records
+            if not records:
+                return QMessageBox.warning(self,"Hata","Eşleştirilen sütunda geçerli veri bulunamadı.")
+            db.import_suppliers_bulk(records)
+            self._load(self.search.text())
+            QMessageBox.information(self,"Başarılı",f"{len(records)} tedarikçi içe aktarıldı.")
         except Exception as e:
             QMessageBox.critical(self,"Hata",f"İçe aktarma hatası:\n{e}")
 
@@ -3510,6 +3656,10 @@ class MainWindow(QMainWindow):
         cust_menu = menubar.addMenu("👥 Müşteriler")
         cust_menu.addAction("Müşteri Listesi...").triggered.connect(
             lambda: CustomerManagementDialog(self).exec())
+
+        sup_menu = menubar.addMenu("🏭 Tedarikçiler")
+        sup_menu.addAction("Tedarikçi Listesi...").triggered.connect(
+            lambda: SupplierManagementDialog(self).exec())
 
         prod_menu = menubar.addMenu("📦 Ürünler")
         prod_menu.addAction("Ürün Kataloğu...").triggered.connect(

@@ -157,20 +157,46 @@ def get_all_customers(search="", active_only=True):
 def get_customer(cid):
     return _get(f"/api/customers/{cid}")
 
-def add_customer(name, code="", phone="", address=""):
+def add_customer(name, code="", phone="", address="", tax_no=""):
     r = _post("/api/customers", {"name": name, "code": code,
-                                 "phone": phone, "address": address})
+                                 "phone": phone, "address": address, "tax_no": tax_no})
     return (r or {}).get("id")
 
-def update_customer(cid, name, code, phone, address, active=1):
+def update_customer(cid, name, code, phone, address, tax_no="", active=1):
     _put(f"/api/customers/{cid}", {"name": name, "code": code, "phone": phone,
-                                   "address": address, "active": active})
+                                   "address": address, "tax_no": tax_no, "active": active})
 
 def delete_customer(cid):
     _delete(f"/api/customers/{cid}")
 
 def import_customers_bulk(records):
     r = _post("/api/customers/bulk", {"records": records})
+    return (r or {}).get("count", 0)
+
+
+# ── Tedarikçiler ─────────────────────────────────────────────────
+
+def get_all_suppliers(search="", active_only=True):
+    return _get("/api/suppliers", {"search": search,
+                                   "active_only": "1" if active_only else "0"}) or []
+
+def get_supplier(sid):
+    return _get(f"/api/suppliers/{sid}")
+
+def add_supplier(name, code="", phone="", address="", tax_no=""):
+    r = _post("/api/suppliers", {"name": name, "code": code,
+                                 "phone": phone, "address": address, "tax_no": tax_no})
+    return (r or {}).get("id")
+
+def update_supplier(sid, name, code, phone, address, tax_no="", active=1):
+    _put(f"/api/suppliers/{sid}", {"name": name, "code": code, "phone": phone,
+                                   "address": address, "tax_no": tax_no, "active": active})
+
+def delete_supplier(sid):
+    _delete(f"/api/suppliers/{sid}")
+
+def import_suppliers_bulk(records):
+    r = _post("/api/suppliers/bulk", {"records": records})
     return (r or {}).get("count", 0)
 
 
