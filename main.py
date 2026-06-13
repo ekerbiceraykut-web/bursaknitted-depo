@@ -15,6 +15,22 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant
 from PyQt6.QtGui import QFont, QColor, QIcon, QBrush, QPixmap
 
+
+def _excepthook(exctype, value, tb):
+    """PyQt6 varsayılan davranışı: bir slot içinde yakalanmayan hata oluşunca
+    qFatal() çağrılır ve tüm program anında kapanır (SIGABRT) — kullanıcı sadece
+    "program kapandı" görür. Bu hook hatayı gösterir ve programı açık tutar."""
+    import traceback
+    traceback.print_exception(exctype, value, tb)
+    try:
+        QMessageBox.critical(QApplication.activeWindow(), "Beklenmeyen Hata",
+            f"Bir hata oluştu, son işlem tamamlanmamış olabilir:\n\n{value}")
+    except Exception:
+        pass
+
+
+sys.excepthook = _excepthook
+
 # Bağlantı modu: "local" veya "remote"
 CONNECTION_MODE = "local"
 
@@ -441,10 +457,19 @@ def _wire_header_persistence(table, key):
         restored = hdr.restoreState(st)
     if not restored:
         table.resizeColumnsToContents()
-    def _save_hdr(*a):
+    # sectionResized, sürükleyerek yeniden boyutlandırma sırasında (mouseMoveEvent
+    # içinden) art arda tetiklenir; o anda hdr.saveState() çağırmak macOS'ta
+    # QHeaderView::resizeSection içinde yeniden girilebilirlik (reentrancy) sorunu
+    # yaratıp SIGSEGV'e yol açabiliyor. Kayıt işlemini QTimer ile geciktirip
+    # event-loop'a döndükten sonra yapıyoruz.
+    save_timer = QTimer(table)
+    save_timer.setSingleShot(True)
+    save_timer.setInterval(300)
+    def _save_hdr():
         QSettings("BursaKnitted", "DepoTakip").setValue(key, hdr.saveState())
-    hdr.sectionMoved.connect(_save_hdr)
-    hdr.sectionResized.connect(_save_hdr)
+    save_timer.timeout.connect(_save_hdr)
+    hdr.sectionMoved.connect(lambda *a: save_timer.start())
+    hdr.sectionResized.connect(lambda *a: save_timer.start())
     table.setProperty("hdr_wired", True)
 
 
