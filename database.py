@@ -213,6 +213,24 @@ def init_db():
             received_kg REAL DEFAULT 0
         );
 
+        CREATE TABLE IF NOT EXISTS purchase_order_receipts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            po_id INTEGER NOT NULL,
+            po_item_id INTEGER NOT NULL,
+            fabric_id INTEGER,
+            product_code TEXT DEFAULT '',
+            product_name TEXT DEFAULT '',
+            fabric_type TEXT DEFAULT '',
+            meter REAL DEFAULT 0,
+            kg REAL DEFAULT 0,
+            location TEXT NOT NULL DEFAULT '',
+            location_group TEXT DEFAULT '',
+            unit_price REAL DEFAULT 0,
+            user_name TEXT DEFAULT '',
+            status TEXT DEFAULT 'BEKLEMEDE',
+            received_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
         CREATE INDEX IF NOT EXISTS idx_fabrics_code ON fabrics(product_code);
         CREATE INDEX IF NOT EXISTS idx_fabrics_location ON fabrics(location);
         CREATE INDEX IF NOT EXISTS idx_movements_fabric ON movements(fabric_id);
@@ -223,6 +241,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
         CREATE INDEX IF NOT EXISTS idx_po_no ON purchase_orders(po_no);
         CREATE INDEX IF NOT EXISTS idx_po_items_po ON purchase_order_items(po_id);
+        CREATE INDEX IF NOT EXISTS idx_receipts_po ON purchase_order_receipts(po_id);
+        CREATE INDEX IF NOT EXISTS idx_receipts_item ON purchase_order_receipts(po_item_id);
     """)
 
     # Boyahane fire kayıtları
@@ -1236,8 +1256,13 @@ def get_all_orders(search="", status=""):
         s = f"%{search}%"
         params.extend([s, s, s, s, s, s])
     if status:
-        query += " AND o.status = ?"
-        params.append(status)
+        if isinstance(status, (list, tuple)):
+            placeholders = ",".join("?" * len(status))
+            query += f" AND o.status IN ({placeholders})"
+            params.extend(status)
+        else:
+            query += " AND o.status = ?"
+            params.append(status)
     query += " ORDER BY o.id DESC"
     rows = [dict(r) for r in conn.execute(query, params).fetchall()]
 
@@ -1460,9 +1485,9 @@ def delete_purchase_order(po_id):
     conn.close()
 
 
-def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="", lab_no=""):
-    """Mal geldi: DEPO'ya giriş kaydı (add_fabric → otomatik SATINALMA GİRİŞİ
-    hareketi), kalemin received_meter/kg'sini ve PO durumunu günceller."""
+def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="",
+                                location_group=""):
+    """Mal geldi: stok girişi kaydı. Her çağrı ayrı purchase_order_receipts satırı."""
     conn = get_connection()
     item = conn.execute("SELECT * FROM purchase_order_items WHERE id=?", (po_item_id,)).fetchone()
     if not item:
@@ -1485,16 +1510,79 @@ def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="", l
     )
     new_status = "TAMAMLANDI" if fully_received else ("KISMİ GELDİ" if any_received else "BEKLEMEDE")
     conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (new_status, po_id))
+    po_row = conn.execute(
+        "SELECT order_no, po_no FROM purchase_orders WHERE id=?", (po_id,)
+    ).fetchone()
     conn.commit()
     conn.close()
 
-    add_fabric(
+    order_no_tag = f"SİPARİŞ:{po_row['order_no']} | PO:{po_row['po_no']} | " if po_row else ""
+    fabric_id = add_fabric(
         product_name=item["product_name"] or "", product_code=item["product_code"],
         color="", location=location, meter=meter or 0, kg=kg or 0,
         piece_count="", birim_fiyat=item["unit_price"] or 0,
-        fabric_type=item["fabric_type"] or "HAM", lot="", description=item["description"] or "",
-        user_name=user_name, entry_location=location, lab_no=lab_no,
+        fabric_type=item["fabric_type"] or "HAM", lot="", lab_no="",
+        description=f"{order_no_tag}{item['description'] or ''}",
+        user_name=user_name, entry_location=location,
     )
+
+    conn3 = get_connection()
+    conn3.execute("""
+        INSERT INTO purchase_order_receipts
+            (po_id, po_item_id, fabric_id, product_code, product_name, fabric_type,
+             meter, kg, location, location_group, unit_price, user_name, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (po_id, po_item_id, fabric_id,
+          item["product_code"] or "", item["product_name"] or "",
+          item["fabric_type"] or "HAM",
+          meter or 0, kg or 0, location, location_group or "",
+          item["unit_price"] or 0, user_name,
+          "BEKLEMEDE" if (location_group or "") != "DEPO" else "DEPODA"))
+    conn3.commit()
+    conn3.close()
+
+
+def get_po_receipts(po_id):
+    """Bir PO'ya ait tüm mal girişi kayıtları (ayrı kalem ayrı satır)."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT r.*,
+               po.order_no, po.po_no
+        FROM purchase_order_receipts r
+        LEFT JOIN purchase_orders po ON po.id = r.po_id
+        WHERE r.po_id = ?
+        ORDER BY r.received_at
+    """, (po_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_boyahane_queue(status_filter=""):
+    """Dış depoya gönderilen ve boyahane planlaması bekleyen kayıtlar."""
+    conn = get_connection()
+    q = """
+        SELECT r.*,
+               po.order_no, po.po_no, po.supplier_name
+        FROM purchase_order_receipts r
+        LEFT JOIN purchase_orders po ON po.id = r.po_id
+        WHERE r.location_group != 'DEPO' AND r.location_group != ''
+    """
+    params = []
+    if status_filter:
+        q += " AND r.status = ?"
+        params.append(status_filter)
+    q += " ORDER BY r.received_at DESC"
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_boyahane_receipt_status(receipt_id, status):
+    conn = get_connection()
+    conn.execute("UPDATE purchase_order_receipts SET status=? WHERE id=?",
+                 (status, receipt_id))
+    conn.commit()
+    conn.close()
 
 
 # ── Ayarlar ──────────────────────────────────────────────────────

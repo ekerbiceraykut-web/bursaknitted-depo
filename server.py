@@ -198,10 +198,18 @@ class APIHandler(BaseHTTPRequestHandler):
                     order_id=int(order_id) if order_id else None)
                 self._send(_ok(rows))
 
+            elif path.startswith("/api/purchase_orders/") and path.endswith("/receipts"):
+                po_id = int(path.split("/")[-2])
+                self._send(_ok(db.get_po_receipts(po_id)))
+
             elif path.startswith("/api/purchase_orders/"):
                 po_id = int(path.split("/")[-1])
                 r = db.get_purchase_order(po_id)
                 self._send(_ok(r) if r else _err("Bulunamadı"))
+
+            elif path == "/api/boyahane/queue":
+                status_f = qs.get("status",[""])[0]
+                self._send(_ok(db.get_boyahane_queue(status_filter=status_f)))
 
             # ── Ayarlar ────────────────────────────────────────────
             elif path == "/api/settings/company":
@@ -400,7 +408,7 @@ class APIHandler(BaseHTTPRequestHandler):
                 db.receive_purchase_order_item(
                     item_id, body.get("meter",0), body.get("kg",0),
                     body.get("location",""), user_name=user["full_name"],
-                    lab_no=body.get("lab_no","")
+                    location_group=body.get("location_group","")
                 )
                 self._send(_ok())
 
@@ -495,6 +503,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 if user.get("role") != "admin":
                     return self._send(_err("Yetki yok"), 403)
                 db.save_company_settings(**body)
+                self._send(_ok())
+            elif path.startswith("/api/boyahane/receipts/") and path.endswith("/status"):
+                rid = int(path.split("/")[-2])
+                db.update_boyahane_receipt_status(rid, body.get("status",""))
                 self._send(_ok())
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)

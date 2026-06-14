@@ -427,9 +427,20 @@ def update_purchase_order_status(po_id, status):
 def delete_purchase_order(po_id):
     _delete(f"/api/purchase_orders/{po_id}")
 
-def receive_purchase_order_item(po_item_id, meter, kg, location, lab_no=""):
+def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="",
+                                location_group=""):
     _post(f"/api/purchase_orders/items/{po_item_id}/receive",
-          {"meter": meter, "kg": kg, "location": location, "lab_no": lab_no})
+          {"meter": meter, "kg": kg, "location": location,
+           "location_group": location_group})
+
+def get_po_receipts(po_id):
+    return _get(f"/api/purchase_orders/{po_id}/receipts") or []
+
+def get_boyahane_queue(status_filter=""):
+    return _get("/api/boyahane/queue", {"status": status_filter}) or []
+
+def update_boyahane_receipt_status(receipt_id, status):
+    _put(f"/api/boyahane/receipts/{receipt_id}/status", {"status": status})
 
 
 # ── Ayarlar ──────────────────────────────────────────────────────
