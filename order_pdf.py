@@ -16,11 +16,12 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import (Paragraph, SimpleDocTemplate, Spacer, Table,
-                                 TableStyle)
+from reportlab.platypus import (Image, Paragraph, SimpleDocTemplate, Spacer,
+                                 Table, TableStyle)
 
 CURRENCY_SYMBOLS = {"USD": "$", "EUR": "€", "GBP": "£", "TRY": "₺"}
 
+_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 pdfmetrics.registerFont(TTFont("Turkish", os.path.join(_FONT_DIR, "Arial.ttf")))
 pdfmetrics.registerFont(TTFont("Turkish-Bold", os.path.join(_FONT_DIR, "Arial Bold.ttf")))
@@ -49,11 +50,14 @@ def _fmt_num(value, decimals=2):
 
 
 def _multiline(text):
-    return escape(text or "").replace("\n", "<br/>")
+    # Bundled Arial fontu ₺ (U+20BA) glifini içermiyor; PDF'te "TL" olarak yazılır.
+    return escape(text or "").replace("₺", "TL").replace("\n", "<br/>")
 
 
 def generate_order_pdf(order, company, file_path):
     symbol = CURRENCY_SYMBOLS.get(order.get("currency", "USD"), "$")
+    if symbol == "₺":
+        symbol = "TL"
     items = order.get("items") or []
 
     doc = SimpleDocTemplate(
@@ -63,12 +67,27 @@ def generate_order_pdf(order, company, file_path):
     )
     elements = []
 
-    # ── Firma başlığı ────────────────────────────────────────────
-    elements.append(Paragraph(escape(company.get("name", "")), _STYLE_COMPANY))
-    elements.append(Paragraph(escape(company.get("address", "")), _STYLE_SMALL))
-    elements.append(Paragraph(
-        f"Tel: {escape(company.get('phone', ''))}  |  Vergi No: {escape(company.get('tax', ''))}"
-        f"  |  Menşei: {escape(company.get('origin', ''))}", _STYLE_SMALL))
+    # ── Firma başlığı + logo ─────────────────────────────────────
+    company_info = [
+        Paragraph(escape(company.get("name", "")), _STYLE_COMPANY),
+        Paragraph(escape(company.get("address", "")), _STYLE_SMALL),
+        Paragraph(
+            f"Tel: {escape(company.get('phone', ''))}  |  Vergi No: {escape(company.get('tax', ''))}"
+            f"  |  Menşei: {escape(company.get('origin', ''))}", _STYLE_SMALL),
+    ]
+    logo_cell = ""
+    if os.path.exists(_LOGO_PATH):
+        logo_cell = Image(_LOGO_PATH, width=42 * mm, height=42 * mm * 469 / 1293)
+    header_table = Table([[company_info, logo_cell]], colWidths=[220 * mm, 53 * mm])
+    header_table.setStyle(TableStyle([
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("ALIGN", (1, 0), (1, 0), "RIGHT"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 0),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    elements.append(header_table)
     elements.append(Spacer(1, 5 * mm))
 
     # ── Başlık ───────────────────────────────────────────────────
@@ -79,6 +98,7 @@ def generate_order_pdf(order, company, file_path):
     info_data = [
         ["Sipariş No:", order.get("order_no", ""), "Sipariş Tarihi:", _fmt_date(order.get("order_date"))],
         ["Müşteri:", order.get("customer_name", ""), "Müşteri Referans:", order.get("customer_ref", "")],
+        ["Müşteri Vergi No:", order.get("customer_tax_no", "") or "", "", ""],
         ["Termin:", _fmt_date(order.get("delivery_date")), "Ödeme Şekli:", order.get("payment_method", "")],
         ["Teslimat Şartları:", order.get("delivery_terms", ""), "Teslimat Adresi:", order.get("delivery_address", "")],
     ]
@@ -99,11 +119,16 @@ def generate_order_pdf(order, company, file_path):
                "Lab No", "Açıklama", "Metre", "Kilo", f"Birim Fiyat ({symbol})", f"Tutar ({symbol})"]
     item_rows = [headers]
     grand_total = 0.0
+    total_meter = 0.0
+    total_kg = 0.0
     for it in items:
         meter = it.get("meter") or 0
+        kg = it.get("kg") or 0
         sale_price = it.get("sale_price") or 0
         total = meter * sale_price
         grand_total += total
+        total_meter += meter
+        total_kg += kg
         item_rows.append([
             Paragraph(escape(it.get("product_code", "")), _STYLE_CELL),
             Paragraph(escape(it.get("composition", "")), _STYLE_CELL),
@@ -114,11 +139,12 @@ def generate_order_pdf(order, company, file_path):
             it.get("lab_no", "") or "",
             Paragraph(escape(it.get("description", "")), _STYLE_CELL),
             _fmt_num(meter),
-            _fmt_num(it.get("kg")),
+            _fmt_num(kg),
             _fmt_num(sale_price),
             _fmt_num(total),
         ])
-    item_rows.append(["GENEL TOPLAM:", "", "", "", "", "", "", "", "", "", "", _fmt_num(grand_total)])
+    item_rows.append(["GENEL TOPLAM:", "", "", "", "", "", "",
+                       "", _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total)])
 
     col_widths = [22 * mm, 32 * mm, 12 * mm, 14 * mm, 22 * mm, 18 * mm, 16 * mm,
                    38 * mm, 16 * mm, 16 * mm, 24 * mm, 24 * mm]
@@ -132,8 +158,8 @@ def generate_order_pdf(order, company, file_path):
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
         ("ALIGN", (8, 0), (11, -1), "RIGHT"),
         ("ALIGN", (2, 0), (3, -1), "CENTER"),
-        ("SPAN", (0, -1), (10, -1)),
-        ("ALIGN", (0, -1), (10, -1), "RIGHT"),
+        ("SPAN", (0, -1), (7, -1)),
+        ("ALIGN", (0, -1), (7, -1), "RIGHT"),
         ("FONTNAME", (0, -1), (-1, -1), "Turkish-Bold"),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F5F5F5")),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
@@ -144,7 +170,24 @@ def generate_order_pdf(order, company, file_path):
 
     # ── Banka bilgilerimiz ───────────────────────────────────────
     elements.append(Paragraph("Banka Bilgilerimiz", _STYLE_HEADING))
-    elements.append(Paragraph(_multiline(company.get("bank_info", "")), _STYLE_NORMAL))
+    elements.append(Spacer(1, 1 * mm))
+    bank_blocks = [b.strip() for b in (company.get("bank_info", "") or "").split("\n\n") if b.strip()]
+    if not bank_blocks:
+        bank_blocks = [""]
+    bank_col_width = 273 * mm / len(bank_blocks)
+    bank_table = Table(
+        [[Paragraph(_multiline(b), _STYLE_NORMAL) for b in bank_blocks]],
+        colWidths=[bank_col_width] * len(bank_blocks))
+    bank_table.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#9E9E9E")),
+        ("INNERGRID", (0, 0), (-1, -1), 0.75, colors.HexColor("#9E9E9E")),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(bank_table)
     elements.append(Spacer(1, 3 * mm))
 
     if (order.get("notes") or "").strip():
@@ -154,6 +197,20 @@ def generate_order_pdf(order, company, file_path):
 
     # ── Sözleşme şartnamesi ──────────────────────────────────────
     elements.append(Paragraph("Sözleşme Şartnamesi", _STYLE_HEADING))
-    elements.append(Paragraph(_multiline(company.get("contract_template", "")), _STYLE_SMALL))
+    elements.append(Spacer(1, 1 * mm))
+    contract_lines = [ln.strip() for ln in (company.get("contract_template", "") or "").split("\n") if ln.strip()]
+    if not contract_lines:
+        contract_lines = [""]
+    contract_table = Table(
+        [[Paragraph(_multiline(ln), _STYLE_SMALL)] for ln in contract_lines],
+        colWidths=[273 * mm])
+    contract_table.setStyle(TableStyle([
+        ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#9E9E9E")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+    ]))
+    elements.append(contract_table)
 
     doc.build(elements)

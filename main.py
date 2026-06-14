@@ -454,6 +454,11 @@ def _excel_val_to_str(val):
     return str(val).strip()
 
 
+def _customer_tax_no(customer_id):
+    customer = db.get_customer(customer_id)
+    return dict(customer).get("tax_no", "") if customer else ""
+
+
 def _wire_header_persistence(table, key, default_fn=None):
     """Sütun sırası ve genişliği kalıcı: kapatıp açınca aynı kalır.
     default_fn: kayıtlı durum yoksa (ilk çalıştırma) uygulanacak varsayılan
@@ -2340,7 +2345,8 @@ class OrderDialog(QDialog):
     def _export_pdf(self):
         company = db.get_company_settings()
         data = self.get_data()
-        order = {**data, "order_no": self.order.get("order_no", "")}
+        order = {**data, "order_no": self.order.get("order_no", ""),
+                 "customer_tax_no": _customer_tax_no(data.get("customer_id"))}
         default_name = f"{order['order_no']}.pdf"
         path, _ = QFileDialog.getSaveFileName(self, "Sipariş Sözleşmesi PDF", default_name, "PDF (*.pdf)")
         if not path:
@@ -4102,6 +4108,11 @@ class OrdersView(QWidget):
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(True)
         self.table.doubleClicked.connect(self._edit_order)
+        self.table.setStyleSheet(
+            "QTreeWidget::item { border: 1px solid #E0E0E0; padding: 3px; }"
+            "QTreeWidget::item:has-children { background-color: #E8EAF6; font-weight: bold;"
+            " border-top: 2px solid #9FA8DA; padding-top: 5px; padding-bottom: 5px; }"
+        )
         layout.addWidget(self.table)
         _wire_header_persistence(self.table, "orders_columns")
 
@@ -4145,19 +4156,24 @@ class OrdersView(QWidget):
                 kg = it.get("kg") or 0
                 sale_price = it.get("sale_price") or 0
                 total = meter * sale_price
-                detail = (
-                    f"   ↳ Ürün Kodu: {it.get('product_code','') or ''}   "
-                    f"Kompozisyon: {it.get('composition','') or ''}   "
-                    f"En: {it.get('width','') or ''}   Gramaj: {it.get('gramaj','') or ''}   "
-                    f"Kumaş Tipi: {it.get('fabric_type','') or ''}   Renk: {it.get('color','') or ''}   "
-                    f"Lab No: {it.get('lab_no','') or ''}   Açıklama: {it.get('description','') or ''}   "
-                    f"Metre: {meter:,.2f}   Kilo: {kg:,.2f}   "
-                    f"Birim Fiyat: {sale_price:,.2f} {symbol}   Tutar: {total:,.2f} {symbol}"
-                )
-                child = QTreeWidgetItem([detail] + [""] * (len(self.COLS) - 1))
+                child_vals = [
+                    it.get("product_code") or "",
+                    it.get("composition") or "",
+                    it.get("width") or "",
+                    it.get("gramaj") or "",
+                    it.get("fabric_type") or "",
+                    it.get("color") or "",
+                    it.get("lab_no") or "",
+                    it.get("description") or "",
+                    f"{meter:,.2f}",
+                    f"{kg:,.2f}",
+                    f"{sale_price:,.2f} {symbol}",
+                    f"{total:,.2f} {symbol}",
+                ]
+                child = QTreeWidgetItem([str(v) for v in child_vals])
+                for col in (8, 9, 10, 11):
+                    child.setTextAlignment(col, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
                 order_item.addChild(child)
-                self.table.setFirstColumnSpanned(
-                    order_item.indexOfChild(child), self.table.indexFromItem(order_item), True)
 
         self.table.expandAll()
         self.count_lbl.setText(f"{len(rows)} sipariş")
@@ -4210,6 +4226,7 @@ class OrdersView(QWidget):
         order = db.get_order(oid)
         if not order:
             return
+        order = {**order, "customer_tax_no": _customer_tax_no(order.get("customer_id"))}
         company = db.get_company_settings()
         default_name = f"{order['order_no']}.pdf"
         path, _ = QFileDialog.getSaveFileName(self, "Sipariş Sözleşmesi PDF", default_name, "PDF (*.pdf)")
