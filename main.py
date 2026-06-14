@@ -1574,6 +1574,8 @@ class FabricDialog(QDialog):
         self.product_name = QLineEdit()
 
         self.color = QLineEdit()
+        self.lab_no = QLineEdit()
+        self.lab_no.setPlaceholderText("Lab dip onay numarası (opsiyonel)")
         self._load_products()
 
         # Lokasyon — iki kademeli: önce depo (DEPO / dış depolar), DEPO seçilirse raf
@@ -1615,6 +1617,7 @@ class FabricDialog(QDialog):
         form.addRow("Ürün Kodu *:", self.product_code)
         form.addRow("Ürün Açıklaması:", self.product_name)
         form.addRow("Renk:", self.color)
+        form.addRow("Lab No:", self.lab_no)
 
         # Satın alma lokasyonu — köken takibi (taşınsa bile değişmez)
         self.entry_loc = QComboBox()
@@ -1746,6 +1749,7 @@ class FabricDialog(QDialog):
         self._load_products(select_code=f["product_code"] or "", select_name=f["product_name"] or "")
         self.product_name.setText(f["product_name"] or "")
         self.color.setText(f["color"] or "")
+        self.lab_no.setText(dict(f).get("lab_no") or "")
         # Lokasyonu seç — raf ise DEPO + raf, değilse doğrudan
         loc_val = f["location"] or ""
         if loc_val in self._depo_rafs:
@@ -1797,6 +1801,7 @@ class FabricDialog(QDialog):
             "product_code": (self.product_code.currentData() or "").strip().upper(),
             "product_name": self.product_name.text().strip(),
             "color": self.color.text().strip().upper(),
+            "lab_no": self.lab_no.text().strip(),
             "location": self._selected_location(),
             "entry_location": self.entry_loc.currentData() or self._selected_location(),
             "fabric_type": self.fabric_type.currentData() or "",
@@ -2460,7 +2465,7 @@ class DailyMovementsDialog(QDialog):
             self.count_lbl.setText("Bu kriterlere uyan hareket yok")
 
 
-COLS = ["#", "Ürün Kodu", "Ürün Açıklaması", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok."]
+COLS = ["#", "Ürün Kodu", "Ürün Açıklaması", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok.", "Lab No"]
 _GREEN = QColor("#1B5E20")
 _GREY  = QColor("#BDBDBD")
 _ALT   = QColor("#F0F4FF")
@@ -2584,7 +2589,7 @@ class FabricModel(QAbstractTableModel):
         self._rows = []
         self._ids  = []
 
-    # tuple: 0=id,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok
+    # tuple: 0=id,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok,15=labNo
     def load(self, rows):
         self.beginResetModel()
         self._rows = []
@@ -2609,6 +2614,7 @@ class FabricModel(QAbstractTableModel):
                 deger,
                 str(r["updated_at"] or "")[:16],
                 dict(r).get("entry_location") or "",
+                dict(r).get("lab_no") or "",
             ))
         self._ids = [r[0] for r in self._rows]
         self.endResetModel()
@@ -2648,7 +2654,7 @@ class FabricModel(QAbstractTableModel):
         row, col = index.row(), index.column()
         r = self._rows[row]
 
-        # col: 0=#,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok
+        # col: 0=#,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok,15=labNo
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0: return str(row + 1)
             val = r[col]
@@ -2776,7 +2782,7 @@ class StockTable(QWidget):
         hdr.setSectionsMovable(True)   # sütun sürükle-bırak
 
         # Başlangıç genişlikleri (kayıtlı sütun düzeni yoksa kullanılır)
-        col_widths = [36, 100, 130, 160, 110, 90, 70, 90, 72, 65, 80, 110, 120, 130, 220]
+        col_widths = [36, 100, 130, 160, 110, 90, 70, 90, 72, 65, 80, 110, 120, 130, 220, 90]
         def _default_widths():
             for i, w in enumerate(col_widths):
                 self.table.setColumnWidth(i, w)
@@ -3041,7 +3047,7 @@ class StockTable(QWidget):
     # Çift tıklanabilen sütunlar → veritabanı alanı
     CELL_FIELDS = {1: "product_code", 2: "product_name", 3: "description", 4: "color",
                    5: "location", 6: "fabric_type", 7: "lot", 8: "meter", 9: "kg",
-                   10: "piece_count", 11: "birim_fiyat", 14: "entry_location"}
+                   10: "piece_count", 11: "birim_fiyat", 14: "entry_location", 15: "lab_no"}
 
     def _cell_edit(self, index):
         if not index.isValid():
@@ -3057,7 +3063,7 @@ class StockTable(QWidget):
         if dlg.exec():
             d = {k: dict(fabric).get(k) for k in
                  ("product_name", "product_code", "color", "location", "meter", "kg",
-                  "piece_count", "birim_fiyat", "fabric_type", "lot", "description")}
+                  "piece_count", "birim_fiyat", "fabric_type", "lot", "description", "lab_no")}
             d[field] = dlg.value()
             db.update_fabric(fid, **d)
             self.refresh_with_locations()
@@ -3107,7 +3113,7 @@ class StockTable(QWidget):
         if dlg.exec():
             val = dlg.value()
             keys = ("product_name", "product_code", "color", "location", "meter", "kg",
-                    "piece_count", "birim_fiyat", "fabric_type", "lot", "description")
+                    "piece_count", "birim_fiyat", "fabric_type", "lot", "description", "lab_no")
             for fid in fids:
                 fabric = db.get_fabric(fid)
                 d = {k: dict(fabric).get(k) for k in keys}

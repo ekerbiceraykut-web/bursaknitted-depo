@@ -220,7 +220,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("piece_count",""),  body.get("birim_fiyat",0),
                     body.get("fabric_type",""),  body.get("lot",""),
                     body.get("description",""),  user_name=user["full_name"],
-                    entry_location=body.get("entry_location","")
+                    entry_location=body.get("entry_location",""),
+                    lab_no=body.get("lab_no","")
                 )
                 self._send(_ok({"id": fid}))
 
@@ -347,7 +348,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("piece_count",""),  body.get("birim_fiyat",0),
                     body.get("fabric_type",""),  body.get("lot",""),
                     body.get("description",""),
-                    entry_location=body.get("entry_location")
+                    entry_location=body.get("entry_location"),
+                    lab_no=body.get("lab_no")
                 )
                 self._send(_ok())
             elif path.startswith("/api/customers/"):
