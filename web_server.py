@@ -127,6 +127,7 @@ tr:hover td{{background:#e3f2fd}}
 .b-ham{{background:#EFEBE9;color:#5D4037}}
 .b-pfd{{background:#E0F2F1;color:#00695C}}
 .b-boyali{{background:#E3F2FD;color:#1565C0}}
+.b-iplikboyali{{background:#FFF3E0;color:#EF6C00}}
 .b-baskili{{background:#F3E5F5;color:#6A1B9A}}
 .b-giris{{background:#E8F5E9;color:#2E7D32}}
 .b-cikis{{background:#FFEBEE;color:#C62828}}
@@ -272,10 +273,10 @@ def _stok_page(user, search="", location="", ftype=""):
 
     type_opts = "".join(
         f'<option value="{t}" {"selected" if ftype==t else ""}>{t}</option>'
-        for t in ["","HAM","PFD","BOYALI","BASKILI"]
+        for t in ["","HAM","PFD","BOYALI","İPLİĞİ BOYALI","BASKILI"]
     )
 
-    TYPE_BADGES = {"HAM":"b-ham","PFD":"b-pfd","BOYALI":"b-boyali","BASKILI":"b-baskili"}
+    TYPE_BADGES = {"HAM":"b-ham","PFD":"b-pfd","BOYALI":"b-boyali","İPLİĞİ BOYALI":"b-iplikboyali","BASKILI":"b-baskili"}
     table_rows = ""
     for r in rows:
         mt  = r["meter"] or 0
@@ -349,7 +350,7 @@ def _detay_page(user, fabric_id):
         </tr>"""
 
     tip = fabric['fabric_type'] or ''
-    TYPE_BADGES = {"HAM":"b-ham","PFD":"b-pfd","BOYALI":"b-boyali","BASKILI":"b-baskili"}
+    TYPE_BADGES = {"HAM":"b-ham","PFD":"b-pfd","BOYALI":"b-boyali","İPLİĞİ BOYALI":"b-iplikboyali","BASKILI":"b-baskili"}
     tip_badge = f'<span class="badge {TYPE_BADGES.get(tip,"")}">{tip}</span>' if tip else "—"
 
     actions = ""
@@ -499,7 +500,7 @@ def _fabric_form(user, fabric=None, error="", post_data=None):
     cur_type = pd.get("fabric_type") or (fabric["fabric_type"] if fabric else "")
     type_opts = '<option value="">— Seçiniz —</option>' + "".join(
         f'<option value="{t}" {"selected" if cur_type==t else ""}>{t}</option>'
-        for t in ["HAM","PFD","BOYALI","BASKILI"]
+        for t in ["HAM","PFD","BOYALI","İPLİĞİ BOYALI","BASKILI"]
     )
 
     def v(key, default=""):

@@ -1602,7 +1602,7 @@ class FabricDialog(QDialog):
         # Kumaş tipi — zorunlu
         self.fabric_type = QComboBox()
         self.fabric_type.addItem("— Seçiniz —", "")
-        for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
+        for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]:
             self.fabric_type.addItem(t, t)
         self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
 
@@ -1783,7 +1783,7 @@ class FabricDialog(QDialog):
         elif self.depo.currentData() == "__DEPO__" and not self.raf.currentData():
             errors.append("• Raf seçilmelidir")
         if not self.fabric_type.currentData():
-            errors.append("• Kumaş tipi seçilmelidir (Ham / PFD / Boyalı / Baskılı)")
+            errors.append("• Kumaş tipi seçilmelidir (Ham / PFD / Boyalı / İpliği Boyalı / Baskılı)")
             self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
         else:
             self.fabric_type.setStyleSheet("")
@@ -1836,7 +1836,7 @@ class CellEditDialog(QDialog):
         if field == "fabric_type":
             self.widget = QComboBox()
             self.widget.addItem("— Seçiniz —", "")
-            for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
+            for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]:
                 self.widget.addItem(t, t)
             idx = self.widget.findData(cur or "")
             if idx >= 0:
@@ -2359,7 +2359,7 @@ class DailyMovementsDialog(QDialog):
         filt.addWidget(QLabel("Tip:"))
         self.tip_filter = QComboBox()
         self.tip_filter.addItem("Tümü", "")
-        for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
+        for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]:
             self.tip_filter.addItem(t, t)
         self.tip_filter.currentIndexChanged.connect(self._load)
         filt.addWidget(self.tip_filter)
@@ -2671,6 +2671,7 @@ class FabricModel(QAbstractTableModel):
                 return QBrush({"HAM": QColor("#5D4037"),
                                 "PFD": QColor("#00695C"),
                                 "BOYALI": QColor("#545454"),
+                                "İPLİĞİ BOYALI": QColor("#EF6C00"),
                                 "BASKILI": QColor("#6A1B9A")}.get(r[6], QColor("#333")))
             if col == 7 and _AUTO_LOT.match(r[7]):
                 return QBrush(QColor("#78909C"))
@@ -2726,7 +2727,7 @@ class StockTable(QWidget):
         self.type_filter = QComboBox()
         self.type_filter.setMinimumWidth(100)
         self.type_filter.addItem("Tüm Tipler", "")
-        for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
+        for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]:
             self.type_filter.addItem(t, t)
         self.type_filter.currentIndexChanged.connect(self.refresh)
 
@@ -3602,12 +3603,14 @@ class DashboardWidget(QWidget):
         self.stat_ham    = QLabel("—")
         self.stat_pfd    = QLabel("—")
         self.stat_boyali = QLabel("—")
+        self.stat_iplikboyali = QLabel("—")
         self.stat_baskili= QLabel("—")
         row2 = QHBoxLayout()
         for icon, lbl, color, wgt in [
             ("🟫","HAM (Metre)","#5D4037",   self.stat_ham),
             ("🟩","PFD (Metre)","#00695C",   self.stat_pfd),
             ("🟦","BOYALI (Metre)","#1565C0", self.stat_boyali),
+            ("🟧","İPLİĞİ BOYALI (Metre)","#EF6C00", self.stat_iplikboyali),
             ("🟪","BASKILI (Metre)","#6A1B9A",self.stat_baskili),
         ]:
             box2 = QGroupBox(); bl2 = QVBoxLayout(box2); bl2.setSpacing(2)
@@ -3670,7 +3673,7 @@ class DashboardWidget(QWidget):
 
         # ── Kumaş Tipi Özet Kartları ─────────────────────────────
         all_rows = db.get_all_fabrics()
-        tip_mt = {"HAM": 0.0, "PFD": 0.0, "BOYALI": 0.0, "BASKILI": 0.0}
+        tip_mt = {"HAM": 0.0, "PFD": 0.0, "BOYALI": 0.0, "İPLİĞİ BOYALI": 0.0, "BASKILI": 0.0}
         for r in all_rows:
             t = r["fabric_type"] or ""
             if t in tip_mt:
@@ -3678,6 +3681,7 @@ class DashboardWidget(QWidget):
         self.stat_ham.setText(f"{tip_mt['HAM']:,.0f} mt")
         self.stat_pfd.setText(f"{tip_mt['PFD']:,.0f} mt")
         self.stat_boyali.setText(f"{tip_mt['BOYALI']:,.0f} mt")
+        self.stat_iplikboyali.setText(f"{tip_mt['İPLİĞİ BOYALI']:,.0f} mt")
         self.stat_baskili.setText(f"{tip_mt['BASKILI']:,.0f} mt")
 
         locs = db.get_locations()

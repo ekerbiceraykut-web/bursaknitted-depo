@@ -170,10 +170,10 @@ def _build_html():
     </table>
     </div>'''}"""
 
-    # Kumaş tipi özeti (HAM / PFD / BOYALI / BASKILI)
+    # Kumaş tipi özeti (HAM / PFD / BOYALI / İPLİĞİ BOYALI / BASKILI)
     fabrics = db.get_all_fabrics()
-    tip_colors = {"HAM": "#5D4037", "PFD": "#00695C", "BOYALI": "#1565C0", "BASKILI": "#6A1B9A"}
-    tip_bgs    = {"HAM": "#EFEBE9", "PFD": "#E0F2F1", "BOYALI": "#E3F2FD", "BASKILI": "#F3E5F5"}
+    tip_colors = {"HAM": "#5D4037", "PFD": "#00695C", "BOYALI": "#1565C0", "İPLİĞİ BOYALI": "#EF6C00", "BASKILI": "#6A1B9A"}
+    tip_bgs    = {"HAM": "#EFEBE9", "PFD": "#E0F2F1", "BOYALI": "#E3F2FD", "İPLİĞİ BOYALI": "#FFF3E0", "BASKILI": "#F3E5F5"}
     tip_stats  = {t: {"count": 0, "meter": 0.0, "kg": 0.0} for t in tip_colors}
     for r in fabrics:
         t = r["fabric_type"] or ""
@@ -183,10 +183,10 @@ def _build_html():
             tip_stats[t]["kg"]    += r["kg"] or 0
 
     tip_cards = ""
-    for t in ["HAM", "PFD", "BOYALI", "BASKILI"]:
+    for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]:
         st = tip_stats[t]
         tip_cards += f"""
-      <td width="25%" style="padding:0 4px">
+      <td width="20%" style="padding:0 4px">
         <div style="background:{tip_bgs[t]};border-radius:8px;padding:14px;text-align:center">
           <div style="font-size:13px;font-weight:700;color:{tip_colors[t]}">{t}</div>
           <div style="font-size:22px;font-weight:700;color:{tip_colors[t]};margin-top:4px">{st['meter']:,.0f} mt</div>
