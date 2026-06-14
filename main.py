@@ -111,6 +111,15 @@ CURRENT_USER = {"id": 0, "username": "sistem", "full_name": "Sistem", "role": "a
 import database as _local_db
 db = _local_db   # başlangıçta yerel; login sonrası proxy ile değiştirilir
 
+import order_pdf
+from order_pdf import CURRENCY_SYMBOLS
+
+CURRENCY_OPTIONS = ["USD", "EUR", "GBP"]
+
+FABRIC_TYPE_COLORS = {"HAM": QColor("#5D4037"), "PFD": QColor("#00695C"),
+                      "BOYALI": QColor("#545454"), "İPLİĞİ BOYALI": QColor("#EF6C00"),
+                      "BASKILI": QColor("#6A1B9A")}
+
 GREY   = "#545454"
 GREY_D = "#3A3A3A"   # koyu gri (çerçeve, hover)
 GREY_L = "#6B6B6B"   # açık gri (hover)
@@ -1887,47 +1896,24 @@ class FabricDialog(QDialog):
         }
 
 
-class OrderDialog(QDialog):
-    """Satış siparişi açma/düzenleme — 3 sekme: ürün bilgileri, ticari şartlar,
-    sözleşme şartnamesi. Kaydedilince status='PLANLAMA BEKLİYOR' ile orders
-    tablosuna yazılır (yeni planlama ekranı bu kayıtları kullanacak)."""
+class OrderItemDialog(QDialog):
+    """Sipariş kalemi ekle/düzenle — tek bir ürün/renk/kumaş tipi satırı."""
 
     FABRIC_TYPES = ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]
-    PAYMENT_METHODS = ["Peşin", "Havale/EFT", "30 Gün Vade", "60 Gün Vade",
-                       "90 Gün Vade", "120 Gün Vade", "Akreditif (L/C)", "Diğer"]
-    DELIVERY_TERMS = ["FOB", "CIF", "EXW", "DAP", "Diğer"]
 
-    def __init__(self, parent=None, order=None):
+    def __init__(self, parent=None, item=None, currency="USD"):
         super().__init__(parent)
-        self.order = order
-        self.setWindowTitle("Yeni Sipariş" if not order else f"Sipariş Düzenle — {dict(order)['order_no']}")
-        self.setMinimumSize(640, 620)
+        self.currency = currency
+        self.setWindowTitle("Sipariş Kalemi Ekle" if not item else "Sipariş Kalemini Düzenle")
+        self.setMinimumSize(460, 540)
         self._build_ui()
-        if order:
-            self._populate(dict(order))
-        else:
-            self.order_date.setDate(QDate.currentDate())
-            self.delivery_date.setDate(QDate.currentDate().addDays(30))
-            self.contract_terms.setPlainText(db.get_company_settings().get("contract_template", ""))
+        if item:
+            self._populate(item)
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
-        self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
-
-        # ── Sekme 1: Ürün Bilgileri ────────────────────────────────
-        tab1 = QWidget()
-        form1 = QFormLayout(tab1)
-        form1.setSpacing(10)
-
-        self.customer = QComboBox()
-        self._load_customers()
-        self.customer.currentIndexChanged.connect(self._on_customer_change)
-        form1.addRow("Müşteri *:", self.customer)
-
-        self.customer_ref = QLineEdit()
-        self.customer_ref.setPlaceholderText("Müşterinin kendi sipariş/PO numarası (opsiyonel)")
-        form1.addRow("Müşteri Referans:", self.customer_ref)
+        form = QFormLayout()
+        form.setSpacing(10)
 
         self.product_code = QComboBox()
         self.product_code.setEditable(True)
@@ -1938,32 +1924,36 @@ class OrderDialog(QDialog):
         completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self._load_products()
         self.product_code.currentIndexChanged.connect(self._on_product_change)
-        form1.addRow("Ürün Kodu *:", self.product_code)
+        form.addRow("Ürün Kodu *:", self.product_code)
 
         self.composition = QLineEdit()
         self.width = QLineEdit()
         self.gramaj = QLineEdit()
-        form1.addRow("Kompozisyon:", self.composition)
-        form1.addRow("En:", self.width)
-        form1.addRow("Gramaj:", self.gramaj)
+        form.addRow("Kompozisyon:", self.composition)
+        form.addRow("En:", self.width)
+        form.addRow("Gramaj:", self.gramaj)
 
         self.fabric_type = QComboBox()
         self.fabric_type.addItem("— Seçiniz —", "")
         for t in self.FABRIC_TYPES:
             self.fabric_type.addItem(t, t)
         self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
-        form1.addRow("Kumaş Tipi *:", self.fabric_type)
+        form.addRow("Kumaş Tipi *:", self.fabric_type)
 
         self.color = QLineEdit()
         self.lab_no = QLineEdit()
-        form1.addRow("Renk:", self.color)
-        form1.addRow("Lab No:", self.lab_no)
+        form.addRow("Renk:", self.color)
+        form.addRow("Lab No:", self.lab_no)
+
+        self.description = QLineEdit()
+        self.description.setPlaceholderText("Opsiyonel not (örn. numune ile aynı ton)")
+        form.addRow("Açıklama:", self.description)
 
         self.meter = QDoubleSpinBox()
         self.meter.setRange(0, 999999)
         self.meter.setDecimals(2)
         self.meter.valueChanged.connect(self._update_total)
-        form1.addRow("Metre:", self.meter)
+        form.addRow("Metre:", self.meter)
 
         kg_row = QWidget()
         kg_lay = QHBoxLayout(kg_row)
@@ -1976,78 +1966,22 @@ class OrderDialog(QDialog):
         btn_calc_kg.clicked.connect(self._calc_kg)
         kg_lay.addWidget(self.kg, 1)
         kg_lay.addWidget(btn_calc_kg)
-        form1.addRow("Kilo:", kg_row)
+        form.addRow("Kilo:", kg_row)
 
+        symbol = CURRENCY_SYMBOLS.get(self.currency, "$")
         self.sale_price = QDoubleSpinBox()
         self.sale_price.setRange(0, 9999999)
         self.sale_price.setDecimals(2)
-        self.sale_price.setSuffix(" $")
+        self.sale_price.setSuffix(f" {symbol}")
         self.sale_price.setStyleSheet("border: 1px solid #BDBDBD;")
         self.sale_price.valueChanged.connect(self._update_total)
-        form1.addRow("Satış Fiyatı ($/mt):", self.sale_price)
+        form.addRow(f"Satış Fiyatı ({symbol}/mt):", self.sale_price)
 
-        self.total_lbl = QLabel("0.00 $")
+        self.total_lbl = QLabel(f"0.00 {symbol}")
         self.total_lbl.setStyleSheet("font-weight:bold; color:#1A237E;")
-        form1.addRow("Toplam Tutar:", self.total_lbl)
+        form.addRow("Tutar:", self.total_lbl)
 
-        self.delivery_date = QDateEdit()
-        self.delivery_date.setCalendarPopup(True)
-        self.delivery_date.setDisplayFormat("dd.MM.yyyy")
-        form1.addRow("Termin *:", self.delivery_date)
-
-        self.tabs.addTab(tab1, "📦 Ürün Bilgileri")
-
-        # ── Sekme 2: Ticari Şartlar ─────────────────────────────────
-        tab2 = QWidget()
-        form2 = QFormLayout(tab2)
-        form2.setSpacing(10)
-
-        self.order_no_edit = QLineEdit()
-        self.order_no_edit.setReadOnly(True)
-        self.order_no_edit.setText("Kaydedince atanacak")
-        self.order_no_edit.setStyleSheet("color:#757575;")
-        form2.addRow("Sipariş No:", self.order_no_edit)
-
-        self.order_date = QDateEdit()
-        self.order_date.setCalendarPopup(True)
-        self.order_date.setDisplayFormat("dd.MM.yyyy")
-        form2.addRow("Sipariş Tarihi:", self.order_date)
-
-        self.payment_method = QComboBox()
-        self.payment_method.setEditable(True)
-        self.payment_method.addItem("")
-        for p in self.PAYMENT_METHODS:
-            self.payment_method.addItem(p)
-        form2.addRow("Ödeme Şekli:", self.payment_method)
-
-        self.delivery_terms = QComboBox()
-        self.delivery_terms.setEditable(True)
-        self.delivery_terms.addItem("")
-        for d in self.DELIVERY_TERMS:
-            self.delivery_terms.addItem(d)
-        form2.addRow("Teslimat Şartları:", self.delivery_terms)
-
-        self.delivery_address = QLineEdit()
-        form2.addRow("Teslimat Adresi:", self.delivery_address)
-
-        self.bank_info = QTextEdit()
-        self.bank_info.setReadOnly(True)
-        self.bank_info.setMaximumHeight(140)
-        self.bank_info.setPlainText(db.get_company_settings().get("bank_info", ""))
-        form2.addRow("Banka Bilgilerimiz:", self.bank_info)
-
-        self.notes = QTextEdit()
-        self.notes.setMaximumHeight(80)
-        form2.addRow("Notlar:", self.notes)
-
-        self.tabs.addTab(tab2, "💳 Ticari Şartlar")
-
-        # ── Sekme 3: Sözleşme Şartnamesi ───────────────────────────
-        tab3 = QWidget()
-        lay3 = QVBoxLayout(tab3)
-        self.contract_terms = QTextEdit()
-        lay3.addWidget(self.contract_terms)
-        self.tabs.addTab(tab3, "📄 Sözleşme Şartnamesi")
+        layout.addLayout(form)
 
         note = QLabel("* işaretli alanlar zorunludur")
         note.setStyleSheet("color:#9E9E9E; font-size:11px;")
@@ -2057,66 +1991,6 @@ class OrderDialog(QDialog):
         buttons.accepted.connect(self._validate)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
-
-    # ── Müşteri ──────────────────────────────────────────────────
-    def _load_customers(self, select_id=None):
-        self._customers = {}
-        self.customer.blockSignals(True)
-        self.customer.clear()
-        self.customer.addItem("— Seçiniz —", "")
-        self.customer.addItem("➕ Yeni müşteri ekle...", "__NEW__")
-        for c in db.get_all_customers():
-            cid = str(c["id"])
-            self._customers[cid] = c["name"]
-            label = c["name"] + (f" ({c['code']})" if c["code"] else "")
-            self.customer.addItem(label, cid)
-        if select_id is not None:
-            sid = str(select_id)
-            idx = self.customer.findData(sid)
-            if idx < 0:
-                c = db.get_customer(select_id)
-                if c:
-                    self._customers[sid] = c["name"]
-                    label = c["name"] + (f" ({c['code']})" if c["code"] else "")
-                    self.customer.addItem(label, sid)
-                    idx = self.customer.count() - 1
-            if idx >= 0:
-                self.customer.setCurrentIndex(idx)
-        self.customer.blockSignals(False)
-
-    def _on_customer_change(self, idx=None):
-        if self.customer.currentData() == "__NEW__":
-            self._add_new_customer()
-
-    def _add_new_customer(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Yeni Müşteri Ekle")
-        dlg.setMinimumWidth(320)
-        lay = QVBoxLayout(dlg)
-        form = QFormLayout(); form.setSpacing(8)
-        name_edit = QLineEdit()
-        code_edit = QLineEdit()
-        form.addRow("Müşteri Adı *:", name_edit)
-        form.addRow("Kodu:", code_edit)
-        lay.addLayout(form)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
-        lay.addWidget(btns)
-        if dlg.exec():
-            name = name_edit.text().strip()
-            if not name:
-                QMessageBox.warning(self, "Hata", "Müşteri adı zorunlu!")
-                self.customer.setCurrentIndex(0)
-                return
-            try:
-                cid = db.add_customer(name, code_edit.text().strip())
-            except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Müşteri eklenemedi:\n{e}")
-                self.customer.setCurrentIndex(0)
-                return
-            self._load_customers(select_id=cid)
-        else:
-            self.customer.setCurrentIndex(0)
 
     # ── Ürün ─────────────────────────────────────────────────────
     def _load_products(self, select_code="", select_name=""):
@@ -2197,33 +2071,372 @@ class OrderDialog(QDialog):
                 "Kilo hesaplamak için Gramaj, En ve Metre alanları sayısal olmalıdır.")
 
     def _update_total(self):
+        symbol = CURRENCY_SYMBOLS.get(self.currency, "$")
         total = self.meter.value() * self.sale_price.value()
-        self.total_lbl.setText(f"{total:,.2f} $")
+        self.total_lbl.setText(f"{total:,.2f} {symbol}")
+
+    def _populate(self, item):
+        self._load_products(select_code=item.get("product_code") or "", select_name=item.get("product_name") or "")
+        self.composition.setText(item.get("composition") or "")
+        self.width.setText(item.get("width") or "")
+        self.gramaj.setText(item.get("gramaj") or "")
+        ft_idx = self.fabric_type.findData(item.get("fabric_type") or "")
+        if ft_idx >= 0:
+            self.fabric_type.setCurrentIndex(ft_idx)
+        self.color.setText(item.get("color") or "")
+        self.lab_no.setText(item.get("lab_no") or "")
+        self.description.setText(item.get("description") or "")
+        self.meter.setValue(item.get("meter") or 0)
+        self.kg.setValue(item.get("kg") or 0)
+        self.sale_price.setValue(item.get("sale_price") or 0)
+        self._update_total()
+
+    def _validate(self):
+        errors = []
+        code = self.product_code.currentData()
+        if not code or code == "__NEW__":
+            errors.append("• Ürün kodu seçilmelidir")
+        if not self.fabric_type.currentData():
+            errors.append("• Kumaş tipi seçilmelidir (Ham / PFD / Boyalı / İpliği Boyalı / Baskılı)")
+            self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
+        else:
+            self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
+        if errors:
+            QMessageBox.warning(self, "Eksik Bilgi", "\n".join(errors))
+            return
+        self.accept()
+
+    def get_data(self):
+        return {
+            "product_code": (self.product_code.currentData() or "").strip().upper(),
+            "product_name": self._products.get(self.product_code.currentData(), ""),
+            "composition": self.composition.text().strip(),
+            "width": self.width.text().strip(),
+            "gramaj": self.gramaj.text().strip(),
+            "fabric_type": self.fabric_type.currentData() or "",
+            "color": self.color.text().strip().upper(),
+            "lab_no": self.lab_no.text().strip(),
+            "description": self.description.text().strip(),
+            "meter": self.meter.value(),
+            "kg": self.kg.value(),
+            "sale_price": self.sale_price.value(),
+        }
+
+
+class OrderDialog(QDialog):
+    """Satış siparişi açma/düzenleme — 3 sekme: sipariş bilgileri, sipariş
+    kalemleri (çoklu ürün/renk/kumaş tipi), sözleşme şartnamesi. Kaydedilince
+    status='PLANLAMA BEKLİYOR' ile orders tablosuna yazılır."""
+
+    PAYMENT_METHODS = ["Peşin", "Havale/EFT", "30 Gün Vade", "60 Gün Vade",
+                       "90 Gün Vade", "120 Gün Vade", "Akreditif (L/C)", "Diğer"]
+    DELIVERY_TERMS = ["FOB", "CIF", "EXW", "DAP", "Diğer"]
+
+    ITEM_COLS = ["Ürün Kodu", "Kompozisyon", "En", "Gramaj", "Kumaş Tipi", "Renk",
+                 "Lab No", "Açıklama", "Metre", "Kilo", "Birim Fiyat", "Tutar"]
+
+    def __init__(self, parent=None, order=None):
+        super().__init__(parent)
+        self.order = order
+        self._items = list(order.get("items", [])) if order else []
+        self.setWindowTitle("Yeni Sipariş" if not order else f"Sipariş Düzenle — {order['order_no']}")
+        self.setMinimumSize(740, 660)
+        self._build_ui()
+        if order:
+            self._populate(order)
+        else:
+            self.order_date.setDate(QDate.currentDate())
+            self.delivery_date.setDate(QDate.currentDate().addDays(30))
+            self.contract_terms.setPlainText(db.get_company_settings().get("contract_template", ""))
+            self._refresh_items_table()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        # ── Sekme 1: Sipariş Bilgileri ──────────────────────────────
+        tab1 = QWidget()
+        form1 = QFormLayout(tab1)
+        form1.setSpacing(10)
+
+        self.customer = QComboBox()
+        self._load_customers()
+        self.customer.currentIndexChanged.connect(self._on_customer_change)
+        form1.addRow("Müşteri *:", self.customer)
+
+        self.customer_ref = QLineEdit()
+        self.customer_ref.setPlaceholderText("Müşterinin kendi sipariş/PO numarası (opsiyonel)")
+        form1.addRow("Müşteri Referans:", self.customer_ref)
+
+        self.order_no_edit = QLineEdit()
+        self.order_no_edit.setReadOnly(True)
+        self.order_no_edit.setText("Kaydedince atanacak")
+        self.order_no_edit.setStyleSheet("color:#757575;")
+        form1.addRow("Sipariş No:", self.order_no_edit)
+
+        self.order_date = QDateEdit()
+        self.order_date.setCalendarPopup(True)
+        self.order_date.setDisplayFormat("dd.MM.yyyy")
+        form1.addRow("Sipariş Tarihi:", self.order_date)
+
+        self.delivery_date = QDateEdit()
+        self.delivery_date.setCalendarPopup(True)
+        self.delivery_date.setDisplayFormat("dd.MM.yyyy")
+        form1.addRow("Termin *:", self.delivery_date)
+
+        self.currency = QComboBox()
+        for code in CURRENCY_OPTIONS:
+            self.currency.addItem(f"{code} ({CURRENCY_SYMBOLS[code]})", code)
+        form1.addRow("Para Birimi *:", self.currency)
+
+        self.payment_method = QComboBox()
+        self.payment_method.setEditable(True)
+        self.payment_method.addItem("")
+        for p in self.PAYMENT_METHODS:
+            self.payment_method.addItem(p)
+        form1.addRow("Ödeme Şekli:", self.payment_method)
+
+        self.delivery_terms = QComboBox()
+        self.delivery_terms.setEditable(True)
+        self.delivery_terms.addItem("")
+        for d in self.DELIVERY_TERMS:
+            self.delivery_terms.addItem(d)
+        form1.addRow("Teslimat Şartları:", self.delivery_terms)
+
+        self.delivery_address = QLineEdit()
+        form1.addRow("Teslimat Adresi:", self.delivery_address)
+
+        self.bank_info = QTextEdit()
+        self.bank_info.setReadOnly(True)
+        self.bank_info.setMaximumHeight(120)
+        self.bank_info.setPlainText(db.get_company_settings().get("bank_info", ""))
+        form1.addRow("Banka Bilgilerimiz:", self.bank_info)
+
+        self.notes = QTextEdit()
+        self.notes.setMaximumHeight(70)
+        form1.addRow("Notlar:", self.notes)
+
+        self.tabs.addTab(tab1, "📋 Sipariş Bilgileri")
+
+        # ── Sekme 2: Sipariş Kalemleri ───────────────────────────────
+        tab2 = QWidget()
+        lay2 = QVBoxLayout(tab2)
+
+        toolbar2 = QHBoxLayout()
+        btn_add_item = QPushButton("+ Kalem Ekle")
+        btn_add_item.setStyleSheet("background:#2E7D32; color:white; font-weight:bold; border-radius:4px; padding:6px 14px;")
+        btn_add_item.clicked.connect(self._add_item)
+        btn_edit_item = QPushButton("✎ Düzenle")
+        btn_edit_item.clicked.connect(self._edit_item)
+        btn_del_item = QPushButton("✕ Kaldır")
+        btn_del_item.setStyleSheet("background:#757575; color:white; border-radius:4px; padding:6px 14px;")
+        btn_del_item.clicked.connect(self._remove_item)
+        toolbar2.addWidget(btn_add_item)
+        toolbar2.addWidget(btn_edit_item)
+        toolbar2.addWidget(btn_del_item)
+        toolbar2.addStretch()
+        lay2.addLayout(toolbar2)
+
+        self.items_table = QTableWidget()
+        self.items_table.setColumnCount(len(self.ITEM_COLS))
+        self.items_table.setHorizontalHeaderLabels(self.ITEM_COLS)
+        self.items_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.items_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.items_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.items_table.verticalHeader().setVisible(False)
+        hdr = self.items_table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(True)
+        self.items_table.doubleClicked.connect(self._edit_item)
+        lay2.addWidget(self.items_table)
+
+        self.items_total_lbl = QLabel("Genel Toplam: 0.00 $")
+        self.items_total_lbl.setStyleSheet("font-weight:bold; color:#1A237E; font-size:13px;")
+        self.items_total_lbl.setAlignment(Qt.AlignmentFlag.AlignRight)
+        lay2.addWidget(self.items_total_lbl)
+
+        self.tabs.addTab(tab2, "📦 Sipariş Kalemleri")
+
+        # ── Sekme 3: Sözleşme Şartnamesi ───────────────────────────
+        tab3 = QWidget()
+        lay3 = QVBoxLayout(tab3)
+        self.contract_terms = QTextEdit()
+        lay3.addWidget(self.contract_terms)
+        self.tabs.addTab(tab3, "📄 Sözleşme Şartnamesi")
+
+        # Para birimi değişince kalemler tablosu yeniden formatlanır —
+        # items_table oluşturulduktan sonra bağlanır (erken tetiklenmesin)
+        self.currency.currentIndexChanged.connect(self._refresh_items_table)
+
+        note = QLabel("* işaretli alanlar zorunludur")
+        note.setStyleSheet("color:#9E9E9E; font-size:11px;")
+        layout.addWidget(note)
+
+        btn_row = QHBoxLayout()
+        if self.order:
+            btn_pdf = QPushButton("📄 PDF Al")
+            btn_pdf.clicked.connect(self._export_pdf)
+            btn_row.addWidget(btn_pdf)
+        btn_row.addStretch()
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        btn_row.addWidget(buttons)
+        layout.addLayout(btn_row)
+
+    # ── Para Birimi / Kalemler ───────────────────────────────────
+    def _current_currency(self):
+        return self.currency.currentData() or "USD"
+
+    def _refresh_items_table(self):
+        symbol = CURRENCY_SYMBOLS.get(self._current_currency(), "$")
+        self.items_table.setRowCount(len(self._items))
+        grand_total = 0.0
+        for i, it in enumerate(self._items):
+            meter = it.get("meter") or 0
+            sale_price = it.get("sale_price") or 0
+            total = meter * sale_price
+            grand_total += total
+            values = [
+                it.get("product_code") or "",
+                it.get("composition") or "",
+                it.get("width") or "",
+                it.get("gramaj") or "",
+                it.get("fabric_type") or "",
+                it.get("color") or "",
+                it.get("lab_no") or "",
+                it.get("description") or "",
+                f"{meter:,.2f}",
+                f"{(it.get('kg') or 0):,.2f}",
+                f"{sale_price:,.2f} {symbol}",
+                f"{total:,.2f} {symbol}",
+            ]
+            for j, v in enumerate(values):
+                cell = QTableWidgetItem(v)
+                if j >= 8:
+                    cell.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
+                if j == 4:
+                    cell.setForeground(QBrush(FABRIC_TYPE_COLORS.get(it.get("fabric_type", ""), QColor("#333333"))))
+                self.items_table.setItem(i, j, cell)
+        self.items_total_lbl.setText(f"Genel Toplam: {grand_total:,.2f} {symbol}")
+
+    def _add_item(self):
+        dlg = OrderItemDialog(self, currency=self._current_currency())
+        if dlg.exec():
+            self._items.append(dlg.get_data())
+            self._refresh_items_table()
+
+    def _edit_item(self):
+        row = self.items_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "Önce bir kalem seçin.")
+            return
+        dlg = OrderItemDialog(self, item=self._items[row], currency=self._current_currency())
+        if dlg.exec():
+            self._items[row] = dlg.get_data()
+            self._refresh_items_table()
+
+    def _remove_item(self):
+        row = self.items_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "Önce bir kalem seçin.")
+            return
+        if QMessageBox.question(self, "Kaldır", "Bu kalem kaldırılsın mı?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            del self._items[row]
+            self._refresh_items_table()
+
+    # ── PDF ──────────────────────────────────────────────────────
+    def _export_pdf(self):
+        company = db.get_company_settings()
+        data = self.get_data()
+        order = {**data, "order_no": self.order.get("order_no", "")}
+        default_name = f"{order['order_no']}.pdf"
+        path, _ = QFileDialog.getSaveFileName(self, "Sipariş Sözleşmesi PDF", default_name, "PDF (*.pdf)")
+        if not path:
+            return
+        try:
+            order_pdf.generate_order_pdf(order, company, path)
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"PDF oluşturulamadı:\n{e}")
+            return
+        QMessageBox.information(self, "PDF Oluşturuldu", f"Kaydedildi:\n{path}")
+
+    # ── Müşteri ──────────────────────────────────────────────────
+    def _load_customers(self, select_id=None):
+        self._customers = {}
+        self.customer.blockSignals(True)
+        self.customer.clear()
+        self.customer.addItem("— Seçiniz —", "")
+        self.customer.addItem("➕ Yeni müşteri ekle...", "__NEW__")
+        for c in db.get_all_customers():
+            cid = str(c["id"])
+            self._customers[cid] = c["name"]
+            label = c["name"] + (f" ({c['code']})" if c["code"] else "")
+            self.customer.addItem(label, cid)
+        if select_id is not None:
+            sid = str(select_id)
+            idx = self.customer.findData(sid)
+            if idx < 0:
+                c = db.get_customer(select_id)
+                if c:
+                    self._customers[sid] = c["name"]
+                    label = c["name"] + (f" ({c['code']})" if c["code"] else "")
+                    self.customer.addItem(label, sid)
+                    idx = self.customer.count() - 1
+            if idx >= 0:
+                self.customer.setCurrentIndex(idx)
+        self.customer.blockSignals(False)
+
+    def _on_customer_change(self, idx=None):
+        if self.customer.currentData() == "__NEW__":
+            self._add_new_customer()
+
+    def _add_new_customer(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Yeni Müşteri Ekle")
+        dlg.setMinimumWidth(320)
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout(); form.setSpacing(8)
+        name_edit = QLineEdit()
+        code_edit = QLineEdit()
+        form.addRow("Müşteri Adı *:", name_edit)
+        form.addRow("Kodu:", code_edit)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec():
+            name = name_edit.text().strip()
+            if not name:
+                QMessageBox.warning(self, "Hata", "Müşteri adı zorunlu!")
+                self.customer.setCurrentIndex(0)
+                return
+            try:
+                cid = db.add_customer(name, code_edit.text().strip())
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Müşteri eklenemedi:\n{e}")
+                self.customer.setCurrentIndex(0)
+                return
+            self._load_customers(select_id=cid)
+        else:
+            self.customer.setCurrentIndex(0)
 
     # ── Doldurma / Doğrulama / Veri ─────────────────────────────────
     def _populate(self, o):
         self._load_customers(select_id=o.get("customer_id"))
         self.customer_ref.setText(o.get("customer_ref") or "")
-        self._load_products(select_code=o.get("product_code") or "", select_name=o.get("product_name") or "")
-        self.composition.setText(o.get("composition") or "")
-        self.width.setText(o.get("width") or "")
-        self.gramaj.setText(o.get("gramaj") or "")
-        ft_idx = self.fabric_type.findData(o.get("fabric_type") or "")
-        if ft_idx >= 0:
-            self.fabric_type.setCurrentIndex(ft_idx)
-        self.color.setText(o.get("color") or "")
-        self.lab_no.setText(o.get("lab_no") or "")
-        self.meter.setValue(o.get("meter") or 0)
-        self.kg.setValue(o.get("kg") or 0)
-        self.sale_price.setValue(o.get("sale_price") or 0)
-        self._update_total()
+        self.order_no_edit.setText(o.get("order_no") or "")
+
+        d = QDate.fromString(str(o.get("order_date") or ""), "yyyy-MM-dd")
+        self.order_date.setDate(d if d.isValid() else QDate.currentDate())
 
         d = QDate.fromString(str(o.get("delivery_date") or ""), "yyyy-MM-dd")
         self.delivery_date.setDate(d if d.isValid() else QDate.currentDate().addDays(30))
 
-        self.order_no_edit.setText(o.get("order_no") or "")
-        d = QDate.fromString(str(o.get("order_date") or ""), "yyyy-MM-dd")
-        self.order_date.setDate(d if d.isValid() else QDate.currentDate())
+        cur_idx = self.currency.findData(o.get("currency") or "USD")
+        self.currency.setCurrentIndex(cur_idx if cur_idx >= 0 else 0)
 
         idx = self.payment_method.findText(o.get("payment_method") or "")
         if idx >= 0:
@@ -2240,20 +2453,15 @@ class OrderDialog(QDialog):
         self.delivery_address.setText(o.get("delivery_address") or "")
         self.notes.setPlainText(o.get("notes") or "")
         self.contract_terms.setPlainText(o.get("contract_terms") or "")
+        self._refresh_items_table()
 
     def _validate(self):
         errors = []
         cust = self.customer.currentData()
         if not cust or cust == "__NEW__":
             errors.append("• Müşteri seçilmelidir")
-        code = self.product_code.currentData()
-        if not code or code == "__NEW__":
-            errors.append("• Ürün kodu seçilmelidir")
-        if not self.fabric_type.currentData():
-            errors.append("• Kumaş tipi seçilmelidir (Ham / PFD / Boyalı / İpliği Boyalı / Baskılı)")
-            self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
-        else:
-            self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
+        if not self._items:
+            errors.append("• En az bir sipariş kalemi eklenmelidir")
         if errors:
             QMessageBox.warning(self, "Eksik Bilgi", "\n".join(errors))
             return
@@ -2265,17 +2473,7 @@ class OrderDialog(QDialog):
             "customer_id": int(customer_id) if customer_id and customer_id != "__NEW__" else None,
             "customer_name": self._customers.get(customer_id, ""),
             "customer_ref": self.customer_ref.text().strip(),
-            "product_code": (self.product_code.currentData() or "").strip().upper(),
-            "product_name": self._products.get(self.product_code.currentData(), ""),
-            "composition": self.composition.text().strip(),
-            "width": self.width.text().strip(),
-            "gramaj": self.gramaj.text().strip(),
-            "fabric_type": self.fabric_type.currentData() or "",
-            "color": self.color.text().strip().upper(),
-            "lab_no": self.lab_no.text().strip(),
-            "meter": self.meter.value(),
-            "kg": self.kg.value(),
-            "sale_price": self.sale_price.value(),
+            "currency": self.currency.currentData() or "USD",
             "payment_method": self.payment_method.currentText().strip(),
             "delivery_terms": self.delivery_terms.currentText().strip(),
             "delivery_address": self.delivery_address.text().strip(),
@@ -2283,6 +2481,7 @@ class OrderDialog(QDialog):
             "order_date": self.order_date.date().toString("yyyy-MM-dd"),
             "contract_terms": self.contract_terms.toPlainText(),
             "notes": self.notes.toPlainText().strip(),
+            "items": self._items,
         }
 
 
@@ -3851,16 +4050,11 @@ class OrdersView(QWidget):
     """Satış siparişleri listesi — yeni sipariş açıldığında
     status='PLANLAMA BEKLİYOR' ile kaydedilir (planlama ekranı sonraki aşama)."""
 
-    COLS = ["Sipariş No", "Sip. Tarihi", "Müşteri", "Müşteri Referans", "Ürün Kodu",
-            "Kompozisyon", "En", "Gramaj", "Kumaş Tipi", "Renk", "Lab No",
-            "Metre", "Kilo", "Satış Fiyatı", "Toplam Tutar", "Termin",
-            "Ödeme Şekli", "Teslimat Şartları", "Durum", "Oluşturan"]
+    COLS = ["Sipariş No", "Sip. Tarihi", "Müşteri", "Müşteri Referans", "Kalem",
+            "Para Birimi", "Toplam Tutar", "Termin", "Ödeme Şekli",
+            "Teslimat Şartları", "Durum", "Oluşturan"]
 
     STATUS_OPTIONS = ["PLANLAMA BEKLİYOR", "PLANLANDI", "ÜRETİMDE", "SEVK EDİLDİ", "TAMAMLANDI", "İPTAL"]
-
-    FABRIC_TYPE_COLORS = {"HAM": QColor("#5D4037"), "PFD": QColor("#00695C"),
-                          "BOYALI": QColor("#545454"), "İPLİĞİ BOYALI": QColor("#EF6C00"),
-                          "BASKILI": QColor("#6A1B9A")}
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3896,11 +4090,14 @@ class OrdersView(QWidget):
         btn_del = QPushButton("✕ Sil")
         btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
         btn_del.clicked.connect(self._delete_order)
+        btn_pdf = QPushButton("📄 PDF Al")
+        btn_pdf.clicked.connect(self._export_pdf)
         btn_refresh = QPushButton("⟳ Yenile")
         btn_refresh.clicked.connect(self.refresh)
         toolbar.addWidget(btn_new)
         toolbar.addWidget(btn_settings)
         toolbar.addWidget(btn_del)
+        toolbar.addWidget(btn_pdf)
         toolbar.addWidget(btn_refresh)
         layout.addLayout(toolbar)
 
@@ -3931,26 +4128,18 @@ class OrdersView(QWidget):
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(rows))
         for i, r in enumerate(rows):
-            meter = r.get("meter") or 0
-            kg = r.get("kg") or 0
-            sale_price = r.get("sale_price") or 0
-            total = meter * sale_price
+            currency = r.get("currency") or "USD"
+            symbol = CURRENCY_SYMBOLS.get(currency, "$")
+            item_count = r.get("item_count") or 0
+            total_amount = r.get("total_amount") or 0
             vals = [
                 r.get("order_no") or "",
                 str(r.get("order_date") or "")[:10],
                 r.get("customer_name") or "",
                 r.get("customer_ref") or "",
-                r.get("product_code") or "",
-                r.get("composition") or "",
-                r.get("width") or "",
-                r.get("gramaj") or "",
-                r.get("fabric_type") or "",
-                r.get("color") or "",
-                r.get("lab_no") or "",
-                f"{meter:,.2f}" if meter else "",
-                f"{kg:,.2f}" if kg else "",
-                f"{sale_price:,.2f} $" if sale_price else "",
-                f"{total:,.2f} $" if total else "",
+                f"{item_count} kalem",
+                currency,
+                f"{total_amount:,.2f} {symbol}",
                 str(r.get("delivery_date") or "")[:10],
                 r.get("payment_method") or "",
                 r.get("delivery_terms") or "",
@@ -3961,10 +4150,8 @@ class OrdersView(QWidget):
                 item = QTableWidgetItem(v)
                 if j == 0:
                     item.setData(Qt.ItemDataRole.UserRole, r["id"])
-                if j in (11, 12, 13, 14):
+                if j in (4, 6):
                     item.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
-                if j == 8:
-                    item.setForeground(QBrush(self.FABRIC_TYPE_COLORS.get(r.get("fabric_type", ""), QColor("#333"))))
                 self.table.setItem(i, j, item)
         self.table.setSortingEnabled(True)
         self.count_lbl.setText(f"{len(rows)} sipariş")
@@ -4006,6 +4193,25 @@ class OrdersView(QWidget):
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             db.delete_order(oid)
             self.refresh()
+
+    def _export_pdf(self):
+        oid = self._selected_id()
+        if not oid:
+            return
+        order = db.get_order(oid)
+        if not order:
+            return
+        company = db.get_company_settings()
+        default_name = f"{order['order_no']}.pdf"
+        path, _ = QFileDialog.getSaveFileName(self, "Sipariş Sözleşmesi PDF", default_name, "PDF (*.pdf)")
+        if not path:
+            return
+        try:
+            order_pdf.generate_order_pdf(order, company, path)
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"PDF oluşturulamadı:\n{e}")
+            return
+        QMessageBox.information(self, "PDF Oluşturuldu", f"Kaydedildi:\n{path}")
 
     def _company_settings(self):
         CompanySettingsDialog(self).exec()

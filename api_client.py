@@ -354,36 +354,29 @@ def get_all_orders(search="", status=""):
 def get_order(oid):
     return _get(f"/api/orders/{oid}")
 
-def add_order(customer_id, customer_name, customer_ref, product_code, product_name,
-               composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
-               sale_price, payment_method, delivery_terms, delivery_address,
-               delivery_date, order_date, contract_terms, notes, created_by=""):
+def add_order(customer_id, customer_name, customer_ref, currency, payment_method,
+               delivery_terms, delivery_address, delivery_date, order_date,
+               contract_terms, notes, items, created_by=""):
     r = _post("/api/orders", {
         "customer_id": customer_id, "customer_name": customer_name, "customer_ref": customer_ref,
-        "product_code": product_code, "product_name": product_name,
-        "composition": composition, "width": width, "gramaj": gramaj,
-        "fabric_type": fabric_type, "color": color, "lab_no": lab_no,
-        "meter": meter, "kg": kg, "sale_price": sale_price,
+        "currency": currency,
         "payment_method": payment_method, "delivery_terms": delivery_terms,
         "delivery_address": delivery_address, "delivery_date": delivery_date,
         "order_date": order_date, "contract_terms": contract_terms, "notes": notes,
-        "created_by": created_by,
+        "items": items, "created_by": created_by,
     })
     return r["id"], r["order_no"]
 
-def update_order(oid, customer_id, customer_name, customer_ref, product_code, product_name,
-                 composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
-                 sale_price, payment_method, delivery_terms, delivery_address,
-                 delivery_date, order_date, contract_terms, notes):
+def update_order(oid, customer_id, customer_name, customer_ref, currency,
+                 payment_method, delivery_terms, delivery_address, delivery_date,
+                 order_date, contract_terms, notes, items):
     _put(f"/api/orders/{oid}", {
         "customer_id": customer_id, "customer_name": customer_name, "customer_ref": customer_ref,
-        "product_code": product_code, "product_name": product_name,
-        "composition": composition, "width": width, "gramaj": gramaj,
-        "fabric_type": fabric_type, "color": color, "lab_no": lab_no,
-        "meter": meter, "kg": kg, "sale_price": sale_price,
+        "currency": currency,
         "payment_method": payment_method, "delivery_terms": delivery_terms,
         "delivery_address": delivery_address, "delivery_date": delivery_date,
         "order_date": order_date, "contract_terms": contract_terms, "notes": notes,
+        "items": items,
     })
 
 def delete_order(oid):

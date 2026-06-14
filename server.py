@@ -346,13 +346,10 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/orders":
                 oid, order_no = db.add_order(
                     body.get("customer_id"), body.get("customer_name",""), body.get("customer_ref",""),
-                    body.get("product_code",""), body.get("product_name",""),
-                    body.get("composition",""), body.get("width",""), body.get("gramaj",""),
-                    body.get("fabric_type",""), body.get("color",""), body.get("lab_no",""),
-                    body.get("meter",0), body.get("kg",0), body.get("sale_price",0),
-                    body.get("payment_method",""), body.get("delivery_terms",""),
+                    body.get("currency","USD"), body.get("payment_method",""), body.get("delivery_terms",""),
                     body.get("delivery_address",""), body.get("delivery_date",""),
                     body.get("order_date",""), body.get("contract_terms",""), body.get("notes",""),
+                    body.get("items",[]),
                     created_by=body.get("created_by") or user["full_name"]
                 )
                 self._send(_ok({"id": oid, "order_no": order_no}))
@@ -426,13 +423,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 oid = int(path.split("/")[-1])
                 db.update_order(oid,
                     body.get("customer_id"), body.get("customer_name",""), body.get("customer_ref",""),
-                    body.get("product_code",""), body.get("product_name",""),
-                    body.get("composition",""), body.get("width",""), body.get("gramaj",""),
-                    body.get("fabric_type",""), body.get("color",""), body.get("lab_no",""),
-                    body.get("meter",0), body.get("kg",0), body.get("sale_price",0),
-                    body.get("payment_method",""), body.get("delivery_terms",""),
+                    body.get("currency","USD"), body.get("payment_method",""), body.get("delivery_terms",""),
                     body.get("delivery_address",""), body.get("delivery_date",""),
-                    body.get("order_date",""), body.get("contract_terms",""), body.get("notes","")
+                    body.get("order_date",""), body.get("contract_terms",""), body.get("notes",""),
+                    body.get("items",[])
                 )
                 self._send(_ok())
             elif path == "/api/settings/company":

@@ -136,6 +136,7 @@ def init_db():
             meter REAL DEFAULT 0,
             kg REAL DEFAULT 0,
             sale_price REAL DEFAULT 0,
+            currency TEXT DEFAULT 'USD',
             payment_method TEXT DEFAULT '',
             delivery_terms TEXT DEFAULT '',
             delivery_address TEXT DEFAULT '',
@@ -145,6 +146,24 @@ def init_db():
             status TEXT DEFAULT 'PLANLAMA BEKLİYOR',
             created_by TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            sort_order INTEGER DEFAULT 0,
+            product_code TEXT DEFAULT '',
+            product_name TEXT DEFAULT '',
+            composition TEXT DEFAULT '',
+            width TEXT DEFAULT '',
+            gramaj TEXT DEFAULT '',
+            fabric_type TEXT DEFAULT '',
+            color TEXT DEFAULT '',
+            lab_no TEXT DEFAULT '',
+            meter REAL DEFAULT 0,
+            kg REAL DEFAULT 0,
+            sale_price REAL DEFAULT 0,
+            description TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS settings (
@@ -159,6 +178,7 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_products_name ON products(product_name);
         CREATE INDEX IF NOT EXISTS idx_orders_no ON orders(order_no);
         CREATE INDEX IF NOT EXISTS idx_orders_code ON orders(product_code);
+        CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
     """)
 
     # Boyahane fire kayıtları
@@ -209,6 +229,7 @@ def init_db():
         "ALTER TABLE customers ADD COLUMN tax_no TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN reference_code TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN lab_no TEXT DEFAULT ''",
+        "ALTER TABLE orders ADD COLUMN currency TEXT DEFAULT 'USD'",
     ]
     for sql in migrations:
         try:
@@ -1120,17 +1141,24 @@ def _generate_order_no(conn):
 
 def get_all_orders(search="", status=""):
     conn = get_connection()
-    query = "SELECT * FROM orders WHERE 1=1"
+    query = """
+        SELECT o.*,
+            (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id) AS item_count,
+            (SELECT COALESCE(SUM(oi.meter*oi.sale_price),0) FROM order_items oi
+                WHERE oi.order_id=o.id) AS total_amount
+        FROM orders o WHERE 1=1
+    """
     params = []
     if search:
-        query += (" AND (order_no LIKE ? OR product_code LIKE ? OR customer_name LIKE ?"
-                  " OR customer_ref LIKE ? OR color LIKE ?)")
+        query += """ AND (o.order_no LIKE ? OR o.customer_name LIKE ? OR o.customer_ref LIKE ?
+                  OR EXISTS (SELECT 1 FROM order_items oi WHERE oi.order_id=o.id
+                             AND (oi.product_code LIKE ? OR oi.color LIKE ? OR oi.lab_no LIKE ?)))"""
         s = f"%{search}%"
-        params.extend([s, s, s, s, s])
+        params.extend([s, s, s, s, s, s])
     if status:
-        query += " AND status = ?"
+        query += " AND o.status = ?"
         params.append(status)
-    query += " ORDER BY id DESC"
+    query += " ORDER BY o.id DESC"
     rows = conn.execute(query, params).fetchall()
     conn.close()
     return rows
@@ -1139,57 +1167,72 @@ def get_all_orders(search="", status=""):
 def get_order(order_id):
     conn = get_connection()
     row = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    items = conn.execute(
+        "SELECT * FROM order_items WHERE order_id=? ORDER BY sort_order, id",
+        (order_id,)
+    ).fetchall()
     conn.close()
-    return row
+    return {**dict(row), "items": [dict(i) for i in items]}
 
 
-def add_order(customer_id, customer_name, customer_ref, product_code, product_name,
-               composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
-               sale_price, payment_method, delivery_terms, delivery_address,
-               delivery_date, order_date, contract_terms, notes, created_by=""):
+_ORDER_ITEM_FIELDS = ["product_code", "product_name", "composition", "width", "gramaj",
+                      "fabric_type", "color", "lab_no", "meter", "kg", "sale_price",
+                      "description"]
+
+
+def _insert_order_items(conn, order_id, items):
+    for i, item in enumerate(items):
+        conn.execute(f"""
+            INSERT INTO order_items (order_id, sort_order, {", ".join(_ORDER_ITEM_FIELDS)})
+            VALUES (?, ?, {", ".join("?" * len(_ORDER_ITEM_FIELDS))})
+        """, (order_id, i, *[item.get(f) for f in _ORDER_ITEM_FIELDS]))
+
+
+def add_order(customer_id, customer_name, customer_ref, currency, payment_method,
+               delivery_terms, delivery_address, delivery_date, order_date,
+               contract_terms, notes, items, created_by=""):
     conn = get_connection()
     order_no = _generate_order_no(conn)
     c = conn.cursor()
     c.execute("""
         INSERT INTO orders (order_no, order_date, customer_id, customer_name, customer_ref,
-                            product_code, product_name, composition, width, gramaj,
-                            fabric_type, color, lab_no, meter, kg, sale_price,
-                            payment_method, delivery_terms, delivery_address, delivery_date,
-                            contract_terms, notes, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            currency, payment_method, delivery_terms, delivery_address,
+                            delivery_date, contract_terms, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (order_no, order_date, customer_id, customer_name, customer_ref,
-          product_code, product_name, composition, width, gramaj,
-          fabric_type, color, lab_no, meter, kg, sale_price,
-          payment_method, delivery_terms, delivery_address, delivery_date,
-          contract_terms, notes, created_by))
-    conn.commit()
+          currency, payment_method, delivery_terms, delivery_address,
+          delivery_date, contract_terms, notes, created_by))
     oid = c.lastrowid
+    _insert_order_items(conn, oid, items)
+    conn.commit()
     conn.close()
     return oid, order_no
 
 
-def update_order(order_id, customer_id, customer_name, customer_ref, product_code, product_name,
-                 composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
-                 sale_price, payment_method, delivery_terms, delivery_address,
-                 delivery_date, order_date, contract_terms, notes):
+def update_order(order_id, customer_id, customer_name, customer_ref, currency,
+                 payment_method, delivery_terms, delivery_address, delivery_date,
+                 order_date, contract_terms, notes, items):
     conn = get_connection()
     conn.execute("""
-        UPDATE orders SET customer_id=?, customer_name=?, customer_ref=?, product_code=?,
-                          product_name=?, composition=?, width=?, gramaj=?, fabric_type=?,
-                          color=?, lab_no=?, meter=?, kg=?, sale_price=?, payment_method=?,
-                          delivery_terms=?, delivery_address=?, delivery_date=?, order_date=?,
-                          contract_terms=?, notes=?
+        UPDATE orders SET customer_id=?, customer_name=?, customer_ref=?, currency=?,
+                          payment_method=?, delivery_terms=?, delivery_address=?,
+                          delivery_date=?, order_date=?, contract_terms=?, notes=?
         WHERE id=?
-    """, (customer_id, customer_name, customer_ref, product_code, product_name,
-          composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
-          sale_price, payment_method, delivery_terms, delivery_address,
+    """, (customer_id, customer_name, customer_ref, currency,
+          payment_method, delivery_terms, delivery_address,
           delivery_date, order_date, contract_terms, notes, order_id))
+    conn.execute("DELETE FROM order_items WHERE order_id=?", (order_id,))
+    _insert_order_items(conn, order_id, items)
     conn.commit()
     conn.close()
 
 
 def delete_order(order_id):
     conn = get_connection()
+    conn.execute("DELETE FROM order_items WHERE order_id=?", (order_id,))
     conn.execute("DELETE FROM orders WHERE id=?", (order_id,))
     conn.commit()
     conn.close()
