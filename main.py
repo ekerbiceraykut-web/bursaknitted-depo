@@ -2835,6 +2835,23 @@ class StockTable(QWidget):
 
         layout.addWidget(self._totals_bar)
 
+        # ── Seçili Satırın Ürün Bilgisi (katalogdan) ──
+        self._product_info_bar = QFrame()
+        self._product_info_bar.setStyleSheet(
+            "QFrame { background:#E3F2FD; border-radius:6px;"
+            "border: 1px solid #BBDEFB; padding:0; }"
+        )
+        self._product_info_bar.setFixedHeight(34)
+        pi_layout = QHBoxLayout(self._product_info_bar)
+        pi_layout.setContentsMargins(16, 2, 16, 2)
+        self._product_info_lbl = QLabel("Ürün bilgisi için bir satır seçin")
+        self._product_info_lbl.setStyleSheet("color:#1565C0; font-size:12px;")
+        pi_layout.addWidget(self._product_info_lbl)
+        pi_layout.addStretch()
+        layout.addWidget(self._product_info_bar)
+
+        self.table.selectionModel().currentRowChanged.connect(self._on_row_selected)
+
         self._search_timer = QTimer()
         self._search_timer.setSingleShot(True)
         self._search_timer.timeout.connect(self.refresh)
@@ -2851,6 +2868,26 @@ class StockTable(QWidget):
         if not self._loaded:
             return
         self._fill_table()
+
+    def _on_row_selected(self, current, previous):
+        if not current.isValid() or current.row() >= len(self._model._rows):
+            self._product_info_lbl.setText("Ürün bilgisi için bir satır seçin")
+            return
+        code = self._model._rows[current.row()][1]
+        product = db.get_product_by_code(code)
+        if not product:
+            self._product_info_lbl.setText(f"Ürün Kodu: {code}   —   (katalogda kayıt bulunamadı)")
+            return
+        p = dict(product)
+        parts = [
+            f"Ürün Kodu: {code}",
+            f"Kompozisyon: {p.get('composition') or '—'}",
+            f"En: {p.get('width') or '—'}",
+            f"Gramaj: {p.get('gramaj') or '—'}",
+            f"Kumaş Kodu: {p.get('reference_code') or '—'}",
+            f"Tedarikçi/Fason: {p.get('supplier') or '—'}",
+        ]
+        self._product_info_lbl.setText("   |   ".join(parts))
 
     def refresh_with_locations(self):
         self._reload_locations()
