@@ -348,7 +348,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("customer_id"), body.get("customer_name",""), body.get("customer_ref",""),
                     body.get("currency","USD"), body.get("payment_method",""), body.get("delivery_terms",""),
                     body.get("delivery_address",""), body.get("delivery_date",""),
-                    body.get("order_date",""), body.get("contract_terms",""), body.get("notes",""),
+                    body.get("order_date",""), body.get("notes",""),
                     body.get("items",[]),
                     created_by=body.get("created_by") or user["full_name"]
                 )
@@ -425,11 +425,13 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("customer_id"), body.get("customer_name",""), body.get("customer_ref",""),
                     body.get("currency","USD"), body.get("payment_method",""), body.get("delivery_terms",""),
                     body.get("delivery_address",""), body.get("delivery_date",""),
-                    body.get("order_date",""), body.get("contract_terms",""), body.get("notes",""),
+                    body.get("order_date",""), body.get("notes",""),
                     body.get("items",[])
                 )
                 self._send(_ok())
             elif path == "/api/settings/company":
+                if user.get("role") != "admin":
+                    return self._send(_err("Yetki yok"), 403)
                 db.save_company_settings(**body)
                 self._send(_ok())
             else:

@@ -10,7 +10,7 @@ from PyQt6.QtWidgets import (
     QTabWidget, QHeaderView, QFileDialog, QSpinBox, QDoubleSpinBox,
     QTextEdit, QGroupBox, QSplitter, QListWidget, QListWidgetItem,
     QStatusBar, QFrame, QAbstractItemView, QTableView, QInputDialog,
-    QCheckBox, QCompleter, QDateEdit
+    QCheckBox, QCompleter, QDateEdit, QTreeWidget, QTreeWidgetItem
 )
 from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant, QDate
 from PyQt6.QtGui import QFont, QColor, QIcon, QBrush, QPixmap
@@ -114,7 +114,7 @@ db = _local_db   # başlangıçta yerel; login sonrası proxy ile değiştirilir
 import order_pdf
 from order_pdf import CURRENCY_SYMBOLS
 
-CURRENCY_OPTIONS = ["USD", "EUR", "GBP"]
+CURRENCY_OPTIONS = ["USD", "EUR", "GBP", "TRY"]
 
 FABRIC_TYPE_COLORS = {"HAM": QColor("#5D4037"), "PFD": QColor("#00695C"),
                       "BOYALI": QColor("#545454"), "İPLİĞİ BOYALI": QColor("#EF6C00"),
@@ -461,7 +461,7 @@ def _wire_header_persistence(table, key, default_fn=None):
     if table.property("hdr_wired"):
         return
     from PyQt6.QtCore import QSettings
-    hdr = table.horizontalHeader()
+    hdr = table.header() if isinstance(table, QTreeWidget) else table.horizontalHeader()
     settings = QSettings("BursaKnitted", "DepoTakip")
     st = settings.value(key)
     restored = False
@@ -470,6 +470,9 @@ def _wire_header_persistence(table, key, default_fn=None):
     if not restored:
         if default_fn:
             default_fn()
+        elif isinstance(table, QTreeWidget):
+            for col in range(table.columnCount()):
+                table.resizeColumnToContents(col)
         else:
             table.resizeColumnsToContents()
     # sectionResized, sürükleyerek yeniden boyutlandırma sırasında (mouseMoveEvent
@@ -2147,7 +2150,6 @@ class OrderDialog(QDialog):
         else:
             self.order_date.setDate(QDate.currentDate())
             self.delivery_date.setDate(QDate.currentDate().addDays(30))
-            self.contract_terms.setPlainText(db.get_company_settings().get("contract_template", ""))
             self._refresh_items_table()
 
     def _build_ui(self):
@@ -2207,12 +2209,6 @@ class OrderDialog(QDialog):
         self.delivery_address = QLineEdit()
         form1.addRow("Teslimat Adresi:", self.delivery_address)
 
-        self.bank_info = QTextEdit()
-        self.bank_info.setReadOnly(True)
-        self.bank_info.setMaximumHeight(120)
-        self.bank_info.setPlainText(db.get_company_settings().get("bank_info", ""))
-        form1.addRow("Banka Bilgilerimiz:", self.bank_info)
-
         self.notes = QTextEdit()
         self.notes.setMaximumHeight(70)
         form1.addRow("Notlar:", self.notes)
@@ -2257,13 +2253,6 @@ class OrderDialog(QDialog):
         lay2.addWidget(self.items_total_lbl)
 
         self.tabs.addTab(tab2, "📦 Sipariş Kalemleri")
-
-        # ── Sekme 3: Sözleşme Şartnamesi ───────────────────────────
-        tab3 = QWidget()
-        lay3 = QVBoxLayout(tab3)
-        self.contract_terms = QTextEdit()
-        lay3.addWidget(self.contract_terms)
-        self.tabs.addTab(tab3, "📄 Sözleşme Şartnamesi")
 
         # Para birimi değişince kalemler tablosu yeniden formatlanır —
         # items_table oluşturulduktan sonra bağlanır (erken tetiklenmesin)
@@ -2452,7 +2441,6 @@ class OrderDialog(QDialog):
 
         self.delivery_address.setText(o.get("delivery_address") or "")
         self.notes.setPlainText(o.get("notes") or "")
-        self.contract_terms.setPlainText(o.get("contract_terms") or "")
         self._refresh_items_table()
 
     def _validate(self):
@@ -2479,7 +2467,6 @@ class OrderDialog(QDialog):
             "delivery_address": self.delivery_address.text().strip(),
             "delivery_date": self.delivery_date.date().toString("yyyy-MM-dd"),
             "order_date": self.order_date.date().toString("yyyy-MM-dd"),
-            "contract_terms": self.contract_terms.toPlainText(),
             "notes": self.notes.toPlainText().strip(),
             "items": self._items,
         }
@@ -4085,8 +4072,6 @@ class OrdersView(QWidget):
         btn_new = QPushButton("+ Yeni Sipariş")
         btn_new.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
         btn_new.clicked.connect(self._new_order)
-        btn_settings = QPushButton("🏦 Şirket/Banka Ayarları")
-        btn_settings.clicked.connect(self._company_settings)
         btn_del = QPushButton("✕ Sil")
         btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
         btn_del.clicked.connect(self._delete_order)
@@ -4095,21 +4080,25 @@ class OrdersView(QWidget):
         btn_refresh = QPushButton("⟳ Yenile")
         btn_refresh.clicked.connect(self.refresh)
         toolbar.addWidget(btn_new)
-        toolbar.addWidget(btn_settings)
+        if CURRENT_USER.get("role") == "admin":
+            btn_settings = QPushButton("🏦 Şirket/Banka Ayarları")
+            btn_settings.clicked.connect(self._company_settings)
+            toolbar.addWidget(btn_settings)
         toolbar.addWidget(btn_del)
         toolbar.addWidget(btn_pdf)
         toolbar.addWidget(btn_refresh)
         layout.addLayout(toolbar)
 
-        self.table = QTableWidget()
+        self.table = QTreeWidget()
         self.table.setColumnCount(len(self.COLS))
-        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setHeaderLabels(self.COLS)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setAlternatingRowColors(True)
-        self.table.verticalHeader().setVisible(False)
-        hdr = self.table.horizontalHeader()
+        self.table.setRootIsDecorated(True)
+        self.table.setExpandsOnDoubleClick(False)
+        hdr = self.table.header()
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(True)
         self.table.doubleClicked.connect(self._edit_order)
@@ -4125,9 +4114,8 @@ class OrdersView(QWidget):
         status = self.status_filter.currentData() or ""
         rows = [dict(r) for r in db.get_all_orders(search=search, status=status)]
         self._rows = rows
-        self.table.setSortingEnabled(False)
-        self.table.setRowCount(len(rows))
-        for i, r in enumerate(rows):
+        self.table.clear()
+        for r in rows:
             currency = r.get("currency") or "USD"
             symbol = CURRENCY_SYMBOLS.get(currency, "$")
             item_count = r.get("item_count") or 0
@@ -4146,14 +4134,32 @@ class OrdersView(QWidget):
                 r.get("status") or "",
                 r.get("created_by") or "",
             ]
-            for j, v in enumerate(vals):
-                item = QTableWidgetItem(v)
-                if j == 0:
-                    item.setData(Qt.ItemDataRole.UserRole, r["id"])
-                if j in (4, 6):
-                    item.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
-                self.table.setItem(i, j, item)
-        self.table.setSortingEnabled(True)
+            order_item = QTreeWidgetItem([str(v) for v in vals])
+            order_item.setData(0, Qt.ItemDataRole.UserRole, r["id"])
+            order_item.setTextAlignment(4, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
+            order_item.setTextAlignment(6, int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
+            self.table.addTopLevelItem(order_item)
+
+            for it in r.get("items") or []:
+                meter = it.get("meter") or 0
+                kg = it.get("kg") or 0
+                sale_price = it.get("sale_price") or 0
+                total = meter * sale_price
+                detail = (
+                    f"   ↳ Ürün Kodu: {it.get('product_code','') or ''}   "
+                    f"Kompozisyon: {it.get('composition','') or ''}   "
+                    f"En: {it.get('width','') or ''}   Gramaj: {it.get('gramaj','') or ''}   "
+                    f"Kumaş Tipi: {it.get('fabric_type','') or ''}   Renk: {it.get('color','') or ''}   "
+                    f"Lab No: {it.get('lab_no','') or ''}   Açıklama: {it.get('description','') or ''}   "
+                    f"Metre: {meter:,.2f}   Kilo: {kg:,.2f}   "
+                    f"Birim Fiyat: {sale_price:,.2f} {symbol}   Tutar: {total:,.2f} {symbol}"
+                )
+                child = QTreeWidgetItem([detail] + [""] * (len(self.COLS) - 1))
+                order_item.addChild(child)
+                self.table.setFirstColumnSpanned(
+                    order_item.indexOfChild(child), self.table.indexFromItem(order_item), True)
+
+        self.table.expandAll()
         self.count_lbl.setText(f"{len(rows)} sipariş")
 
     def _new_order(self):
@@ -4166,11 +4172,14 @@ class OrdersView(QWidget):
                 f"Sipariş kaydedildi.\n\nSipariş No: {order_no}\nDurum: PLANLAMA BEKLİYOR")
 
     def _selected_id(self):
-        row = self.table.currentRow()
-        if row < 0:
+        item = self.table.currentItem()
+        oid = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        if oid is None and item is not None and item.parent() is not None:
+            oid = item.parent().data(0, Qt.ItemDataRole.UserRole)
+        if oid is None:
             QMessageBox.information(self, "Bilgi", "Önce bir sipariş seçin.")
             return None
-        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        return oid
 
     def _edit_order(self):
         oid = self._selected_id()
@@ -4214,6 +4223,9 @@ class OrdersView(QWidget):
         QMessageBox.information(self, "PDF Oluşturuldu", f"Kaydedildi:\n{path}")
 
     def _company_settings(self):
+        if CURRENT_USER.get("role") != "admin":
+            QMessageBox.warning(self, "Yetki", "Bu işlem için yönetici yetkisi gereklidir.")
+            return
         CompanySettingsDialog(self).exec()
 
 
@@ -4683,9 +4695,10 @@ class MainWindow(QMainWindow):
 
         order_menu = menubar.addMenu("📋 Siparişler")
         order_menu.addAction("Yeni Sipariş...").triggered.connect(self._new_order)
-        order_menu.addSeparator()
-        order_menu.addAction("Şirket / Banka Ayarları...").triggered.connect(
-            lambda: CompanySettingsDialog(self).exec())
+        if CURRENT_USER.get("role") == "admin":
+            order_menu.addSeparator()
+            order_menu.addAction("Şirket / Banka Ayarları...").triggered.connect(
+                lambda: CompanySettingsDialog(self).exec())
 
         user_menu = menubar.addMenu("👤 Kullanıcılar")
         user_menu.addAction("Kullanıcı Yönetimi").triggered.connect(self._user_mgmt)

@@ -19,7 +19,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.platypus import (Paragraph, SimpleDocTemplate, Spacer, Table,
                                  TableStyle)
 
-CURRENCY_SYMBOLS = {"USD": "$", "EUR": "€", "GBP": "£"}
+CURRENCY_SYMBOLS = {"USD": "$", "EUR": "€", "GBP": "£", "TRY": "₺"}
 
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 pdfmetrics.registerFont(TTFont("Turkish", os.path.join(_FONT_DIR, "Arial.ttf")))
@@ -118,7 +118,7 @@ def generate_order_pdf(order, company, file_path):
             _fmt_num(sale_price),
             _fmt_num(total),
         ])
-    item_rows.append(["", "", "", "", "", "", "", "", "", "", "GENEL TOPLAM:", _fmt_num(grand_total)])
+    item_rows.append(["GENEL TOPLAM:", "", "", "", "", "", "", "", "", "", "", _fmt_num(grand_total)])
 
     col_widths = [22 * mm, 32 * mm, 12 * mm, 14 * mm, 22 * mm, 18 * mm, 16 * mm,
                    38 * mm, 16 * mm, 16 * mm, 24 * mm, 24 * mm]
@@ -134,7 +134,7 @@ def generate_order_pdf(order, company, file_path):
         ("ALIGN", (2, 0), (3, -1), "CENTER"),
         ("SPAN", (0, -1), (10, -1)),
         ("ALIGN", (0, -1), (10, -1), "RIGHT"),
-        ("FONTNAME", (10, -1), (11, -1), "Turkish-Bold"),
+        ("FONTNAME", (0, -1), (-1, -1), "Turkish-Bold"),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F5F5F5")),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
@@ -154,6 +154,6 @@ def generate_order_pdf(order, company, file_path):
 
     # ── Sözleşme şartnamesi ──────────────────────────────────────
     elements.append(Paragraph("Sözleşme Şartnamesi", _STYLE_HEADING))
-    elements.append(Paragraph(_multiline(order.get("contract_terms", "")), _STYLE_SMALL))
+    elements.append(Paragraph(_multiline(company.get("contract_template", "")), _STYLE_SMALL))
 
     doc.build(elements)

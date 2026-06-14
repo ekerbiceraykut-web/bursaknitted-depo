@@ -1159,8 +1159,22 @@ def get_all_orders(search="", status=""):
         query += " AND o.status = ?"
         params.append(status)
     query += " ORDER BY o.id DESC"
-    rows = conn.execute(query, params).fetchall()
+    rows = [dict(r) for r in conn.execute(query, params).fetchall()]
+
+    items_by_order = {}
+    if rows:
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join("?" * len(ids))
+        item_rows = conn.execute(
+            f"SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY order_id, sort_order, id",
+            ids
+        ).fetchall()
+        for ir in item_rows:
+            items_by_order.setdefault(ir["order_id"], []).append(dict(ir))
+
     conn.close()
+    for r in rows:
+        r["items"] = items_by_order.get(r["id"], [])
     return rows
 
 
@@ -1193,18 +1207,18 @@ def _insert_order_items(conn, order_id, items):
 
 def add_order(customer_id, customer_name, customer_ref, currency, payment_method,
                delivery_terms, delivery_address, delivery_date, order_date,
-               contract_terms, notes, items, created_by=""):
+               notes, items, created_by=""):
     conn = get_connection()
     order_no = _generate_order_no(conn)
     c = conn.cursor()
     c.execute("""
         INSERT INTO orders (order_no, order_date, customer_id, customer_name, customer_ref,
                             currency, payment_method, delivery_terms, delivery_address,
-                            delivery_date, contract_terms, notes, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            delivery_date, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (order_no, order_date, customer_id, customer_name, customer_ref,
           currency, payment_method, delivery_terms, delivery_address,
-          delivery_date, contract_terms, notes, created_by))
+          delivery_date, notes, created_by))
     oid = c.lastrowid
     _insert_order_items(conn, oid, items)
     conn.commit()
@@ -1214,16 +1228,16 @@ def add_order(customer_id, customer_name, customer_ref, currency, payment_method
 
 def update_order(order_id, customer_id, customer_name, customer_ref, currency,
                  payment_method, delivery_terms, delivery_address, delivery_date,
-                 order_date, contract_terms, notes, items):
+                 order_date, notes, items):
     conn = get_connection()
     conn.execute("""
         UPDATE orders SET customer_id=?, customer_name=?, customer_ref=?, currency=?,
                           payment_method=?, delivery_terms=?, delivery_address=?,
-                          delivery_date=?, order_date=?, contract_terms=?, notes=?
+                          delivery_date=?, order_date=?, notes=?
         WHERE id=?
     """, (customer_id, customer_name, customer_ref, currency,
           payment_method, delivery_terms, delivery_address,
-          delivery_date, order_date, contract_terms, notes, order_id))
+          delivery_date, order_date, notes, order_id))
     conn.execute("DELETE FROM order_items WHERE order_id=?", (order_id,))
     _insert_order_items(conn, order_id, items)
     conn.commit()
