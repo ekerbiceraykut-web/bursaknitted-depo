@@ -2876,16 +2876,16 @@ class StockTable(QWidget):
         code = self._model._rows[current.row()][1]
         product = db.get_product_by_code(code)
         if not product:
-            self._product_info_lbl.setText(f"Ürün Kodu: {code}   —   (katalogda kayıt bulunamadı)")
+            self._product_info_lbl.setText(f"{code}   —   (katalogda kayıt bulunamadı)")
             return
         p = dict(product)
         parts = [
-            f"Ürün Kodu: {code}",
-            f"Kompozisyon: {p.get('composition') or '—'}",
-            f"En: {p.get('width') or '—'}",
-            f"Gramaj: {p.get('gramaj') or '—'}",
-            f"Kumaş Kodu: {p.get('reference_code') or '—'}",
-            f"Tedarikçi/Fason: {p.get('supplier') or '—'}",
+            code,
+            p.get('composition') or '—',
+            p.get('width') or '—',
+            p.get('gramaj') or '—',
+            p.get('reference_code') or '—',
+            p.get('supplier') or '—',
         ]
         self._product_info_lbl.setText("   |   ".join(parts))
 
