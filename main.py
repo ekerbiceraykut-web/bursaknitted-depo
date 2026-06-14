@@ -120,6 +120,8 @@ FABRIC_TYPE_COLORS = {"HAM": QColor("#5D4037"), "PFD": QColor("#00695C"),
                       "BOYALI": QColor("#545454"), "İPLİĞİ BOYALI": QColor("#EF6C00"),
                       "BASKILI": QColor("#6A1B9A")}
 
+PRINT_TYPES = ["RONJAN", "ROTASYON", "DİJİTAL", "FLOK", "VARAK", "GLITTER"]
+
 GREY   = "#545454"
 GREY_D = "#3A3A3A"   # koyu gri (çerçeve, hover)
 GREY_L = "#6B6B6B"   # açık gri (hover)
@@ -1710,6 +1712,19 @@ class FabricDialog(QDialog):
             self.fabric_type.addItem(t, t)
         self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
 
+        # Baskı tipi — sadece Kumaş Tipi = BASKILI iken görünür
+        self.print_type = QComboBox()
+        self.print_type.addItem("— Seçiniz —", "")
+        for t in PRINT_TYPES:
+            self.print_type.addItem(t, t)
+        self.print_type.setStyleSheet("border: 1px solid #BDBDBD;")
+
+        self.zemin_rengi = QLineEdit()
+        self.baski_desen_no = QLineEdit()
+
+        self.fabric_type.currentIndexChanged.connect(self._update_print_fields)
+        self.print_type.currentIndexChanged.connect(self._update_print_fields)
+
         self.lot = QLineEdit()
         self.lot.setPlaceholderText("Boş bırakılırsa otomatik verilir (LOT-20260610-001)")
 
@@ -1718,8 +1733,12 @@ class FabricDialog(QDialog):
 
         form.addRow("Ürün Kodu *:", self.product_code)
         form.addRow("Ürün Açıklaması:", self.product_name)
+        form.addRow("Kumaş Tipi *:", self.fabric_type)
+        form.addRow("Baskı Tipi *:", self.print_type)
         form.addRow("Renk:", self.color)
+        form.addRow("Zemin Rengi:", self.zemin_rengi)
         form.addRow("Lab No:", self.lab_no)
+        form.addRow("Baskı Desen No:", self.baski_desen_no)
 
         # Satın alma lokasyonu — köken takibi (taşınsa bile değişmez)
         self.entry_loc = QComboBox()
@@ -1736,7 +1755,6 @@ class FabricDialog(QDialog):
         form.addRow(self.raf_label, self.raf)
         self.raf_label.setVisible(False)
         self.raf.setVisible(False)
-        form.addRow("Kumaş Tipi *:", self.fabric_type)
         form.addRow("Lot:", self.lot)
         form.addRow("Metre:", self.meter)
         form.addRow("Kilo:", self.kg)
@@ -1745,6 +1763,8 @@ class FabricDialog(QDialog):
         form.addRow("Açıklama:", self.description)
 
         layout.addLayout(form)
+        self._form = form
+        self._update_print_fields()
 
         # Zorunlu alan notu
         note = QLabel("* işaretli alanlar zorunludur")
@@ -1847,6 +1867,24 @@ class FabricDialog(QDialog):
             return self.raf.currentData() or ""
         return d
 
+    def _update_print_fields(self):
+        """BASKILI / Baskı Tipi seçimine göre Renk, Zemin Rengi, Lab No,
+        Baskı Tipi ve Baskı Desen No alanlarının görünürlüğünü ayarlar."""
+        is_baskili = self.fabric_type.currentData() == "BASKILI"
+        pt = self.print_type.currentData() if is_baskili else ""
+        is_ronjan = pt == "RONJAN"
+        for widget, visible in (
+            (self.print_type, is_baskili),
+            (self.color, not is_baskili),
+            (self.zemin_rengi, is_ronjan),
+            (self.lab_no, (not is_baskili) or is_ronjan),
+            (self.baski_desen_no, is_baskili and bool(pt)),
+        ):
+            label = self._form.labelForField(widget)
+            if label:
+                label.setVisible(visible)
+            widget.setVisible(visible)
+
     def _populate(self, f):
         self._load_products(select_code=f["product_code"] or "", select_name=f["product_name"] or "")
         self.product_name.setText(f["product_name"] or "")
@@ -1877,8 +1915,14 @@ class FabricDialog(QDialog):
         ft_idx = self.fabric_type.findData(f["fabric_type"] or "")
         if ft_idx >= 0:
             self.fabric_type.setCurrentIndex(ft_idx)
+        pt_idx = self.print_type.findData(dict(f).get("print_type") or "")
+        if pt_idx >= 0:
+            self.print_type.setCurrentIndex(pt_idx)
+        self.zemin_rengi.setText(dict(f).get("zemin_rengi") or "")
+        self.baski_desen_no.setText(dict(f).get("baski_desen_no") or "")
         self.lot.setText(f["lot"] or "")
         self.description.setPlainText(f["description"] or "")
+        self._update_print_fields()
 
     def _validate(self):
         errors = []
@@ -1893,20 +1937,32 @@ class FabricDialog(QDialog):
             self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
         else:
             self.fabric_type.setStyleSheet("")
+        if self.fabric_type.currentData() == "BASKILI" and not self.print_type.currentData():
+            errors.append("• Baskı tipi seçilmelidir (Ronjan / Rotasyon / Dijital / Flok / Varak / Glitter)")
+            self.print_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
+        else:
+            self.print_type.setStyleSheet("border: 1px solid #BDBDBD;")
         if errors:
             QMessageBox.warning(self, "Eksik Bilgi", "\n".join(errors))
             return
         self.accept()
 
     def get_data(self):
+        fabric_type = self.fabric_type.currentData() or ""
+        is_baskili = fabric_type == "BASKILI"
+        print_type = (self.print_type.currentData() or "") if is_baskili else ""
+        is_ronjan = print_type == "RONJAN"
         return {
             "product_code": (self.product_code.currentData() or "").strip().upper(),
             "product_name": self.product_name.text().strip(),
-            "color": self.color.text().strip().upper(),
-            "lab_no": self.lab_no.text().strip(),
+            "color": self.color.text().strip().upper() if not is_baskili else "",
+            "lab_no": self.lab_no.text().strip() if ((not is_baskili) or is_ronjan) else "",
             "location": self._selected_location(),
             "entry_location": self.entry_loc.currentData() or self._selected_location(),
-            "fabric_type": self.fabric_type.currentData() or "",
+            "fabric_type": fabric_type,
+            "print_type": print_type,
+            "zemin_rengi": self.zemin_rengi.text().strip().upper() if is_ronjan else "",
+            "baski_desen_no": self.baski_desen_no.text().strip() if (is_baskili and print_type) else "",
             "lot": self.lot.text().strip(),
             "meter": self.meter.value(),
             "kg": self.kg.value(),
@@ -1960,10 +2016,25 @@ class OrderItemDialog(QDialog):
         self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
         form.addRow("Kumaş Tipi *:", self.fabric_type)
 
+        # Baskı tipi — sadece Kumaş Tipi = BASKILI iken görünür
+        self.print_type = QComboBox()
+        self.print_type.addItem("— Seçiniz —", "")
+        for t in PRINT_TYPES:
+            self.print_type.addItem(t, t)
+        self.print_type.setStyleSheet("border: 1px solid #BDBDBD;")
+        form.addRow("Baskı Tipi *:", self.print_type)
+
         self.color = QLineEdit()
+        self.zemin_rengi = QLineEdit()
         self.lab_no = QLineEdit()
+        self.baski_desen_no = QLineEdit()
         form.addRow("Renk:", self.color)
+        form.addRow("Zemin Rengi:", self.zemin_rengi)
         form.addRow("Lab No:", self.lab_no)
+        form.addRow("Baskı Desen No:", self.baski_desen_no)
+
+        self.fabric_type.currentIndexChanged.connect(self._update_print_fields)
+        self.print_type.currentIndexChanged.connect(self._update_print_fields)
 
         self.description = QLineEdit()
         self.description.setPlaceholderText("Opsiyonel not (örn. numune ile aynı ton)")
@@ -2002,6 +2073,8 @@ class OrderItemDialog(QDialog):
         form.addRow("Tutar:", self.total_lbl)
 
         layout.addLayout(form)
+        self._form = form
+        self._update_print_fields()
 
         note = QLabel("* işaretli alanlar zorunludur")
         note.setStyleSheet("color:#9E9E9E; font-size:11px;")
@@ -2095,6 +2168,24 @@ class OrderItemDialog(QDialog):
         total = self.meter.value() * self.sale_price.value()
         self.total_lbl.setText(f"{total:,.2f} {symbol}")
 
+    def _update_print_fields(self):
+        """BASKILI / Baskı Tipi seçimine göre Renk, Zemin Rengi, Lab No,
+        Baskı Tipi ve Baskı Desen No alanlarının görünürlüğünü ayarlar."""
+        is_baskili = self.fabric_type.currentData() == "BASKILI"
+        pt = self.print_type.currentData() if is_baskili else ""
+        is_ronjan = pt == "RONJAN"
+        for widget, visible in (
+            (self.print_type, is_baskili),
+            (self.color, not is_baskili),
+            (self.zemin_rengi, is_ronjan),
+            (self.lab_no, (not is_baskili) or is_ronjan),
+            (self.baski_desen_no, is_baskili and bool(pt)),
+        ):
+            label = self._form.labelForField(widget)
+            if label:
+                label.setVisible(visible)
+            widget.setVisible(visible)
+
     def _populate(self, item):
         self._load_products(select_code=item.get("product_code") or "", select_name=item.get("product_name") or "")
         self.composition.setText(item.get("composition") or "")
@@ -2103,13 +2194,19 @@ class OrderItemDialog(QDialog):
         ft_idx = self.fabric_type.findData(item.get("fabric_type") or "")
         if ft_idx >= 0:
             self.fabric_type.setCurrentIndex(ft_idx)
+        pt_idx = self.print_type.findData(item.get("print_type") or "")
+        if pt_idx >= 0:
+            self.print_type.setCurrentIndex(pt_idx)
         self.color.setText(item.get("color") or "")
+        self.zemin_rengi.setText(item.get("zemin_rengi") or "")
         self.lab_no.setText(item.get("lab_no") or "")
+        self.baski_desen_no.setText(item.get("baski_desen_no") or "")
         self.description.setText(item.get("description") or "")
         self.meter.setValue(item.get("meter") or 0)
         self.kg.setValue(item.get("kg") or 0)
         self.sale_price.setValue(item.get("sale_price") or 0)
         self._update_total()
+        self._update_print_fields()
 
     def _validate(self):
         errors = []
@@ -2121,21 +2218,33 @@ class OrderItemDialog(QDialog):
             self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
         else:
             self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
+        if self.fabric_type.currentData() == "BASKILI" and not self.print_type.currentData():
+            errors.append("• Baskı tipi seçilmelidir (Ronjan / Rotasyon / Dijital / Flok / Varak / Glitter)")
+            self.print_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
+        else:
+            self.print_type.setStyleSheet("border: 1px solid #BDBDBD;")
         if errors:
             QMessageBox.warning(self, "Eksik Bilgi", "\n".join(errors))
             return
         self.accept()
 
     def get_data(self):
+        fabric_type = self.fabric_type.currentData() or ""
+        is_baskili = fabric_type == "BASKILI"
+        print_type = (self.print_type.currentData() or "") if is_baskili else ""
+        is_ronjan = print_type == "RONJAN"
         return {
             "product_code": (self.product_code.currentData() or "").strip().upper(),
             "product_name": self._products.get(self.product_code.currentData(), ""),
             "composition": self.composition.text().strip(),
             "width": self.width.text().strip(),
             "gramaj": self.gramaj.text().strip(),
-            "fabric_type": self.fabric_type.currentData() or "",
-            "color": self.color.text().strip().upper(),
-            "lab_no": self.lab_no.text().strip(),
+            "fabric_type": fabric_type,
+            "color": self.color.text().strip().upper() if not is_baskili else "",
+            "lab_no": self.lab_no.text().strip() if ((not is_baskili) or is_ronjan) else "",
+            "print_type": print_type,
+            "zemin_rengi": self.zemin_rengi.text().strip().upper() if is_ronjan else "",
+            "baski_desen_no": self.baski_desen_no.text().strip() if (is_baskili and print_type) else "",
             "description": self.description.text().strip(),
             "meter": self.meter.value(),
             "kg": self.kg.value(),
@@ -2153,7 +2262,8 @@ class OrderDialog(QDialog):
     DELIVERY_TERMS = ["FOB", "CIF", "EXW", "DAP", "Diğer"]
 
     ITEM_COLS = ["Ürün Kodu", "Kompozisyon", "En", "Gramaj", "Kumaş Tipi", "Renk",
-                 "Lab No", "Açıklama", "Metre", "Kilo", "Birim Fiyat", "Tutar"]
+                 "Lab No", "Açıklama", "Metre", "Kilo", "Birim Fiyat", "Tutar",
+                 "Baskı Tipi", "Zemin Rengi", "Baskı Desen No"]
 
     def __init__(self, parent=None, order=None):
         super().__init__(parent)
@@ -2317,10 +2427,13 @@ class OrderDialog(QDialog):
                 f"{(it.get('kg') or 0):,.2f}",
                 f"{sale_price:,.2f} {symbol}",
                 f"{total:,.2f} {symbol}",
+                it.get("print_type") or "",
+                it.get("zemin_rengi") or "",
+                it.get("baski_desen_no") or "",
             ]
             for j, v in enumerate(values):
                 cell = QTableWidgetItem(v)
-                if j >= 8:
+                if 8 <= j <= 11:
                     cell.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
                 if j == 4:
                     cell.setForeground(QBrush(FABRIC_TYPE_COLORS.get(it.get("fabric_type", ""), QColor("#333333"))))
@@ -2522,6 +2635,14 @@ class CellEditDialog(QDialog):
             idx = self.widget.findData(cur or "")
             if idx >= 0:
                 self.widget.setCurrentIndex(idx)
+        elif field == "print_type":
+            self.widget = QComboBox()
+            self.widget.addItem("— Seçiniz —", "")
+            for t in PRINT_TYPES:
+                self.widget.addItem(t, t)
+            idx = self.widget.findData(cur or "")
+            if idx >= 0:
+                self.widget.setCurrentIndex(idx)
         elif field == "location":
             locs = db.get_active_locations()
             self._rafs = sorted(l["name"] for l in locs if l["group_name"] == "DEPO")
@@ -2601,7 +2722,7 @@ class CellEditDialog(QDialog):
         self.accept()
 
     def value(self):
-        if self.field in ("fabric_type", "entry_location"):
+        if self.field in ("fabric_type", "entry_location", "print_type"):
             return self.widget.currentData() or ""
         if self.field == "location":
             d = self.depo.currentData() or ""
@@ -2609,7 +2730,7 @@ class CellEditDialog(QDialog):
         if self.field in ("meter", "kg", "birim_fiyat"):
             return self.widget.value()
         text = self.widget.text().strip()
-        if self.field in ("product_code", "color"):
+        if self.field in ("product_code", "color", "zemin_rengi"):
             return text.upper()
         return text
 
@@ -3141,7 +3262,7 @@ class DailyMovementsDialog(QDialog):
             self.count_lbl.setText("Bu kriterlere uyan hareket yok")
 
 
-COLS = ["#", "Ürün Kodu", "Ürün Açıklaması", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok.", "Lab No"]
+COLS = ["#", "Ürün Kodu", "Ürün Açıklaması", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok.", "Lab No", "Baskı Tipi", "Zemin Rengi", "Baskı Desen No"]
 _GREEN = QColor("#1B5E20")
 _GREY  = QColor("#BDBDBD")
 _ALT   = QColor("#F0F4FF")
@@ -3265,7 +3386,7 @@ class FabricModel(QAbstractTableModel):
         self._rows = []
         self._ids  = []
 
-    # tuple: 0=id,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok,15=labNo
+    # tuple: 0=id,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok,15=labNo,16=printType,17=zeminRengi,18=baskiDesenNo
     def load(self, rows):
         self.beginResetModel()
         self._rows = []
@@ -3291,6 +3412,9 @@ class FabricModel(QAbstractTableModel):
                 str(r["updated_at"] or "")[:16],
                 dict(r).get("entry_location") or "",
                 dict(r).get("lab_no") or "",
+                dict(r).get("print_type") or "",
+                dict(r).get("zemin_rengi") or "",
+                dict(r).get("baski_desen_no") or "",
             ))
         self._ids = [r[0] for r in self._rows]
         self.endResetModel()
@@ -3330,7 +3454,7 @@ class FabricModel(QAbstractTableModel):
         row, col = index.row(), index.column()
         r = self._rows[row]
 
-        # col: 0=#,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok,15=labNo
+        # col: 0=#,1=code,2=name,3=desc,4=color,5=loc,6=tip,7=lot,8=mt,9=kg,10=piece,11=fiyat,12=deger,13=date,14=girisLok,15=labNo,16=printType,17=zeminRengi,18=baskiDesenNo
         if role == Qt.ItemDataRole.DisplayRole:
             if col == 0: return str(row + 1)
             val = r[col]
@@ -3760,7 +3884,8 @@ class StockTable(QWidget):
     # Çift tıklanabilen sütunlar → veritabanı alanı
     CELL_FIELDS = {1: "product_code", 2: "product_name", 3: "description", 4: "color",
                    5: "location", 6: "fabric_type", 7: "lot", 8: "meter", 9: "kg",
-                   10: "piece_count", 11: "birim_fiyat", 14: "entry_location", 15: "lab_no"}
+                   10: "piece_count", 11: "birim_fiyat", 14: "entry_location", 15: "lab_no",
+                   16: "print_type", 17: "zemin_rengi", 18: "baski_desen_no"}
 
     def _cell_edit(self, index):
         if not index.isValid():
@@ -3776,7 +3901,8 @@ class StockTable(QWidget):
         if dlg.exec():
             d = {k: dict(fabric).get(k) for k in
                  ("product_name", "product_code", "color", "location", "meter", "kg",
-                  "piece_count", "birim_fiyat", "fabric_type", "lot", "description", "lab_no")}
+                  "piece_count", "birim_fiyat", "fabric_type", "lot", "description", "lab_no",
+                  "print_type", "zemin_rengi", "baski_desen_no")}
             d[field] = dlg.value()
             db.update_fabric(fid, **d)
             self.refresh_with_locations()
@@ -3826,7 +3952,8 @@ class StockTable(QWidget):
         if dlg.exec():
             val = dlg.value()
             keys = ("product_name", "product_code", "color", "location", "meter", "kg",
-                    "piece_count", "birim_fiyat", "fabric_type", "lot", "description", "lab_no")
+                    "piece_count", "birim_fiyat", "fabric_type", "lot", "description", "lab_no",
+                    "print_type", "zemin_rengi", "baski_desen_no")
             for fid in fids:
                 fabric = db.get_fabric(fid)
                 d = {k: dict(fabric).get(k) for k in keys}
@@ -4057,7 +4184,8 @@ class OrdersView(QWidget):
 
     COLS = ["Sipariş No", "Sip. Tarihi", "Müşteri", "Müşteri Referans", "Kalem",
             "Para Birimi", "Toplam Tutar", "Termin", "Ödeme Şekli",
-            "Teslimat Şartları", "Durum", "Oluşturan"]
+            "Teslimat Şartları", "Durum", "Oluşturan",
+            "Baskı Tipi", "Zemin Rengi", "Baskı Desen No"]
 
     STATUS_OPTIONS = ["PLANLAMA BEKLİYOR", "PLANLANDI", "ÜRETİMDE", "SEVK EDİLDİ", "TAMAMLANDI", "İPTAL"]
 
@@ -4156,6 +4284,7 @@ class OrdersView(QWidget):
                 r.get("delivery_terms") or "",
                 r.get("status") or "",
                 r.get("created_by") or "",
+                "", "", "",
             ]
             order_item = QTreeWidgetItem([str(v) for v in vals])
             order_item.setData(0, Qt.ItemDataRole.UserRole, r["id"])
@@ -4181,6 +4310,9 @@ class OrdersView(QWidget):
                     f"{kg:,.2f}",
                     f"{sale_price:,.2f} {symbol}",
                     f"{total:,.2f} {symbol}",
+                    it.get("print_type") or "",
+                    it.get("zemin_rengi") or "",
+                    it.get("baski_desen_no") or "",
                 ]
                 child = QTreeWidgetItem([str(v) for v in child_vals])
                 for col in (8, 9, 10, 11):

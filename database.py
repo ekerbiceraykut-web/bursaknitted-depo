@@ -51,6 +51,9 @@ def init_db():
             piece_count TEXT DEFAULT '',
             birim_fiyat REAL DEFAULT 0,
             fabric_type TEXT DEFAULT '',
+            print_type TEXT DEFAULT '',
+            zemin_rengi TEXT DEFAULT '',
+            baski_desen_no TEXT DEFAULT '',
             lot TEXT DEFAULT '',
             description TEXT DEFAULT '',
             deleted_at TEXT DEFAULT NULL,
@@ -160,6 +163,9 @@ def init_db():
             fabric_type TEXT DEFAULT '',
             color TEXT DEFAULT '',
             lab_no TEXT DEFAULT '',
+            print_type TEXT DEFAULT '',
+            zemin_rengi TEXT DEFAULT '',
+            baski_desen_no TEXT DEFAULT '',
             meter REAL DEFAULT 0,
             kg REAL DEFAULT 0,
             sale_price REAL DEFAULT 0,
@@ -230,6 +236,12 @@ def init_db():
         "ALTER TABLE products ADD COLUMN reference_code TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN lab_no TEXT DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN currency TEXT DEFAULT 'USD'",
+        "ALTER TABLE fabrics ADD COLUMN print_type TEXT DEFAULT ''",
+        "ALTER TABLE fabrics ADD COLUMN zemin_rengi TEXT DEFAULT ''",
+        "ALTER TABLE fabrics ADD COLUMN baski_desen_no TEXT DEFAULT ''",
+        "ALTER TABLE order_items ADD COLUMN print_type TEXT DEFAULT ''",
+        "ALTER TABLE order_items ADD COLUMN zemin_rengi TEXT DEFAULT ''",
+        "ALTER TABLE order_items ADD COLUMN baski_desen_no TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -688,7 +700,7 @@ def _generate_lot(conn):
 
 def add_fabric(product_name, product_code, color, location, meter, kg,
                piece_count, birim_fiyat, fabric_type, lot, description, user_name="",
-               entry_location="", lab_no=""):
+               entry_location="", lab_no="", print_type="", zemin_rengi="", baski_desen_no=""):
     conn = get_connection()
     c = conn.cursor()
     if not (lot or "").strip():
@@ -698,11 +710,12 @@ def add_fabric(product_name, product_code, color, location, meter, kg,
     c.execute("""
         INSERT INTO fabrics (product_name, product_code, color, location,
                              meter, kg, piece_count, birim_fiyat, fabric_type, lot,
-                             description, entry_location, lab_no)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             description, entry_location, lab_no, print_type,
+                             zemin_rengi, baski_desen_no)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (product_name, product_code, color, location,
           meter or 0, kg or 0, piece_count, birim_fiyat or 0, fabric_type, lot,
-          description, entry_location, lab_no))
+          description, entry_location, lab_no, print_type, zemin_rengi, baski_desen_no))
     fabric_id = c.lastrowid
     if meter or kg:
         c.execute("""
@@ -717,19 +730,23 @@ def add_fabric(product_name, product_code, color, location, meter, kg,
 
 def update_fabric(fabric_id, product_name, product_code, color, location,
                   meter, kg, piece_count, birim_fiyat, fabric_type, lot, description,
-                  entry_location=None, lab_no=None):
-    """entry_location/lab_no None ise mevcut değer korunur."""
+                  entry_location=None, lab_no=None, print_type=None, zemin_rengi=None,
+                  baski_desen_no=None):
+    """entry_location/lab_no/print_type/zemin_rengi/baski_desen_no None ise mevcut değer korunur."""
     conn = get_connection()
     conn.execute("""
         UPDATE fabrics SET product_name=?, product_code=?, color=?, location=?,
         meter=?, kg=?, piece_count=?, birim_fiyat=?, fabric_type=?, lot=?, description=?,
         entry_location=COALESCE(?, entry_location),
         lab_no=COALESCE(?, lab_no),
+        print_type=COALESCE(?, print_type),
+        zemin_rengi=COALESCE(?, zemin_rengi),
+        baski_desen_no=COALESCE(?, baski_desen_no),
         updated_at=datetime('now','localtime')
         WHERE id=?
     """, (product_name, product_code, color, location,
           meter or 0, kg or 0, piece_count, birim_fiyat or 0, fabric_type, lot, description,
-          entry_location, lab_no, fabric_id))
+          entry_location, lab_no, print_type, zemin_rengi, baski_desen_no, fabric_id))
     conn.commit()
     conn.close()
 
@@ -1193,8 +1210,8 @@ def get_order(order_id):
 
 
 _ORDER_ITEM_FIELDS = ["product_code", "product_name", "composition", "width", "gramaj",
-                      "fabric_type", "color", "lab_no", "meter", "kg", "sale_price",
-                      "description"]
+                      "fabric_type", "color", "lab_no", "print_type", "zemin_rengi",
+                      "baski_desen_no", "meter", "kg", "sale_price", "description"]
 
 
 def _insert_order_items(conn, order_id, items):
