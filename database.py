@@ -177,6 +177,42 @@ def init_db():
             value TEXT DEFAULT ''
         );
 
+        CREATE TABLE IF NOT EXISTS purchase_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            po_no TEXT UNIQUE NOT NULL,
+            po_date TEXT DEFAULT (date('now','localtime')),
+            supplier_id INTEGER,
+            supplier_name TEXT DEFAULT '',
+            order_id INTEGER,
+            order_no TEXT DEFAULT '',
+            currency TEXT DEFAULT 'USD',
+            payment_method TEXT DEFAULT '',
+            delivery_terms TEXT DEFAULT '',
+            expected_delivery TEXT DEFAULT '',
+            status TEXT DEFAULT 'BEKLEMEDE',
+            notes TEXT DEFAULT '',
+            created_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS purchase_order_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            po_id INTEGER NOT NULL,
+            sort_order INTEGER DEFAULT 0,
+            product_code TEXT DEFAULT '',
+            product_name TEXT DEFAULT '',
+            composition TEXT DEFAULT '',
+            width TEXT DEFAULT '',
+            gramaj TEXT DEFAULT '',
+            fabric_type TEXT DEFAULT 'HAM',
+            meter REAL DEFAULT 0,
+            kg REAL DEFAULT 0,
+            unit_price REAL DEFAULT 0,
+            description TEXT DEFAULT '',
+            received_meter REAL DEFAULT 0,
+            received_kg REAL DEFAULT 0
+        );
+
         CREATE INDEX IF NOT EXISTS idx_fabrics_code ON fabrics(product_code);
         CREATE INDEX IF NOT EXISTS idx_fabrics_location ON fabrics(location);
         CREATE INDEX IF NOT EXISTS idx_movements_fabric ON movements(fabric_id);
@@ -185,6 +221,8 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_orders_no ON orders(order_no);
         CREATE INDEX IF NOT EXISTS idx_orders_code ON orders(product_code);
         CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id);
+        CREATE INDEX IF NOT EXISTS idx_po_no ON purchase_orders(po_no);
+        CREATE INDEX IF NOT EXISTS idx_po_items_po ON purchase_order_items(po_id);
     """)
 
     # Boyahane fire kayıtları
@@ -242,6 +280,11 @@ def init_db():
         "ALTER TABLE order_items ADD COLUMN print_type TEXT DEFAULT ''",
         "ALTER TABLE order_items ADD COLUMN zemin_rengi TEXT DEFAULT ''",
         "ALTER TABLE order_items ADD COLUMN baski_desen_no TEXT DEFAULT ''",
+        "ALTER TABLE movements ADD COLUMN out_fabric_type TEXT DEFAULT ''",
+        "ALTER TABLE movements ADD COLUMN out_print_type TEXT DEFAULT ''",
+        "ALTER TABLE movements ADD COLUMN out_zemin_rengi TEXT DEFAULT ''",
+        "ALTER TABLE movements ADD COLUMN out_baski_desen_no TEXT DEFAULT ''",
+        "ALTER TABLE suppliers ADD COLUMN email TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -375,22 +418,22 @@ def get_supplier(sid):
     conn.close()
     return row
 
-def add_supplier(name, code="", phone="", address="", tax_no=""):
+def add_supplier(name, code="", phone="", address="", tax_no="", email=""):
     conn = get_connection()
     c = conn.execute(
-        "INSERT INTO suppliers (name, code, phone, address, tax_no) VALUES (?,?,?,?,?)",
-        (name.strip(), code.strip(), phone.strip(), address.strip(), tax_no.strip())
+        "INSERT INTO suppliers (name, code, phone, address, tax_no, email) VALUES (?,?,?,?,?,?)",
+        (name.strip(), code.strip(), phone.strip(), address.strip(), tax_no.strip(), email.strip())
     )
     conn.commit()
     sid = c.lastrowid
     conn.close()
     return sid
 
-def update_supplier(sid, name, code, phone, address, tax_no="", active=1):
+def update_supplier(sid, name, code, phone, address, tax_no="", active=1, email=""):
     conn = get_connection()
     conn.execute(
-        "UPDATE suppliers SET name=?, code=?, phone=?, address=?, tax_no=?, active=? WHERE id=?",
-        (name.strip(), code.strip(), phone.strip(), address.strip(), tax_no.strip(), int(active), sid)
+        "UPDATE suppliers SET name=?, code=?, phone=?, address=?, tax_no=?, active=?, email=? WHERE id=?",
+        (name.strip(), code.strip(), phone.strip(), address.strip(), tax_no.strip(), int(active), email.strip(), sid)
     )
     conn.commit(); conn.close()
 
@@ -841,7 +884,9 @@ def _apply_piece_delta(current, delta, sign):
 def add_movement(fabric_id, movement_type, meter, kg, piece_count, notes,
                  user_name="", destination="", destination_type="",
                  deduct_meter=None, deduct_kg=None,
-                 out_color="", lab_no="", parti_no=""):
+                 out_color="", lab_no="", parti_no="",
+                 out_fabric_type="", out_print_type="",
+                 out_zemin_rengi="", out_baski_desen_no=""):
     """deduct_meter/deduct_kg: ÇIKIŞ'ta stoktan düşülecek miktar, hareketteki
     miktardan farklıysa (fire: çıkış öncesi miktar düşülür) kullanılır."""
     conn = get_connection()
@@ -851,11 +896,13 @@ def add_movement(fabric_id, movement_type, meter, kg, piece_count, notes,
     c.execute("""
         INSERT INTO movements (fabric_id, movement_type, meter, kg, piece_count,
                                notes, user_name, destination, destination_type,
-                               out_color, lab_no, parti_no, location)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                               out_color, lab_no, parti_no, location,
+                               out_fabric_type, out_print_type, out_zemin_rengi, out_baski_desen_no)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (fabric_id, movement_type, meter or 0, kg or 0, piece_count,
           notes, user_name, destination, destination_type,
-          out_color, lab_no, parti_no, mv_location))
+          out_color, lab_no, parti_no, mv_location,
+          out_fabric_type, out_print_type, out_zemin_rengi, out_baski_desen_no))
     mid = c.lastrowid
     if fabric:
         if movement_type == "GİRİŞ":
@@ -876,21 +923,36 @@ def add_movement(fabric_id, movement_type, meter, kg, piece_count, notes,
 
         # Lokasyona çıkış = transfer: miktarları hedef lokasyondaki kayda ekle
         if movement_type == "ÇIKIŞ" and destination_type == "Lokasyon" and destination:
-            _transfer_in(conn, fabric, destination, meter, kg, piece_count, user_name, mid)
+            _transfer_in(conn, fabric, destination, meter, kg, piece_count, user_name, mid,
+                          out_fabric_type=out_fabric_type, out_color=out_color,
+                          out_print_type=out_print_type, out_zemin_rengi=out_zemin_rengi,
+                          out_baski_desen_no=out_baski_desen_no, out_lab_no=lab_no)
     conn.commit()
     conn.close()
     return mid
 
 
-def _transfer_in(conn, src_fabric, dest_location, meter, kg, piece_count, user_name, src_mid):
-    """Lokasyona yapılan çıkışı hedef lokasyondaki aynı kaliteye giriş olarak işle."""
+def _transfer_in(conn, src_fabric, dest_location, meter, kg, piece_count, user_name, src_mid,
+                  out_fabric_type="", out_color="", out_print_type="",
+                  out_zemin_rengi="", out_baski_desen_no="", out_lab_no=""):
+    """Lokasyona yapılan çıkışı hedef lokasyondaki aynı kaliteye giriş olarak işle.
+
+    out_* parametreleri verilirse (ör. HAM kumaş fasona BASKILI olarak
+    gönderildiğinde), hedef kayıt bu değerlerle oluşturulur/eşleştirilir;
+    boş geçilirse kaynak kumaşın değerlerine düşülür (geriye dönük uyumlu)."""
+    dest_fabric_type    = out_fabric_type    or (src_fabric["fabric_type"]    or "")
+    dest_color          = out_color          or (src_fabric["color"]         or "")
+    dest_print_type     = out_print_type     or (src_fabric["print_type"]    or "")
+    dest_zemin_rengi    = out_zemin_rengi    or (src_fabric["zemin_rengi"]   or "")
+    dest_baski_desen_no = out_baski_desen_no or (src_fabric["baski_desen_no"] or "")
+    dest_lab_no         = out_lab_no         or (src_fabric["lab_no"]        or "")
+
     dest = conn.execute("""
         SELECT * FROM fabrics
         WHERE product_code=? AND color=? AND IFNULL(fabric_type,'')=? AND IFNULL(lot,'')=?
               AND location=? AND deleted_at IS NULL
-    """, (src_fabric["product_code"], src_fabric["color"],
-          src_fabric["fabric_type"] or "", src_fabric["lot"] or "",
-          dest_location)).fetchone()
+    """, (src_fabric["product_code"], dest_color, dest_fabric_type,
+          src_fabric["lot"] or "", dest_location)).fetchone()
 
     if dest:
         dest_id = dest["id"]
@@ -909,14 +971,15 @@ def _transfer_in(conn, src_fabric, dest_location, meter, kg, piece_count, user_n
         cur = conn.execute("""
             INSERT INTO fabrics (product_name, product_code, color, location, meter, kg,
                                  piece_count, description, birim_fiyat, fabric_type, lot,
-                                 entry_location, lab_no)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                 entry_location, lab_no, print_type, zemin_rengi, baski_desen_no)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (src_fabric["product_name"] or "", src_fabric["product_code"],
-              src_fabric["color"] or "", dest_location, meter or 0, kg or 0,
+              dest_color, dest_location, meter or 0, kg or 0,
               str(_pieces(piece_count) or "") if _pieces(piece_count) else "",
               src_fabric["description"] or "", src_fabric["birim_fiyat"] or 0,
-              src_fabric["fabric_type"] or "", src_fabric["lot"] or "",
-              src_entry or src_fabric["location"] or "", src_fabric["lab_no"] or ""))
+              dest_fabric_type, src_fabric["lot"] or "",
+              src_entry or src_fabric["location"] or "", dest_lab_no,
+              dest_print_type, dest_zemin_rengi, dest_baski_desen_no))
         dest_id = cur.lastrowid
 
     # Hedef tarafta GİRİŞ hareketi kaydet ve iki hareketi birbirine bağla
@@ -1267,6 +1330,171 @@ def delete_order(order_id):
     conn.execute("DELETE FROM orders WHERE id=?", (order_id,))
     conn.commit()
     conn.close()
+
+
+def update_order_status(order_id, status):
+    conn = get_connection()
+    conn.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
+    conn.commit()
+    conn.close()
+
+
+def get_fabric_stock_in_depo(product_code, fabric_type="HAM"):
+    """DEPO grubu lokasyonlardaki toplam metre/kg (silinmemiş kayıtlar)."""
+    conn = get_connection()
+    row = conn.execute("""
+        SELECT COALESCE(SUM(f.meter),0) AS meter, COALESCE(SUM(f.kg),0) AS kg
+        FROM fabrics f
+        JOIN locations l ON l.name = f.location
+        WHERE f.product_code=? AND IFNULL(f.fabric_type,'')=?
+              AND l.group_name='DEPO' AND f.deleted_at IS NULL
+    """, (product_code, fabric_type)).fetchone()
+    conn.close()
+    return {"meter": row["meter"] or 0, "kg": row["kg"] or 0}
+
+
+# ── Satınalma Siparişleri ──────────────────────────────────────────
+
+def _generate_po_no(conn):
+    """Tarih bazlı benzersiz PO numarası: PO-20260614-001, -002, ..."""
+    from datetime import date
+    prefix = f"PO-{date.today().strftime('%Y%m%d')}-"
+    row = conn.execute(
+        "SELECT po_no FROM purchase_orders WHERE po_no LIKE ? ORDER BY po_no DESC LIMIT 1",
+        (prefix + "%",)
+    ).fetchone()
+    if row:
+        try:
+            seq = int(row["po_no"].rsplit("-", 1)[1]) + 1
+        except (ValueError, IndexError):
+            seq = 1
+    else:
+        seq = 1
+    return f"{prefix}{seq:03d}"
+
+
+_PO_ITEM_FIELDS = ["product_code", "product_name", "composition", "width", "gramaj",
+                   "fabric_type", "meter", "kg", "unit_price", "description"]
+
+
+def _insert_po_items(conn, po_id, items):
+    for i, item in enumerate(items):
+        conn.execute(f"""
+            INSERT INTO purchase_order_items (po_id, sort_order, {", ".join(_PO_ITEM_FIELDS)})
+            VALUES (?, ?, {", ".join("?" * len(_PO_ITEM_FIELDS))})
+        """, (po_id, i, *[item.get(f) for f in _PO_ITEM_FIELDS]))
+
+
+def add_purchase_order(supplier_id, supplier_name, order_id, order_no, currency,
+                       payment_method, delivery_terms, expected_delivery, notes,
+                       items, created_by=""):
+    conn = get_connection()
+    po_no = _generate_po_no(conn)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO purchase_orders (po_no, supplier_id, supplier_name, order_id, order_no,
+                                      currency, payment_method, delivery_terms,
+                                      expected_delivery, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (po_no, supplier_id, supplier_name, order_id, order_no,
+          currency, payment_method, delivery_terms, expected_delivery, notes, created_by))
+    po_id = c.lastrowid
+    _insert_po_items(conn, po_id, items)
+    conn.commit()
+    conn.close()
+    return po_id, po_no
+
+
+def get_purchase_order(po_id):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+    if not row:
+        conn.close()
+        return None
+    items = conn.execute(
+        "SELECT * FROM purchase_order_items WHERE po_id=? ORDER BY sort_order, id",
+        (po_id,)
+    ).fetchall()
+    conn.close()
+    return {**dict(row), "items": [dict(i) for i in items]}
+
+
+def get_all_purchase_orders(search="", status="", order_id=None):
+    conn = get_connection()
+    query = """
+        SELECT po.*,
+            (SELECT COUNT(*) FROM purchase_order_items pi WHERE pi.po_id=po.id) AS item_count,
+            (SELECT COALESCE(SUM(pi.meter*pi.unit_price),0) FROM purchase_order_items pi
+                WHERE pi.po_id=po.id) AS total_amount
+        FROM purchase_orders po WHERE 1=1
+    """
+    params = []
+    if search:
+        query += " AND (po.po_no LIKE ? OR po.supplier_name LIKE ? OR po.order_no LIKE ?)"
+        s = f"%{search}%"
+        params.extend([s, s, s])
+    if status:
+        query += " AND po.status = ?"
+        params.append(status)
+    if order_id:
+        query += " AND po.order_id = ?"
+        params.append(order_id)
+    query += " ORDER BY po.id DESC"
+    rows = [dict(r) for r in conn.execute(query, params).fetchall()]
+    conn.close()
+    return rows
+
+
+def update_purchase_order_status(po_id, status):
+    conn = get_connection()
+    conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (status, po_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_purchase_order(po_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM purchase_order_items WHERE po_id=?", (po_id,))
+    conn.execute("DELETE FROM purchase_orders WHERE id=?", (po_id,))
+    conn.commit()
+    conn.close()
+
+
+def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="", lab_no=""):
+    """Mal geldi: DEPO'ya giriş kaydı (add_fabric → otomatik SATINALMA GİRİŞİ
+    hareketi), kalemin received_meter/kg'sini ve PO durumunu günceller."""
+    conn = get_connection()
+    item = conn.execute("SELECT * FROM purchase_order_items WHERE id=?", (po_item_id,)).fetchone()
+    if not item:
+        conn.close()
+        return
+    po_id = item["po_id"]
+    new_rm = (item["received_meter"] or 0) + (meter or 0)
+    new_rk = (item["received_kg"] or 0) + (kg or 0)
+    conn.execute("UPDATE purchase_order_items SET received_meter=?, received_kg=? WHERE id=?",
+                 (new_rm, new_rk, po_item_id))
+
+    all_items = conn.execute(
+        "SELECT meter, kg, received_meter, received_kg FROM purchase_order_items WHERE po_id=?",
+        (po_id,)
+    ).fetchall()
+    any_received = any((r["received_meter"] or 0) > 0 or (r["received_kg"] or 0) > 0 for r in all_items)
+    fully_received = all(
+        (r["received_meter"] or 0) >= (r["meter"] or 0) and (r["received_kg"] or 0) >= (r["kg"] or 0)
+        for r in all_items
+    )
+    new_status = "TAMAMLANDI" if fully_received else ("KISMİ GELDİ" if any_received else "BEKLEMEDE")
+    conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (new_status, po_id))
+    conn.commit()
+    conn.close()
+
+    add_fabric(
+        product_name=item["product_name"] or "", product_code=item["product_code"],
+        color="", location=location, meter=meter or 0, kg=kg or 0,
+        piece_count="", birim_fiyat=item["unit_price"] or 0,
+        fabric_type=item["fabric_type"] or "HAM", lot="", description=item["description"] or "",
+        user_name=user_name, entry_location=location, lab_no=lab_no,
+    )
 
 
 # ── Ayarlar ──────────────────────────────────────────────────────

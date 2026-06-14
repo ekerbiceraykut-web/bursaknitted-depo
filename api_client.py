@@ -132,13 +132,16 @@ def reverse_movement(mid):
 
 def add_movement(fid, movement_type, meter, kg, piece_count, notes, user_name="",
                  destination="", destination_type="", deduct_meter=None, deduct_kg=None,
-                 out_color="", lab_no="", parti_no=""):
+                 out_color="", lab_no="", parti_no="",
+                 out_fabric_type="", out_print_type="", out_zemin_rengi="", out_baski_desen_no=""):
     r = _post("/api/movements", {
         "fabric_id": fid, "movement_type": movement_type,
         "meter": meter, "kg": kg, "piece_count": piece_count, "notes": notes,
         "destination": destination, "destination_type": destination_type,
         "deduct_meter": deduct_meter, "deduct_kg": deduct_kg,
         "out_color": out_color, "lab_no": lab_no, "parti_no": parti_no,
+        "out_fabric_type": out_fabric_type, "out_print_type": out_print_type,
+        "out_zemin_rengi": out_zemin_rengi, "out_baski_desen_no": out_baski_desen_no,
     })
     return (r or {}).get("id")
 
@@ -188,14 +191,16 @@ def get_all_suppliers(search="", active_only=True):
 def get_supplier(sid):
     return _get(f"/api/suppliers/{sid}")
 
-def add_supplier(name, code="", phone="", address="", tax_no=""):
+def add_supplier(name, code="", phone="", address="", tax_no="", email=""):
     r = _post("/api/suppliers", {"name": name, "code": code,
-                                 "phone": phone, "address": address, "tax_no": tax_no})
+                                 "phone": phone, "address": address, "tax_no": tax_no,
+                                 "email": email})
     return (r or {}).get("id")
 
-def update_supplier(sid, name, code, phone, address, tax_no="", active=1):
+def update_supplier(sid, name, code, phone, address, tax_no="", active=1, email=""):
     _put(f"/api/suppliers/{sid}", {"name": name, "code": code, "phone": phone,
-                                   "address": address, "tax_no": tax_no, "active": active})
+                                   "address": address, "tax_no": tax_no, "active": active,
+                                   "email": email})
 
 def delete_supplier(sid):
     _delete(f"/api/suppliers/{sid}")
@@ -384,6 +389,47 @@ def update_order(oid, customer_id, customer_name, customer_ref, currency,
 
 def delete_order(oid):
     _delete(f"/api/orders/{oid}")
+
+def update_order_status(order_id, status):
+    _put(f"/api/orders/{order_id}/status", {"status": status})
+
+
+# ── Satınalma Siparişleri ──────────────────────────────────────────
+
+def get_fabric_stock_in_depo(product_code, fabric_type="HAM"):
+    return _get("/api/stock_in_depo", {"product_code": product_code, "fabric_type": fabric_type}) \
+           or {"meter": 0, "kg": 0}
+
+def get_all_purchase_orders(search="", status="", order_id=None):
+    params = {"search": search, "status": status}
+    if order_id:
+        params["order_id"] = str(order_id)
+    return _get("/api/purchase_orders", params) or []
+
+def get_purchase_order(po_id):
+    return _get(f"/api/purchase_orders/{po_id}")
+
+def add_purchase_order(supplier_id, supplier_name, order_id, order_no, currency,
+                       payment_method, delivery_terms, expected_delivery, notes,
+                       items, created_by=""):
+    r = _post("/api/purchase_orders", {
+        "supplier_id": supplier_id, "supplier_name": supplier_name,
+        "order_id": order_id, "order_no": order_no, "currency": currency,
+        "payment_method": payment_method, "delivery_terms": delivery_terms,
+        "expected_delivery": expected_delivery, "notes": notes,
+        "items": items, "created_by": created_by,
+    })
+    return r["id"], r["po_no"]
+
+def update_purchase_order_status(po_id, status):
+    _put(f"/api/purchase_orders/{po_id}/status", {"status": status})
+
+def delete_purchase_order(po_id):
+    _delete(f"/api/purchase_orders/{po_id}")
+
+def receive_purchase_order_item(po_item_id, meter, kg, location, lab_no=""):
+    _post(f"/api/purchase_orders/items/{po_item_id}/receive",
+          {"meter": meter, "kg": kg, "location": location, "lab_no": lab_no})
 
 
 # ── Ayarlar ──────────────────────────────────────────────────────

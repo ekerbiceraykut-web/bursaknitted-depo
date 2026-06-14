@@ -7,6 +7,7 @@ import threading
 import time
 import json
 import os
+from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, date
@@ -341,6 +342,34 @@ def send_report(test=False):
         save_config({"last_sent": date.today().isoformat()})
 
     return len(to_list)
+
+
+def send_email_with_attachment(to_addr, subject, body_text, attachment_path):
+    """Tek bir alıcıya, PDF eki ile düz metin e-posta gönderir
+    (Satınalma Siparişi formu vb. için)."""
+    cfg = get_email_config()
+    if not cfg["smtp_user"] or not cfg["smtp_pass"]:
+        raise ValueError("E-posta ayarları eksik. Lütfen ayarları doldurun.")
+    if not to_addr:
+        raise ValueError("Alıcı e-posta adresi girilmemiş.")
+
+    msg = MIMEMultipart()
+    msg["Subject"] = subject
+    msg["From"] = cfg["from_addr"] or cfg["smtp_user"]
+    msg["To"] = to_addr
+    msg.attach(MIMEText(body_text, "plain", "utf-8"))
+
+    with open(attachment_path, "rb") as f:
+        part = MIMEApplication(f.read(), _subtype="pdf")
+    part.add_header("Content-Disposition", "attachment",
+                    filename=os.path.basename(attachment_path))
+    msg.attach(part)
+
+    with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"]) as server:
+        server.ehlo()
+        server.starttls()
+        server.login(cfg["smtp_user"], cfg["smtp_pass"])
+        server.sendmail(msg["From"], [to_addr], msg.as_string())
 
 
 # ── Günlük Zamanlayıcı ───────────────────────────────────────────

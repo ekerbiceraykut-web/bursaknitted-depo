@@ -32,6 +32,7 @@ _STYLE_COMPANY = ParagraphStyle("Company", parent=_styles["Normal"], fontName="T
 _STYLE_NORMAL = ParagraphStyle("TrNormal", parent=_styles["Normal"], fontName="Turkish", fontSize=9, leading=12)
 _STYLE_SMALL = ParagraphStyle("TrSmall", parent=_styles["Normal"], fontName="Turkish", fontSize=8, leading=10)
 _STYLE_CELL = ParagraphStyle("TrCell", parent=_styles["Normal"], fontName="Turkish", fontSize=7.5, leading=9)
+_STYLE_CELL_BOLD = ParagraphStyle("TrCellBold", parent=_styles["Normal"], fontName="Turkish-Bold", fontSize=7.5, leading=9)
 _STYLE_TITLE = ParagraphStyle("TrTitle", parent=_styles["Normal"], fontName="Turkish-Bold", fontSize=14, leading=18, alignment=TA_CENTER)
 _STYLE_HEADING = ParagraphStyle("TrHeading", parent=_styles["Normal"], fontName="Turkish-Bold", fontSize=10, leading=13)
 
@@ -130,7 +131,9 @@ def generate_order_pdf(order, company, file_path):
 
     # ── Sipariş kalemleri ────────────────────────────────────────
     headers = ["Ürün Kodu", "Kompozisyon", "En", "Gramaj", "Kumaş Tipi", "Renk",
-               "Lab No", "Açıklama", "Metre", "Kilo", f"Birim Fiyat ({symbol})", f"Tutar ({symbol})"]
+               "Lab No", "Açıklama", "Metre", "Kilo", f"Birim Fiyat ({symbol})", f"Tutar ({symbol})",
+               Paragraph("Baskı Tipi", _STYLE_CELL_BOLD), Paragraph("Zemin Rengi", _STYLE_CELL_BOLD),
+               Paragraph("Baskı Desen No", _STYLE_CELL_BOLD)]
     item_rows = [headers]
     grand_total = 0.0
     total_meter = 0.0
@@ -156,12 +159,17 @@ def generate_order_pdf(order, company, file_path):
             _fmt_num(kg),
             _fmt_num(sale_price),
             _fmt_num(total),
+            Paragraph(escape(it.get("print_type") or ""), _STYLE_CELL),
+            Paragraph(escape(it.get("zemin_rengi") or ""), _STYLE_CELL),
+            Paragraph(escape(it.get("baski_desen_no") or ""), _STYLE_CELL),
         ])
     item_rows.append(["GENEL TOPLAM:", "", "", "", "", "", "",
-                       "", _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total)])
+                       "", _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total),
+                       "", "", ""])
 
-    col_widths = [22 * mm, 32 * mm, 12 * mm, 14 * mm, 22 * mm, 18 * mm, 16 * mm,
-                   38 * mm, 16 * mm, 16 * mm, 24 * mm, 24 * mm]
+    col_widths = [20 * mm, 20 * mm, 12 * mm, 14 * mm, 18 * mm, 14 * mm, 15 * mm,
+                   26 * mm, 16 * mm, 16 * mm, 22 * mm, 22 * mm,
+                   16 * mm, 20 * mm, 22 * mm]
     items_table = Table(item_rows, colWidths=col_widths, repeatRows=1)
     items_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Turkish-Bold"),

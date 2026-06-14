@@ -182,6 +182,27 @@ class APIHandler(BaseHTTPRequestHandler):
                 r = db.get_order(oid)
                 self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
 
+            # ── Planlama: DEPO stok kontrolü ──────────────────────
+            elif path == "/api/stock_in_depo":
+                row = db.get_fabric_stock_in_depo(
+                    qs.get("product_code",[""])[0],
+                    qs.get("fabric_type",["HAM"])[0])
+                self._send(_ok(row))
+
+            # ── Satınalma Siparişleri ──────────────────────────────
+            elif path == "/api/purchase_orders":
+                order_id = qs.get("order_id",[""])[0]
+                rows = db.get_all_purchase_orders(
+                    search=qs.get("search",[""])[0],
+                    status=qs.get("status",[""])[0],
+                    order_id=int(order_id) if order_id else None)
+                self._send(_ok(rows))
+
+            elif path.startswith("/api/purchase_orders/"):
+                po_id = int(path.split("/")[-1])
+                r = db.get_purchase_order(po_id)
+                self._send(_ok(r) if r else _err("Bulunamadı"))
+
             # ── Ayarlar ────────────────────────────────────────────
             elif path == "/api/settings/company":
                 self._send(_ok(db.get_company_settings()))
@@ -258,7 +279,11 @@ class APIHandler(BaseHTTPRequestHandler):
                     deduct_kg=body.get("deduct_kg"),
                     out_color=body.get("out_color",""),
                     lab_no=body.get("lab_no",""),
-                    parti_no=body.get("parti_no","")
+                    parti_no=body.get("parti_no",""),
+                    out_fabric_type=body.get("out_fabric_type",""),
+                    out_print_type=body.get("out_print_type",""),
+                    out_zemin_rengi=body.get("out_zemin_rengi",""),
+                    out_baski_desen_no=body.get("out_baski_desen_no","")
                 )
                 self._send(_ok({"id": mid}))
 
@@ -315,7 +340,7 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/suppliers":
                 sid = db.add_supplier(body.get("name",""), body.get("code",""),
                                       body.get("phone",""), body.get("address",""),
-                                      body.get("tax_no",""))
+                                      body.get("tax_no",""), body.get("email",""))
                 self._send(_ok({"id": sid}))
 
             elif path == "/api/suppliers/bulk":
@@ -357,6 +382,28 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 self._send(_ok({"id": oid, "order_no": order_no}))
 
+            # ── Satınalma siparişi ekle ────────────────────────────
+            elif path == "/api/purchase_orders":
+                po_id, po_no = db.add_purchase_order(
+                    body.get("supplier_id"), body.get("supplier_name",""),
+                    body.get("order_id"), body.get("order_no",""),
+                    body.get("currency","USD"), body.get("payment_method",""),
+                    body.get("delivery_terms",""), body.get("expected_delivery",""),
+                    body.get("notes",""), body.get("items",[]),
+                    created_by=body.get("created_by") or user["full_name"]
+                )
+                self._send(_ok({"id": po_id, "po_no": po_no}))
+
+            # ── Satınalma siparişi kalemi: mal girişi ─────────────
+            elif path.startswith("/api/purchase_orders/items/") and path.endswith("/receive"):
+                item_id = int(path.split("/")[-2])
+                db.receive_purchase_order_item(
+                    item_id, body.get("meter",0), body.get("kg",0),
+                    body.get("location",""), user_name=user["full_name"],
+                    lab_no=body.get("lab_no","")
+                )
+                self._send(_ok())
+
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)
 
@@ -396,7 +443,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 sid = int(path.split("/")[-1])
                 db.update_supplier(sid, body.get("name",""), body.get("code",""),
                                    body.get("phone",""), body.get("address",""),
-                                   body.get("tax_no",""), body.get("active",1))
+                                   body.get("tax_no",""), body.get("active",1),
+                                   body.get("email",""))
                 self._send(_ok())
             elif path.startswith("/api/products/"):
                 pid = int(path.split("/")[-1])
@@ -424,6 +472,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 if user.get("role") != "admin":
                     return self._send(_err("Yetki yok"), 403)
                 db.toggle_user_active(uid)
+                self._send(_ok())
+            elif path.startswith("/api/orders/") and path.endswith("/status"):
+                oid = int(path.split("/")[-2])
+                db.update_order_status(oid, body.get("status",""))
+                self._send(_ok())
+            elif path.startswith("/api/purchase_orders/") and path.endswith("/status"):
+                po_id = int(path.split("/")[-2])
+                db.update_purchase_order_status(po_id, body.get("status",""))
                 self._send(_ok())
             elif path.startswith("/api/orders/"):
                 oid = int(path.split("/")[-1])
@@ -470,6 +526,10 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/orders/"):
                 oid = int(path.split("/")[-1])
                 db.delete_order(oid)
+                self._send(_ok())
+            elif path.startswith("/api/purchase_orders/"):
+                po_id = int(path.split("/")[-1])
+                db.delete_purchase_order(po_id)
                 self._send(_ok())
             elif path.startswith("/api/locations/"):
                 lid = int(path.split("/")[-1])
