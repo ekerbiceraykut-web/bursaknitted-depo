@@ -1260,6 +1260,9 @@ _COMPANY_DEFAULTS = {
     "phone": "+90 504 05 16",
     "tax": "1911204932",
     "origin": "Turkey Republic",
+    "website": "www.bursaknitted.com.tr",
+    "email_info": "info@bursaknitted.com",
+    "email_planlama": "planlama@bursaknitted.com",
     "bank_info": """GARANTI BANK
 Swift: TGBATRISXXX
 $ IBAN: TR18 0006 2000 4740 0009 0799 43

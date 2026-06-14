@@ -1318,11 +1318,17 @@ class CompanySettingsDialog(QDialog):
         self.company_phone = QLineEdit()
         self.company_tax = QLineEdit()
         self.company_origin = QLineEdit()
+        self.company_website = QLineEdit()
+        self.company_email_info = QLineEdit()
+        self.company_email_planlama = QLineEdit()
         form.addRow("Firma Unvanı:", self.company_name)
         form.addRow("Adres:", self.company_address)
         form.addRow("Telefon:", self.company_phone)
         form.addRow("Vergi Numarası:", self.company_tax)
         form.addRow("Menşei:", self.company_origin)
+        form.addRow("Web Sitesi:", self.company_website)
+        form.addRow("E-posta (Info):", self.company_email_info)
+        form.addRow("E-posta (Planlama):", self.company_email_planlama)
         lay.addLayout(form)
 
         lay.addWidget(QLabel("Banka Bilgileri:"))
@@ -1353,6 +1359,9 @@ class CompanySettingsDialog(QDialog):
         self.company_phone.setText(cfg.get("phone", ""))
         self.company_tax.setText(cfg.get("tax", ""))
         self.company_origin.setText(cfg.get("origin", ""))
+        self.company_website.setText(cfg.get("website", ""))
+        self.company_email_info.setText(cfg.get("email_info", ""))
+        self.company_email_planlama.setText(cfg.get("email_planlama", ""))
         self.bank_info.setPlainText(cfg.get("bank_info", ""))
         self.contract_template.setPlainText(cfg.get("contract_template", ""))
 
@@ -1363,6 +1372,9 @@ class CompanySettingsDialog(QDialog):
             phone=self.company_phone.text().strip(),
             tax=self.company_tax.text().strip(),
             origin=self.company_origin.text().strip(),
+            website=self.company_website.text().strip(),
+            email_info=self.company_email_info.text().strip(),
+            email_planlama=self.company_email_planlama.text().strip(),
             bank_info=self.bank_info.toPlainText(),
             contract_template=self.contract_template.toPlainText(),
         )

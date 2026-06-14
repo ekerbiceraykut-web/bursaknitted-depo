@@ -22,6 +22,7 @@ from reportlab.platypus import (Image, Paragraph, SimpleDocTemplate, Spacer,
 CURRENCY_SYMBOLS = {"USD": "$", "EUR": "€", "GBP": "£", "TRY": "₺"}
 
 _LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logo.png")
+_APPROVALS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "onaylar_logo_seridi.png")
 _FONT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
 pdfmetrics.registerFont(TTFont("Turkish", os.path.join(_FONT_DIR, "Arial.ttf")))
 pdfmetrics.registerFont(TTFont("Turkish-Bold", os.path.join(_FONT_DIR, "Arial Bold.ttf")))
@@ -75,6 +76,17 @@ def generate_order_pdf(order, company, file_path):
             f"Tel: {escape(company.get('phone', ''))}  |  Vergi No: {escape(company.get('tax', ''))}"
             f"  |  Menşei: {escape(company.get('origin', ''))}", _STYLE_SMALL),
     ]
+    contact_links = []
+    website = (company.get("website") or "").strip()
+    if website:
+        contact_links.append(
+            f'<link href="https://{escape(website)}"><font color="#1565C0"><u>{escape(website)}</u></font></link>')
+    for email in (company.get("email_info") or "").strip(), (company.get("email_planlama") or "").strip():
+        if email:
+            contact_links.append(
+                f'<link href="mailto:{escape(email)}"><font color="#1565C0"><u>{escape(email)}</u></font></link>')
+    if contact_links:
+        company_info.append(Paragraph("  |  ".join(contact_links), _STYLE_SMALL))
     logo_cell = ""
     if os.path.exists(_LOGO_PATH):
         logo_cell = Image(_LOGO_PATH, width=42 * mm, height=42 * mm * 469 / 1293)
@@ -84,8 +96,10 @@ def generate_order_pdf(order, company, file_path):
         ("ALIGN", (1, 0), (1, 0), "RIGHT"),
         ("LEFTPADDING", (0, 0), (-1, -1), 0),
         ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-        ("TOPPADDING", (0, 0), (-1, -1), 0),
-        ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ("LINEABOVE", (0, 0), (-1, 0), 1.5, colors.HexColor("#2C2C2C")),
+        ("LINEBELOW", (0, 0), (-1, 0), 0.75, colors.HexColor("#9E9E9E")),
     ]))
     elements.append(header_table)
     elements.append(Spacer(1, 5 * mm))
@@ -212,5 +226,32 @@ def generate_order_pdf(order, company, file_path):
         ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]))
     elements.append(contract_table)
+    elements.append(Spacer(1, 6 * mm))
+
+    # ── Kaşe / İmza alanları ──────────────────────────────────────
+    sig_table = Table(
+        [
+            [Paragraph(f"<b>{escape(company.get('name', ''))}</b>", _STYLE_NORMAL),
+             Paragraph(f"<b>{escape(order.get('customer_name', ''))}</b>", _STYLE_NORMAL)],
+            [Paragraph("Kaşe / İmza", _STYLE_SMALL),
+             Paragraph("Kaşe / İmza", _STYLE_SMALL)],
+        ],
+        colWidths=[136.5 * mm, 136.5 * mm], rowHeights=[8 * mm, 26 * mm])
+    sig_table.setStyle(TableStyle([
+        ("BOX", (0, 0), (0, -1), 0.75, colors.HexColor("#9E9E9E")),
+        ("BOX", (1, 0), (1, -1), 0.75, colors.HexColor("#9E9E9E")),
+        ("VALIGN", (0, 0), (-1, 0), "TOP"),
+        ("VALIGN", (0, 1), (-1, 1), "BOTTOM"),
+        ("LEFTPADDING", (0, 0), (-1, -1), 5),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 0), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+    ]))
+    elements.append(sig_table)
+
+    # ── Çalıştığımız markalar / sertifikalar ──────────────────────
+    if os.path.exists(_APPROVALS_PATH):
+        elements.append(Spacer(1, 5 * mm))
+        elements.append(Image(_APPROVALS_PATH, width=273 * mm, height=273 * mm * 192 / 1840))
 
     doc.build(elements)
