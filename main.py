@@ -10,9 +10,9 @@ from PyQt6.QtWidgets import (
     QTabWidget, QHeaderView, QFileDialog, QSpinBox, QDoubleSpinBox,
     QTextEdit, QGroupBox, QSplitter, QListWidget, QListWidgetItem,
     QStatusBar, QFrame, QAbstractItemView, QTableView, QInputDialog,
-    QCheckBox, QCompleter
+    QCheckBox, QCompleter, QDateEdit
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant
+from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant, QDate
 from PyQt6.QtGui import QFont, QColor, QIcon, QBrush, QPixmap
 
 
@@ -41,6 +41,7 @@ _LIST_FUNCS = {
     "get_all_products", "get_all_locations", "get_active_locations",
     "get_locations", "get_all_users", "get_fire_records",
     "get_movements", "get_all_movements", "get_movements_by_range",
+    "get_all_orders",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -1280,6 +1281,78 @@ class EmailSettingsDialog(QDialog):
         )
 
 
+class CompanySettingsDialog(QDialog):
+    """Sipariş formlarında kullanılan firma/banka bilgileri ve varsayılan
+    sözleşme şartnamesi metni — settings tablosunda saklanır."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Şirket / Banka Ayarları")
+        self.setMinimumSize(560, 600)
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setSpacing(10)
+
+        form = QFormLayout(); form.setSpacing(8)
+        self.company_name = QLineEdit()
+        self.company_address = QLineEdit()
+        self.company_phone = QLineEdit()
+        self.company_tax = QLineEdit()
+        self.company_origin = QLineEdit()
+        form.addRow("Firma Unvanı:", self.company_name)
+        form.addRow("Adres:", self.company_address)
+        form.addRow("Telefon:", self.company_phone)
+        form.addRow("Vergi Numarası:", self.company_tax)
+        form.addRow("Menşei:", self.company_origin)
+        lay.addLayout(form)
+
+        lay.addWidget(QLabel("Banka Bilgileri:"))
+        self.bank_info = QTextEdit()
+        self.bank_info.setMinimumHeight(140)
+        lay.addWidget(self.bank_info)
+
+        lay.addWidget(QLabel("Varsayılan Sözleşme Şartnamesi:"))
+        self.contract_template = QTextEdit()
+        self.contract_template.setMinimumHeight(220)
+        lay.addWidget(self.contract_template)
+
+        btn_row = QHBoxLayout()
+        btn_save = QPushButton("Kaydet")
+        btn_save.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:7px 14px;")
+        btn_cancel = QPushButton("İptal")
+        btn_cancel.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:7px 14px;")
+        btn_cancel.clicked.connect(self.reject)
+        btn_save.clicked.connect(self._save)
+        btn_row.addStretch()
+        btn_row.addWidget(btn_save); btn_row.addWidget(btn_cancel)
+        lay.addLayout(btn_row)
+
+    def _load(self):
+        cfg = db.get_company_settings() or {}
+        self.company_name.setText(cfg.get("name", ""))
+        self.company_address.setText(cfg.get("address", ""))
+        self.company_phone.setText(cfg.get("phone", ""))
+        self.company_tax.setText(cfg.get("tax", ""))
+        self.company_origin.setText(cfg.get("origin", ""))
+        self.bank_info.setPlainText(cfg.get("bank_info", ""))
+        self.contract_template.setPlainText(cfg.get("contract_template", ""))
+
+    def _save(self):
+        db.save_company_settings(
+            name=self.company_name.text().strip(),
+            address=self.company_address.text().strip(),
+            phone=self.company_phone.text().strip(),
+            tax=self.company_tax.text().strip(),
+            origin=self.company_origin.text().strip(),
+            bank_info=self.bank_info.toPlainText(),
+            contract_template=self.contract_template.toPlainText(),
+        )
+        QMessageBox.information(self, "Kaydedildi", "Şirket / banka ayarları kaydedildi.")
+        self.accept()
+
+
 class LoginDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1811,6 +1884,405 @@ class FabricDialog(QDialog):
             "piece_count": self.piece_count.text().strip(),
             "birim_fiyat": self.birim_fiyat.value(),
             "description": self.description.toPlainText().strip(),
+        }
+
+
+class OrderDialog(QDialog):
+    """Satış siparişi açma/düzenleme — 3 sekme: ürün bilgileri, ticari şartlar,
+    sözleşme şartnamesi. Kaydedilince status='PLANLAMA BEKLİYOR' ile orders
+    tablosuna yazılır (yeni planlama ekranı bu kayıtları kullanacak)."""
+
+    FABRIC_TYPES = ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]
+    PAYMENT_METHODS = ["Peşin", "Havale/EFT", "30 Gün Vade", "60 Gün Vade",
+                       "90 Gün Vade", "120 Gün Vade", "Akreditif (L/C)", "Diğer"]
+    DELIVERY_TERMS = ["FOB", "CIF", "EXW", "DAP", "Diğer"]
+
+    def __init__(self, parent=None, order=None):
+        super().__init__(parent)
+        self.order = order
+        self.setWindowTitle("Yeni Sipariş" if not order else f"Sipariş Düzenle — {dict(order)['order_no']}")
+        self.setMinimumSize(640, 620)
+        self._build_ui()
+        if order:
+            self._populate(dict(order))
+        else:
+            self.order_date.setDate(QDate.currentDate())
+            self.delivery_date.setDate(QDate.currentDate().addDays(30))
+            self.contract_terms.setPlainText(db.get_company_settings().get("contract_template", ""))
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        self.tabs = QTabWidget()
+        layout.addWidget(self.tabs)
+
+        # ── Sekme 1: Ürün Bilgileri ────────────────────────────────
+        tab1 = QWidget()
+        form1 = QFormLayout(tab1)
+        form1.setSpacing(10)
+
+        self.customer = QComboBox()
+        self._load_customers()
+        self.customer.currentIndexChanged.connect(self._on_customer_change)
+        form1.addRow("Müşteri *:", self.customer)
+
+        self.customer_ref = QLineEdit()
+        self.customer_ref.setPlaceholderText("Müşterinin kendi sipariş/PO numarası (opsiyonel)")
+        form1.addRow("Müşteri Referans:", self.customer_ref)
+
+        self.product_code = QComboBox()
+        self.product_code.setEditable(True)
+        self.product_code.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        completer = self.product_code.completer()
+        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._load_products()
+        self.product_code.currentIndexChanged.connect(self._on_product_change)
+        form1.addRow("Ürün Kodu *:", self.product_code)
+
+        self.composition = QLineEdit()
+        self.width = QLineEdit()
+        self.gramaj = QLineEdit()
+        form1.addRow("Kompozisyon:", self.composition)
+        form1.addRow("En:", self.width)
+        form1.addRow("Gramaj:", self.gramaj)
+
+        self.fabric_type = QComboBox()
+        self.fabric_type.addItem("— Seçiniz —", "")
+        for t in self.FABRIC_TYPES:
+            self.fabric_type.addItem(t, t)
+        self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
+        form1.addRow("Kumaş Tipi *:", self.fabric_type)
+
+        self.color = QLineEdit()
+        self.lab_no = QLineEdit()
+        form1.addRow("Renk:", self.color)
+        form1.addRow("Lab No:", self.lab_no)
+
+        self.meter = QDoubleSpinBox()
+        self.meter.setRange(0, 999999)
+        self.meter.setDecimals(2)
+        self.meter.valueChanged.connect(self._update_total)
+        form1.addRow("Metre:", self.meter)
+
+        kg_row = QWidget()
+        kg_lay = QHBoxLayout(kg_row)
+        kg_lay.setContentsMargins(0, 0, 0, 0)
+        self.kg = QDoubleSpinBox()
+        self.kg.setRange(0, 999999)
+        self.kg.setDecimals(2)
+        btn_calc_kg = QPushButton("🧮 Hesapla")
+        btn_calc_kg.setToolTip("Kilo = Gramaj × (En / 100) × Metre / 1000")
+        btn_calc_kg.clicked.connect(self._calc_kg)
+        kg_lay.addWidget(self.kg, 1)
+        kg_lay.addWidget(btn_calc_kg)
+        form1.addRow("Kilo:", kg_row)
+
+        self.sale_price = QDoubleSpinBox()
+        self.sale_price.setRange(0, 9999999)
+        self.sale_price.setDecimals(2)
+        self.sale_price.setSuffix(" $")
+        self.sale_price.setStyleSheet("border: 1px solid #BDBDBD;")
+        self.sale_price.valueChanged.connect(self._update_total)
+        form1.addRow("Satış Fiyatı ($/mt):", self.sale_price)
+
+        self.total_lbl = QLabel("0.00 $")
+        self.total_lbl.setStyleSheet("font-weight:bold; color:#1A237E;")
+        form1.addRow("Toplam Tutar:", self.total_lbl)
+
+        self.delivery_date = QDateEdit()
+        self.delivery_date.setCalendarPopup(True)
+        self.delivery_date.setDisplayFormat("dd.MM.yyyy")
+        form1.addRow("Termin *:", self.delivery_date)
+
+        self.tabs.addTab(tab1, "📦 Ürün Bilgileri")
+
+        # ── Sekme 2: Ticari Şartlar ─────────────────────────────────
+        tab2 = QWidget()
+        form2 = QFormLayout(tab2)
+        form2.setSpacing(10)
+
+        self.order_no_edit = QLineEdit()
+        self.order_no_edit.setReadOnly(True)
+        self.order_no_edit.setText("Kaydedince atanacak")
+        self.order_no_edit.setStyleSheet("color:#757575;")
+        form2.addRow("Sipariş No:", self.order_no_edit)
+
+        self.order_date = QDateEdit()
+        self.order_date.setCalendarPopup(True)
+        self.order_date.setDisplayFormat("dd.MM.yyyy")
+        form2.addRow("Sipariş Tarihi:", self.order_date)
+
+        self.payment_method = QComboBox()
+        self.payment_method.setEditable(True)
+        self.payment_method.addItem("")
+        for p in self.PAYMENT_METHODS:
+            self.payment_method.addItem(p)
+        form2.addRow("Ödeme Şekli:", self.payment_method)
+
+        self.delivery_terms = QComboBox()
+        self.delivery_terms.setEditable(True)
+        self.delivery_terms.addItem("")
+        for d in self.DELIVERY_TERMS:
+            self.delivery_terms.addItem(d)
+        form2.addRow("Teslimat Şartları:", self.delivery_terms)
+
+        self.delivery_address = QLineEdit()
+        form2.addRow("Teslimat Adresi:", self.delivery_address)
+
+        self.bank_info = QTextEdit()
+        self.bank_info.setReadOnly(True)
+        self.bank_info.setMaximumHeight(140)
+        self.bank_info.setPlainText(db.get_company_settings().get("bank_info", ""))
+        form2.addRow("Banka Bilgilerimiz:", self.bank_info)
+
+        self.notes = QTextEdit()
+        self.notes.setMaximumHeight(80)
+        form2.addRow("Notlar:", self.notes)
+
+        self.tabs.addTab(tab2, "💳 Ticari Şartlar")
+
+        # ── Sekme 3: Sözleşme Şartnamesi ───────────────────────────
+        tab3 = QWidget()
+        lay3 = QVBoxLayout(tab3)
+        self.contract_terms = QTextEdit()
+        lay3.addWidget(self.contract_terms)
+        self.tabs.addTab(tab3, "📄 Sözleşme Şartnamesi")
+
+        note = QLabel("* işaretli alanlar zorunludur")
+        note.setStyleSheet("color:#9E9E9E; font-size:11px;")
+        layout.addWidget(note)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self._validate)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    # ── Müşteri ──────────────────────────────────────────────────
+    def _load_customers(self, select_id=None):
+        self._customers = {}
+        self.customer.blockSignals(True)
+        self.customer.clear()
+        self.customer.addItem("— Seçiniz —", "")
+        self.customer.addItem("➕ Yeni müşteri ekle...", "__NEW__")
+        for c in db.get_all_customers():
+            cid = str(c["id"])
+            self._customers[cid] = c["name"]
+            label = c["name"] + (f" ({c['code']})" if c["code"] else "")
+            self.customer.addItem(label, cid)
+        if select_id is not None:
+            sid = str(select_id)
+            idx = self.customer.findData(sid)
+            if idx < 0:
+                c = db.get_customer(select_id)
+                if c:
+                    self._customers[sid] = c["name"]
+                    label = c["name"] + (f" ({c['code']})" if c["code"] else "")
+                    self.customer.addItem(label, sid)
+                    idx = self.customer.count() - 1
+            if idx >= 0:
+                self.customer.setCurrentIndex(idx)
+        self.customer.blockSignals(False)
+
+    def _on_customer_change(self, idx=None):
+        if self.customer.currentData() == "__NEW__":
+            self._add_new_customer()
+
+    def _add_new_customer(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Yeni Müşteri Ekle")
+        dlg.setMinimumWidth(320)
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout(); form.setSpacing(8)
+        name_edit = QLineEdit()
+        code_edit = QLineEdit()
+        form.addRow("Müşteri Adı *:", name_edit)
+        form.addRow("Kodu:", code_edit)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec():
+            name = name_edit.text().strip()
+            if not name:
+                QMessageBox.warning(self, "Hata", "Müşteri adı zorunlu!")
+                self.customer.setCurrentIndex(0)
+                return
+            try:
+                cid = db.add_customer(name, code_edit.text().strip())
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Müşteri eklenemedi:\n{e}")
+                self.customer.setCurrentIndex(0)
+                return
+            self._load_customers(select_id=cid)
+        else:
+            self.customer.setCurrentIndex(0)
+
+    # ── Ürün ─────────────────────────────────────────────────────
+    def _load_products(self, select_code="", select_name=""):
+        self._products = {}
+        self.product_code.blockSignals(True)
+        self.product_code.clear()
+        self.product_code.addItem("— Seçiniz —", "")
+        self.product_code.addItem("➕ Yeni ürün ekle...", "__NEW__")
+        for r in db.get_all_products(active_only=True):
+            code = r["product_code"]
+            name = r["product_name"] or ""
+            self._products[code] = name
+            self.product_code.addItem(f"{code} — {name}" if name else code, code)
+        if select_code:
+            idx = self.product_code.findData(select_code)
+            if idx < 0:
+                self._products[select_code] = select_name
+                label = f"{select_code} — {select_name}" if select_name else select_code
+                self.product_code.addItem(label, select_code)
+                idx = self.product_code.count() - 1
+            self.product_code.setCurrentIndex(idx)
+        self.product_code.blockSignals(False)
+        self._on_product_change()
+
+    def _on_product_change(self, idx=None):
+        code = self.product_code.currentData()
+        if code == "__NEW__":
+            self._add_new_product()
+            return
+        if code:
+            product = db.get_product_by_code(code)
+            if product:
+                p = dict(product)
+                self.composition.setText(p.get("composition") or "")
+                self.width.setText(p.get("width") or "")
+                self.gramaj.setText(p.get("gramaj") or "")
+
+    def _add_new_product(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Yeni Ürün Ekle")
+        dlg.setMinimumWidth(320)
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout(); form.setSpacing(8)
+        code_edit = QLineEdit()
+        name_edit = QLineEdit()
+        form.addRow("Ürün Kodu *:", code_edit)
+        form.addRow("Ürün Adı/Bilgisi:", name_edit)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec():
+            code = code_edit.text().strip().upper()
+            if not code:
+                QMessageBox.warning(self, "Hata", "Ürün kodu zorunlu!")
+                self.product_code.setCurrentIndex(0)
+                return
+            try:
+                db.add_product(code, name_edit.text().strip())
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Ürün eklenemedi:\n{e}")
+                self.product_code.setCurrentIndex(0)
+                return
+            self._load_products(select_code=code)
+        else:
+            self.product_code.setCurrentIndex(0)
+
+    # ── Hesaplamalar ─────────────────────────────────────────────
+    def _calc_kg(self):
+        try:
+            gramaj = float(str(self.gramaj.text()).replace(",", ".").strip())
+            en = float(str(self.width.text()).replace(",", ".").strip())
+            metre = self.meter.value()
+            kg = gramaj * (en / 100) * metre / 1000
+            self.kg.setValue(round(kg, 2))
+        except ValueError:
+            QMessageBox.warning(self, "Hesaplanamadı",
+                "Kilo hesaplamak için Gramaj, En ve Metre alanları sayısal olmalıdır.")
+
+    def _update_total(self):
+        total = self.meter.value() * self.sale_price.value()
+        self.total_lbl.setText(f"{total:,.2f} $")
+
+    # ── Doldurma / Doğrulama / Veri ─────────────────────────────────
+    def _populate(self, o):
+        self._load_customers(select_id=o.get("customer_id"))
+        self.customer_ref.setText(o.get("customer_ref") or "")
+        self._load_products(select_code=o.get("product_code") or "", select_name=o.get("product_name") or "")
+        self.composition.setText(o.get("composition") or "")
+        self.width.setText(o.get("width") or "")
+        self.gramaj.setText(o.get("gramaj") or "")
+        ft_idx = self.fabric_type.findData(o.get("fabric_type") or "")
+        if ft_idx >= 0:
+            self.fabric_type.setCurrentIndex(ft_idx)
+        self.color.setText(o.get("color") or "")
+        self.lab_no.setText(o.get("lab_no") or "")
+        self.meter.setValue(o.get("meter") or 0)
+        self.kg.setValue(o.get("kg") or 0)
+        self.sale_price.setValue(o.get("sale_price") or 0)
+        self._update_total()
+
+        d = QDate.fromString(str(o.get("delivery_date") or ""), "yyyy-MM-dd")
+        self.delivery_date.setDate(d if d.isValid() else QDate.currentDate().addDays(30))
+
+        self.order_no_edit.setText(o.get("order_no") or "")
+        d = QDate.fromString(str(o.get("order_date") or ""), "yyyy-MM-dd")
+        self.order_date.setDate(d if d.isValid() else QDate.currentDate())
+
+        idx = self.payment_method.findText(o.get("payment_method") or "")
+        if idx >= 0:
+            self.payment_method.setCurrentIndex(idx)
+        else:
+            self.payment_method.setEditText(o.get("payment_method") or "")
+
+        idx = self.delivery_terms.findText(o.get("delivery_terms") or "")
+        if idx >= 0:
+            self.delivery_terms.setCurrentIndex(idx)
+        else:
+            self.delivery_terms.setEditText(o.get("delivery_terms") or "")
+
+        self.delivery_address.setText(o.get("delivery_address") or "")
+        self.notes.setPlainText(o.get("notes") or "")
+        self.contract_terms.setPlainText(o.get("contract_terms") or "")
+
+    def _validate(self):
+        errors = []
+        cust = self.customer.currentData()
+        if not cust or cust == "__NEW__":
+            errors.append("• Müşteri seçilmelidir")
+        code = self.product_code.currentData()
+        if not code or code == "__NEW__":
+            errors.append("• Ürün kodu seçilmelidir")
+        if not self.fabric_type.currentData():
+            errors.append("• Kumaş tipi seçilmelidir (Ham / PFD / Boyalı / İpliği Boyalı / Baskılı)")
+            self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
+        else:
+            self.fabric_type.setStyleSheet("border: 1px solid #BDBDBD;")
+        if errors:
+            QMessageBox.warning(self, "Eksik Bilgi", "\n".join(errors))
+            return
+        self.accept()
+
+    def get_data(self):
+        customer_id = self.customer.currentData()
+        return {
+            "customer_id": int(customer_id) if customer_id and customer_id != "__NEW__" else None,
+            "customer_name": self._customers.get(customer_id, ""),
+            "customer_ref": self.customer_ref.text().strip(),
+            "product_code": (self.product_code.currentData() or "").strip().upper(),
+            "product_name": self._products.get(self.product_code.currentData(), ""),
+            "composition": self.composition.text().strip(),
+            "width": self.width.text().strip(),
+            "gramaj": self.gramaj.text().strip(),
+            "fabric_type": self.fabric_type.currentData() or "",
+            "color": self.color.text().strip().upper(),
+            "lab_no": self.lab_no.text().strip(),
+            "meter": self.meter.value(),
+            "kg": self.kg.value(),
+            "sale_price": self.sale_price.value(),
+            "payment_method": self.payment_method.currentText().strip(),
+            "delivery_terms": self.delivery_terms.currentText().strip(),
+            "delivery_address": self.delivery_address.text().strip(),
+            "delivery_date": self.delivery_date.date().toString("yyyy-MM-dd"),
+            "order_date": self.order_date.date().toString("yyyy-MM-dd"),
+            "contract_terms": self.contract_terms.toPlainText(),
+            "notes": self.notes.toPlainText().strip(),
         }
 
 
@@ -3375,6 +3847,170 @@ class FireView(QWidget):
                                 "Lot kapatıldı, toplam fire satırı eklendi.")
 
 
+class OrdersView(QWidget):
+    """Satış siparişleri listesi — yeni sipariş açıldığında
+    status='PLANLAMA BEKLİYOR' ile kaydedilir (planlama ekranı sonraki aşama)."""
+
+    COLS = ["Sipariş No", "Sip. Tarihi", "Müşteri", "Müşteri Referans", "Ürün Kodu",
+            "Kompozisyon", "En", "Gramaj", "Kumaş Tipi", "Renk", "Lab No",
+            "Metre", "Kilo", "Satış Fiyatı", "Toplam Tutar", "Termin",
+            "Ödeme Şekli", "Teslimat Şartları", "Durum", "Oluşturan"]
+
+    STATUS_OPTIONS = ["PLANLAMA BEKLİYOR", "PLANLANDI", "ÜRETİMDE", "SEVK EDİLDİ", "TAMAMLANDI", "İPTAL"]
+
+    FABRIC_TYPE_COLORS = {"HAM": QColor("#5D4037"), "PFD": QColor("#00695C"),
+                          "BOYALI": QColor("#545454"), "İPLİĞİ BOYALI": QColor("#EF6C00"),
+                          "BASKILI": QColor("#6A1B9A")}
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+        self.refresh()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(8, 8, 8, 8)
+
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("Ara:"))
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText("Sipariş no, ürün kodu, müşteri, renk...")
+        self.search_box.setMaximumWidth(260)
+        self.search_box.textChanged.connect(self.refresh)
+        toolbar.addWidget(self.search_box)
+
+        toolbar.addWidget(QLabel("Durum:"))
+        self.status_filter = QComboBox()
+        self.status_filter.addItem("Tümü", "")
+        for s in self.STATUS_OPTIONS:
+            self.status_filter.addItem(s, s)
+        self.status_filter.currentIndexChanged.connect(self.refresh)
+        toolbar.addWidget(self.status_filter)
+
+        toolbar.addStretch()
+        btn_new = QPushButton("+ Yeni Sipariş")
+        btn_new.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
+        btn_new.clicked.connect(self._new_order)
+        btn_settings = QPushButton("🏦 Şirket/Banka Ayarları")
+        btn_settings.clicked.connect(self._company_settings)
+        btn_del = QPushButton("✕ Sil")
+        btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
+        btn_del.clicked.connect(self._delete_order)
+        btn_refresh = QPushButton("⟳ Yenile")
+        btn_refresh.clicked.connect(self.refresh)
+        toolbar.addWidget(btn_new)
+        toolbar.addWidget(btn_settings)
+        toolbar.addWidget(btn_del)
+        toolbar.addWidget(btn_refresh)
+        layout.addLayout(toolbar)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(len(self.COLS))
+        self.table.setHorizontalHeaderLabels(self.COLS)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.table.setAlternatingRowColors(True)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setStretchLastSection(True)
+        self.table.doubleClicked.connect(self._edit_order)
+        layout.addWidget(self.table)
+        _wire_header_persistence(self.table, "orders_columns")
+
+        self.count_lbl = QLabel()
+        self.count_lbl.setStyleSheet("color:#555; font-size:12px;")
+        layout.addWidget(self.count_lbl)
+
+    def refresh(self):
+        search = self.search_box.text().strip()
+        status = self.status_filter.currentData() or ""
+        rows = [dict(r) for r in db.get_all_orders(search=search, status=status)]
+        self._rows = rows
+        self.table.setSortingEnabled(False)
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            meter = r.get("meter") or 0
+            kg = r.get("kg") or 0
+            sale_price = r.get("sale_price") or 0
+            total = meter * sale_price
+            vals = [
+                r.get("order_no") or "",
+                str(r.get("order_date") or "")[:10],
+                r.get("customer_name") or "",
+                r.get("customer_ref") or "",
+                r.get("product_code") or "",
+                r.get("composition") or "",
+                r.get("width") or "",
+                r.get("gramaj") or "",
+                r.get("fabric_type") or "",
+                r.get("color") or "",
+                r.get("lab_no") or "",
+                f"{meter:,.2f}" if meter else "",
+                f"{kg:,.2f}" if kg else "",
+                f"{sale_price:,.2f} $" if sale_price else "",
+                f"{total:,.2f} $" if total else "",
+                str(r.get("delivery_date") or "")[:10],
+                r.get("payment_method") or "",
+                r.get("delivery_terms") or "",
+                r.get("status") or "",
+                r.get("created_by") or "",
+            ]
+            for j, v in enumerate(vals):
+                item = QTableWidgetItem(v)
+                if j == 0:
+                    item.setData(Qt.ItemDataRole.UserRole, r["id"])
+                if j in (11, 12, 13, 14):
+                    item.setTextAlignment(int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight))
+                if j == 8:
+                    item.setForeground(QBrush(self.FABRIC_TYPE_COLORS.get(r.get("fabric_type", ""), QColor("#333"))))
+                self.table.setItem(i, j, item)
+        self.table.setSortingEnabled(True)
+        self.count_lbl.setText(f"{len(rows)} sipariş")
+
+    def _new_order(self):
+        dlg = OrderDialog(self)
+        if dlg.exec():
+            data = dlg.get_data()
+            oid, order_no = db.add_order(**data, created_by=CURRENT_USER["full_name"])
+            self.refresh()
+            QMessageBox.information(self, "Sipariş Oluşturuldu",
+                f"Sipariş kaydedildi.\n\nSipariş No: {order_no}\nDurum: PLANLAMA BEKLİYOR")
+
+    def _selected_id(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "Önce bir sipariş seçin.")
+            return None
+        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+
+    def _edit_order(self):
+        oid = self._selected_id()
+        if not oid:
+            return
+        order = db.get_order(oid)
+        if not order:
+            return
+        dlg = OrderDialog(self, order=order)
+        if dlg.exec():
+            data = dlg.get_data()
+            db.update_order(oid, **data)
+            self.refresh()
+
+    def _delete_order(self):
+        oid = self._selected_id()
+        if not oid:
+            return
+        if QMessageBox.question(self, "Sil", "Sipariş silinsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            db.delete_order(oid)
+            self.refresh()
+
+    def _company_settings(self):
+        CompanySettingsDialog(self).exec()
+
+
 class LocationView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3792,6 +4428,7 @@ class MainWindow(QMainWindow):
         self.stock_table = StockTable(self)
         self.location_view = LocationView()
         self.fire_view = FireView()
+        self.orders_view = OrdersView(self)
 
         # Dashboard sadece admin'e göster
         if CURRENT_USER.get("role") == "admin":
@@ -3799,6 +4436,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
         self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
         self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
+        self.tabs.addTab(self.orders_view, "📋 Siparişler")
         self.tabs.currentChanged.connect(self._on_tab_change)
         layout.addWidget(self.tabs)
 
@@ -3837,6 +4475,12 @@ class MainWindow(QMainWindow):
         loc_menu.addAction("Raf / Lokasyon Tanımlamaları...").triggered.connect(
             lambda: LocationManagementDialog(self).exec())
 
+        order_menu = menubar.addMenu("📋 Siparişler")
+        order_menu.addAction("Yeni Sipariş...").triggered.connect(self._new_order)
+        order_menu.addSeparator()
+        order_menu.addAction("Şirket / Banka Ayarları...").triggered.connect(
+            lambda: CompanySettingsDialog(self).exec())
+
         user_menu = menubar.addMenu("👤 Kullanıcılar")
         user_menu.addAction("Kullanıcı Yönetimi").triggered.connect(self._user_mgmt)
         user_menu.addSeparator()
@@ -3871,6 +4515,15 @@ class MainWindow(QMainWindow):
         role_icon = "👑" if CURRENT_USER.get("role") == "admin" else "👤"
         self._user_label.setText(f"{role_icon} {CURRENT_USER.get('full_name', '')}")
 
+    def _new_order(self):
+        dlg = OrderDialog(self)
+        if dlg.exec():
+            data = dlg.get_data()
+            oid, order_no = db.add_order(**data, created_by=CURRENT_USER["full_name"])
+            self.orders_view.refresh()
+            QMessageBox.information(self, "Sipariş Oluşturuldu",
+                f"Sipariş kaydedildi.\n\nSipariş No: {order_no}\nDurum: PLANLAMA BEKLİYOR")
+
     def _user_mgmt(self):
         if CURRENT_USER.get("role") != "admin":
             QMessageBox.warning(self, "Yetki", "Bu işlem için yönetici yetkisi gereklidir.")
@@ -3898,6 +4551,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
         self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
         self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
+        self.tabs.addTab(self.orders_view, "📋 Siparişler")
         self.stock_table.refresh_with_locations()
 
     def _toggle_web(self):

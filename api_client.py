@@ -346,6 +346,59 @@ def delete_user(uid):
     _delete(f"/api/users/{uid}")
 
 
+# ── Siparişler ───────────────────────────────────────────────────
+
+def get_all_orders(search="", status=""):
+    return _get("/api/orders", {"search": search, "status": status}) or []
+
+def get_order(oid):
+    return _get(f"/api/orders/{oid}")
+
+def add_order(customer_id, customer_name, customer_ref, product_code, product_name,
+               composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
+               sale_price, payment_method, delivery_terms, delivery_address,
+               delivery_date, order_date, contract_terms, notes, created_by=""):
+    r = _post("/api/orders", {
+        "customer_id": customer_id, "customer_name": customer_name, "customer_ref": customer_ref,
+        "product_code": product_code, "product_name": product_name,
+        "composition": composition, "width": width, "gramaj": gramaj,
+        "fabric_type": fabric_type, "color": color, "lab_no": lab_no,
+        "meter": meter, "kg": kg, "sale_price": sale_price,
+        "payment_method": payment_method, "delivery_terms": delivery_terms,
+        "delivery_address": delivery_address, "delivery_date": delivery_date,
+        "order_date": order_date, "contract_terms": contract_terms, "notes": notes,
+        "created_by": created_by,
+    })
+    return r["id"], r["order_no"]
+
+def update_order(oid, customer_id, customer_name, customer_ref, product_code, product_name,
+                 composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
+                 sale_price, payment_method, delivery_terms, delivery_address,
+                 delivery_date, order_date, contract_terms, notes):
+    _put(f"/api/orders/{oid}", {
+        "customer_id": customer_id, "customer_name": customer_name, "customer_ref": customer_ref,
+        "product_code": product_code, "product_name": product_name,
+        "composition": composition, "width": width, "gramaj": gramaj,
+        "fabric_type": fabric_type, "color": color, "lab_no": lab_no,
+        "meter": meter, "kg": kg, "sale_price": sale_price,
+        "payment_method": payment_method, "delivery_terms": delivery_terms,
+        "delivery_address": delivery_address, "delivery_date": delivery_date,
+        "order_date": order_date, "contract_terms": contract_terms, "notes": notes,
+    })
+
+def delete_order(oid):
+    _delete(f"/api/orders/{oid}")
+
+
+# ── Ayarlar ──────────────────────────────────────────────────────
+
+def get_company_settings():
+    return _get("/api/settings/company") or {}
+
+def save_company_settings(**kwargs):
+    _put("/api/settings/company", kwargs)
+
+
 # ── Import ───────────────────────────────────────────────────────
 
 def import_fabrics_bulk(records):

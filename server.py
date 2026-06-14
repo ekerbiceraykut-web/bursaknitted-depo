@@ -170,6 +170,22 @@ class APIHandler(BaseHTTPRequestHandler):
                     return self._send(_err("Yetki yok"), 403)
                 self._send(_ok([dict(r) for r in db.get_all_users()]))
 
+            # ── Siparişler ───────────────────────────────────────
+            elif path == "/api/orders":
+                rows = db.get_all_orders(
+                    search=qs.get("search",[""])[0],
+                    status=qs.get("status",[""])[0])
+                self._send(_ok([dict(r) for r in rows]))
+
+            elif path.startswith("/api/orders/"):
+                oid = int(path.split("/")[-1])
+                r = db.get_order(oid)
+                self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
+
+            # ── Ayarlar ────────────────────────────────────────────
+            elif path == "/api/settings/company":
+                self._send(_ok(db.get_company_settings()))
+
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)
 
@@ -326,6 +342,21 @@ class APIHandler(BaseHTTPRequestHandler):
                             body["password"], body.get("role","kullanici"))
                 self._send(_ok())
 
+            # ── Sipariş ekle ───────────────────────────────────────
+            elif path == "/api/orders":
+                oid, order_no = db.add_order(
+                    body.get("customer_id"), body.get("customer_name",""), body.get("customer_ref",""),
+                    body.get("product_code",""), body.get("product_name",""),
+                    body.get("composition",""), body.get("width",""), body.get("gramaj",""),
+                    body.get("fabric_type",""), body.get("color",""), body.get("lab_no",""),
+                    body.get("meter",0), body.get("kg",0), body.get("sale_price",0),
+                    body.get("payment_method",""), body.get("delivery_terms",""),
+                    body.get("delivery_address",""), body.get("delivery_date",""),
+                    body.get("order_date",""), body.get("contract_terms",""), body.get("notes",""),
+                    created_by=body.get("created_by") or user["full_name"]
+                )
+                self._send(_ok({"id": oid, "order_no": order_no}))
+
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)
 
@@ -391,6 +422,22 @@ class APIHandler(BaseHTTPRequestHandler):
                     return self._send(_err("Yetki yok"), 403)
                 db.toggle_user_active(uid)
                 self._send(_ok())
+            elif path.startswith("/api/orders/"):
+                oid = int(path.split("/")[-1])
+                db.update_order(oid,
+                    body.get("customer_id"), body.get("customer_name",""), body.get("customer_ref",""),
+                    body.get("product_code",""), body.get("product_name",""),
+                    body.get("composition",""), body.get("width",""), body.get("gramaj",""),
+                    body.get("fabric_type",""), body.get("color",""), body.get("lab_no",""),
+                    body.get("meter",0), body.get("kg",0), body.get("sale_price",0),
+                    body.get("payment_method",""), body.get("delivery_terms",""),
+                    body.get("delivery_address",""), body.get("delivery_date",""),
+                    body.get("order_date",""), body.get("contract_terms",""), body.get("notes","")
+                )
+                self._send(_ok())
+            elif path == "/api/settings/company":
+                db.save_company_settings(**body)
+                self._send(_ok())
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)
         except Exception as e:
@@ -417,6 +464,10 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/products/"):
                 pid = int(path.split("/")[-1])
                 db.delete_product(pid)
+                self._send(_ok())
+            elif path.startswith("/api/orders/"):
+                oid = int(path.split("/")[-1])
+                db.delete_order(oid)
                 self._send(_ok())
             elif path.startswith("/api/locations/"):
                 lid = int(path.split("/")[-1])

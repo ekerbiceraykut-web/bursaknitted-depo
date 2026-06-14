@@ -118,11 +118,47 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now','localtime'))
         );
 
+        CREATE TABLE IF NOT EXISTS orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_no TEXT UNIQUE NOT NULL,
+            order_date TEXT DEFAULT (date('now','localtime')),
+            customer_id INTEGER,
+            customer_name TEXT DEFAULT '',
+            customer_ref TEXT DEFAULT '',
+            product_code TEXT DEFAULT '',
+            product_name TEXT DEFAULT '',
+            composition TEXT DEFAULT '',
+            width TEXT DEFAULT '',
+            gramaj TEXT DEFAULT '',
+            fabric_type TEXT DEFAULT '',
+            color TEXT DEFAULT '',
+            lab_no TEXT DEFAULT '',
+            meter REAL DEFAULT 0,
+            kg REAL DEFAULT 0,
+            sale_price REAL DEFAULT 0,
+            payment_method TEXT DEFAULT '',
+            delivery_terms TEXT DEFAULT '',
+            delivery_address TEXT DEFAULT '',
+            delivery_date TEXT DEFAULT '',
+            contract_terms TEXT DEFAULT '',
+            notes TEXT DEFAULT '',
+            status TEXT DEFAULT 'PLANLAMA BEKLİYOR',
+            created_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT DEFAULT ''
+        );
+
         CREATE INDEX IF NOT EXISTS idx_fabrics_code ON fabrics(product_code);
         CREATE INDEX IF NOT EXISTS idx_fabrics_location ON fabrics(location);
         CREATE INDEX IF NOT EXISTS idx_movements_fabric ON movements(fabric_id);
         CREATE INDEX IF NOT EXISTS idx_products_code ON products(product_code);
         CREATE INDEX IF NOT EXISTS idx_products_name ON products(product_name);
+        CREATE INDEX IF NOT EXISTS idx_orders_no ON orders(order_no);
+        CREATE INDEX IF NOT EXISTS idx_orders_code ON orders(product_code);
     """)
 
     # Boyahane fire kayıtları
@@ -1060,3 +1096,165 @@ def import_fabrics_bulk(records):
               r.get("piece_count", ""), r.get("description", "")))
     conn.commit()
     conn.close()
+
+
+# ── Siparişler ───────────────────────────────────────────────────
+
+def _generate_order_no(conn):
+    """Tarih bazlı benzersiz sipariş numarası: SIP-20260610-001, -002, ..."""
+    from datetime import date
+    prefix = f"SIP-{date.today().strftime('%Y%m%d')}-"
+    row = conn.execute(
+        "SELECT order_no FROM orders WHERE order_no LIKE ? ORDER BY order_no DESC LIMIT 1",
+        (prefix + "%",)
+    ).fetchone()
+    if row:
+        try:
+            seq = int(row["order_no"].rsplit("-", 1)[1]) + 1
+        except (ValueError, IndexError):
+            seq = 1
+    else:
+        seq = 1
+    return f"{prefix}{seq:03d}"
+
+
+def get_all_orders(search="", status=""):
+    conn = get_connection()
+    query = "SELECT * FROM orders WHERE 1=1"
+    params = []
+    if search:
+        query += (" AND (order_no LIKE ? OR product_code LIKE ? OR customer_name LIKE ?"
+                  " OR customer_ref LIKE ? OR color LIKE ?)")
+        s = f"%{search}%"
+        params.extend([s, s, s, s, s])
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY id DESC"
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return rows
+
+
+def get_order(order_id):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM orders WHERE id=?", (order_id,)).fetchone()
+    conn.close()
+    return row
+
+
+def add_order(customer_id, customer_name, customer_ref, product_code, product_name,
+               composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
+               sale_price, payment_method, delivery_terms, delivery_address,
+               delivery_date, order_date, contract_terms, notes, created_by=""):
+    conn = get_connection()
+    order_no = _generate_order_no(conn)
+    c = conn.cursor()
+    c.execute("""
+        INSERT INTO orders (order_no, order_date, customer_id, customer_name, customer_ref,
+                            product_code, product_name, composition, width, gramaj,
+                            fabric_type, color, lab_no, meter, kg, sale_price,
+                            payment_method, delivery_terms, delivery_address, delivery_date,
+                            contract_terms, notes, created_by)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (order_no, order_date, customer_id, customer_name, customer_ref,
+          product_code, product_name, composition, width, gramaj,
+          fabric_type, color, lab_no, meter, kg, sale_price,
+          payment_method, delivery_terms, delivery_address, delivery_date,
+          contract_terms, notes, created_by))
+    conn.commit()
+    oid = c.lastrowid
+    conn.close()
+    return oid, order_no
+
+
+def update_order(order_id, customer_id, customer_name, customer_ref, product_code, product_name,
+                 composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
+                 sale_price, payment_method, delivery_terms, delivery_address,
+                 delivery_date, order_date, contract_terms, notes):
+    conn = get_connection()
+    conn.execute("""
+        UPDATE orders SET customer_id=?, customer_name=?, customer_ref=?, product_code=?,
+                          product_name=?, composition=?, width=?, gramaj=?, fabric_type=?,
+                          color=?, lab_no=?, meter=?, kg=?, sale_price=?, payment_method=?,
+                          delivery_terms=?, delivery_address=?, delivery_date=?, order_date=?,
+                          contract_terms=?, notes=?
+        WHERE id=?
+    """, (customer_id, customer_name, customer_ref, product_code, product_name,
+          composition, width, gramaj, fabric_type, color, lab_no, meter, kg,
+          sale_price, payment_method, delivery_terms, delivery_address,
+          delivery_date, order_date, contract_terms, notes, order_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_order(order_id):
+    conn = get_connection()
+    conn.execute("DELETE FROM orders WHERE id=?", (order_id,))
+    conn.commit()
+    conn.close()
+
+
+# ── Ayarlar ──────────────────────────────────────────────────────
+
+_COMPANY_DEFAULTS = {
+    "name": "BURSA KNITTED FABRIC TEKSTİL SANAYİ VE TİCARET LTD.ŞTİ.",
+    "address": "Panayır Mah. 505. Sk. No:1/92 16100 Osmangazi/BURSA",
+    "phone": "+90 504 05 16",
+    "tax": "1911204932",
+    "origin": "Turkey Republic",
+    "bank_info": """GARANTI BANK
+Swift: TGBATRISXXX
+$ IBAN: TR18 0006 2000 4740 0009 0799 43
+€ IBAN: TR88 0006 2000 4740 0009 0799 44
+₺ IBAN: TR83 0006 2000 4740 0006 2922 54
+
+KUVEYT TÜRK
+Swift: KTEFTRISXXX
+$ IBAN: TR96 0020 5000 0976 6553 7001 01
+€ IBAN: TR69 0020 5000 0976 6553 7001 02
+₺ IBAN: TR80 0020 5000 0976 6553 7000 01""",
+    "contract_template": """1- BURSA KNITTED FABRIC TEKSTİL yukarıda belirtilen özelliklere uygun üretim yapacağını taahhüt eder
+2- Sipariş Miktarı "+/- %10", teslim tarihi "+/- 7 gün" toleranslı olabilir. Alıcı bu hususu önceden kabul ve beyan eder.
+3- Sipariş bedeli için taraflar dövize endeksli para birimiyle anlaştığı takdirde Fatura, sevkiyat tarihindeki Merkez Bankası döviz satış kuru üzerinden kesilir. Vadesi gelen ödemeler yapılırken fiili ödeme günündeki Merkez Bankasının belirlemiş olduğu döviz satış kuru üzerinden ödeme gerçekleştirilmesi gerekmektedir. Aksi takdirde oluşacak kur farkları tarafınızdan talep edilecektir. Fiyatlara KDV dahil değildir.
+4- Dövize endeksli faturaya ilişkin Türk Lirası çek ile ödeme yapılması halinde çekin tahsil edildiği tarihteki kur ile vade (düzenlenme tarihi) arasında oluşacak kur farkı için ayrıca kur farkı faturası kesilir. Çek tesliminden sonra tahsilat makbuzuna çekince ibaresi eklenmek suretiyle Alıcı tarafından kaşe ve imza altına alınacaktır. Alıcı, kur farkı çekincesi yapılacağını sipariş formu ile kabul, beyan ve taahhüt eder.
+5- İşbu sipariş sözleşmesi karşı tarafa iletildikten sonra 2 iş günü içerisinde sözleşmenin içeriğine ilişkin herhangi bir çekince veya itiraz bildirilmediği takdirde kabul edilmiş sayılır. İşbu sözleşme tarafınıza mail yoluyla gönderilecek olup 48 saat içerisinde tarafımıza dönüş yapılmadığı takdirde kabul edilmiş sayılacaktır.
+6- Malın müşteriye tesliminden sonra TTK madde 23'e göre açık ayıplarda 2 gün, gizli ayıplarda 8 gün geçtikten sonra kalite itirazında bulunulamaz. Malın tahliyesi, depolanması ve kötü kullanımından kaynaklanan zararlardan Alıcı sorumludur.
+7- Faturaların ödeme ve vade farkı hesabında irsaliye tarihi baz alınır.
+8- İhraç kayıtlı satışlarda ayrıca protokol ve taahhütname düzenlenir.
+9- Fatura bedelleri belirlenen vade ve şekilde; nakit, kabule bağlı çek veya banka havalesi ile ödenir. Vadesinde ödenmeyen faturalara aylık "%5" vade farkı uygulanır; vade farkı peşin tahsil edilir.
+10- Müşteri, bu sipariş bedeli için yapacağı banka havalesini tam yapmaması veya verdiği çek/senetlerden birinin karşılıksız çıkması/protesto olması halinde tüm borcun muaccel hale geleceğini ve aleyhine icra takibi yapılmasını kabul eder.
+11- Sözleşmenin alıcıya tesliminden itibaren 48 saat içinde içerik kabul edilmiş sayılır. Bu kabulden sonra Alıcı tarafından sözleşmenin haksız feshi halinde, sipariş bedelinin %30'una tekabül eden bedel + KDV, cezai şart olarak Alıcı'dan tahsil edilir.
+12- Alıcının bu sözleşmedeki borçlarını gereği gibi ifa etmemesi halinde, mevcut siparişlerin teslim yetkisi BURSA KNITTED FABRIC TEKS. ÜR. SAN. TİC. A.Ş.'nin inisiyatifindedir.
+13- Müşteriye 1'er aylık dönemler itibariyle cari hesap ekstresi gönderilir. 15 gün içinde yazılı itiraz olmazsa mutabakat sağlandığı kabul edilir.
+14- İşbu satış sözleşmesinde TTK md. 87 ve müteakip maddeleri çerçevesinde cari hesap hükümleri uygulanır. Cari hesap üç ayda bir sona erer; feshi ihbar edilmedikçe kendiliğinden üçer aylık dönemler itibariyle yenilenir.
+15- İhtilaf halinde yetkili merci İstanbul mahkeme ve icra daireleridir.
+16- Kesilen veya daha sonradan işlem gören kumaşlarda iade veya reklamasyon kabul edilemez.""",
+}
+
+
+def get_setting(key, default=""):
+    conn = get_connection()
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+    conn.close()
+    return row["value"] if row else default
+
+
+def set_setting(key, value):
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO settings (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value=excluded.value
+    """, (key, value))
+    conn.commit()
+    conn.close()
+
+
+def get_company_settings():
+    return {k: get_setting(f"company_{k}", default) for k, default in _COMPANY_DEFAULTS.items()}
+
+
+def save_company_settings(**kwargs):
+    for k, v in kwargs.items():
+        if k in _COMPANY_DEFAULTS:
+            set_setting(f"company_{k}", v)
