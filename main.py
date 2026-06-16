@@ -1688,14 +1688,25 @@ class FabricDialog(QDialog):
         self.lab_no.setPlaceholderText("Lab dip onay numarası (opsiyonel)")
         self._load_products()
 
-        # Lokasyon — iki kademeli: önce depo (DEPO / dış depolar), DEPO seçilirse raf
-        self.depo = QComboBox()
-        self.depo.setEditable(False)
-        self.raf = QComboBox()
-        self.raf.setEditable(False)
-        self.raf_label = QLabel("Raf *:")
+        # Lokasyon — tek kademeli düz liste (tüm aktif lokasyonlar)
+        self.location_combo = QComboBox()
+        self.location_combo.setEditable(True)
+        self.location_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        _lc = self.location_combo.completer()
+        _lc.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        _lc.setFilterMode(Qt.MatchFlag.MatchContains)
+        _lc.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+
+        # Satın alma lokasyonu — müşteri listesinden seçim
+        self.entry_loc = QComboBox()
+        self.entry_loc.setEditable(True)
+        self.entry_loc.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        _ec = self.entry_loc.completer()
+        _ec.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+        _ec.setFilterMode(Qt.MatchFlag.MatchContains)
+        _ec.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self._load_locations()
-        self.depo.currentIndexChanged.connect(self._on_depo_change)
+        self._load_entry_customers()
 
         self.meter = QDoubleSpinBox()
         self.meter.setRange(0, 999999)
@@ -1746,21 +1757,9 @@ class FabricDialog(QDialog):
         form.addRow("Lab No:", self.lab_no)
         form.addRow("Baskı Desen No:", self.baski_desen_no)
 
-        # Satın alma lokasyonu — köken takibi (taşınsa bile değişmez)
-        self.entry_loc = QComboBox()
-        self.entry_loc.addItem("— Hedef lokasyon ile aynı —", "")
-        for name in self._depo_rafs:
-            self.entry_loc.addItem(name, name)
-        for i in range(self.depo.count()):
-            d = self.depo.itemData(i)
-            if d and d != "__DEPO__":
-                self.entry_loc.addItem(d, d)
         form.addRow("Satın Alma Lokasyonu:", self.entry_loc)
 
-        form.addRow("Hedef Lokasyon *:", self.depo)
-        form.addRow(self.raf_label, self.raf)
-        self.raf_label.setVisible(False)
-        self.raf.setVisible(False)
+        form.addRow("Hedef Lokasyon *:", self.location_combo)
         form.addRow("Lot:", self.lot)
         form.addRow("Metre:", self.meter)
         form.addRow("Kilo:", self.kg)
@@ -1844,34 +1843,25 @@ class FabricDialog(QDialog):
             self.product_code.setCurrentIndex(0)
 
     def _load_locations(self):
-        """İlk kademe: DEPO + dış depolar. İkinci kademe: DEPO'nun rafları."""
         locs = db.get_active_locations()
-        self._depo_rafs = sorted(l["name"] for l in locs if l["group_name"] == "DEPO")
-        dis_depolar    = sorted(l["name"] for l in locs if l["group_name"] != "DEPO")
+        sorted_locs = sorted(locs, key=lambda x: (x["group_name"] or "", x["name"] or ""))
 
-        self.depo.clear()
-        self.depo.addItem("— Seçiniz —", "")
-        self.depo.addItem("DEPO", "__DEPO__")
-        for name in dis_depolar:
-            self.depo.addItem(name, name)
+        self.location_combo.clear()
+        self.location_combo.addItem("— Seçiniz —", "")
+        for l in sorted_locs:
+            grp = l["group_name"] or ""
+            label = f"[{grp}] {l['name']}" if grp else l["name"]
+            self.location_combo.addItem(label, l["name"])
 
-        self.raf.clear()
-        self.raf.addItem("— Raf Seçiniz —", "")
-        for name in self._depo_rafs:
-            self.raf.addItem(name, name)
-
-    def _on_depo_change(self, idx):
-        is_depo = self.depo.currentData() == "__DEPO__"
-        self.raf_label.setVisible(is_depo)
-        self.raf.setVisible(is_depo)
-        if not is_depo:
-            self.raf.setCurrentIndex(0)
+    def _load_entry_customers(self):
+        self.entry_loc.clear()
+        self.entry_loc.addItem("— Seçiniz —", "")
+        for c in db.get_all_customers():
+            label = c["name"] + (f" ({c['code']})" if c.get("code") else "")
+            self.entry_loc.addItem(label, c["name"])
 
     def _selected_location(self):
-        d = self.depo.currentData() or ""
-        if d == "__DEPO__":
-            return self.raf.currentData() or ""
-        return d
+        return self.location_combo.currentData() or ""
 
     def _update_print_fields(self):
         """BASKILI / Baskı Tipi seçimine göre Renk, Zemin Rengi, Lab No,
@@ -1896,17 +1886,13 @@ class FabricDialog(QDialog):
         self.product_name.setText(f["product_name"] or "")
         self.color.setText(f["color"] or "")
         self.lab_no.setText(dict(f).get("lab_no") or "")
-        # Lokasyonu seç — raf ise DEPO + raf, değilse doğrudan
         loc_val = f["location"] or ""
-        if loc_val in self._depo_rafs:
-            self.depo.setCurrentIndex(self.depo.findData("__DEPO__"))
-            self.raf.setCurrentIndex(self.raf.findData(loc_val))
-        elif loc_val:
-            idx = self.depo.findData(loc_val)
-            if idx < 0:   # listede olmayan eski lokasyon — kaybolmasın
-                self.depo.addItem(loc_val, loc_val)
-                idx = self.depo.count() - 1
-            self.depo.setCurrentIndex(idx)
+        if loc_val:
+            idx = self.location_combo.findData(loc_val)
+            if idx < 0:
+                self.location_combo.addItem(loc_val, loc_val)
+                idx = self.location_combo.count() - 1
+            self.location_combo.setCurrentIndex(idx)
         entry = dict(f).get("entry_location") or ""
         if entry:
             i = self.entry_loc.findData(entry)
@@ -1934,10 +1920,8 @@ class FabricDialog(QDialog):
         errors = []
         if not self.product_code.currentData():
             errors.append("• Ürün kodu katalogdan seçilmelidir")
-        if not self.depo.currentData():
+        if not self.location_combo.currentData():
             errors.append("• Hedef lokasyon seçilmelidir")
-        elif self.depo.currentData() == "__DEPO__" and not self.raf.currentData():
-            errors.append("• Raf seçilmelidir")
         if not self.fabric_type.currentData():
             errors.append("• Kumaş tipi seçilmelidir (Ham / PFD / Boyalı / İpliği Boyalı / Baskılı)")
             self.fabric_type.setStyleSheet("border: 2px solid #C62828; border-radius:4px;")
