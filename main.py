@@ -6502,4 +6502,19 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import traceback, datetime
+    try:
+        main()
+    except Exception:
+        _log = os.path.join(os.path.dirname(os.path.abspath(__file__)), "error.log")
+        with open(_log, "a", encoding="utf-8") as _f:
+            _f.write(f"\n{'='*60}\n{datetime.datetime.now()}\n")
+            _f.write(traceback.format_exc())
+        try:
+            from PyQt6.QtWidgets import QApplication, QMessageBox
+            _a = QApplication.instance() or QApplication(sys.argv)
+            QMessageBox.critical(None, "Başlatma Hatası",
+                f"Program başlatılamadı.\nHata detayları kaydedildi:\n{_log}")
+        except Exception:
+            pass
+        sys.exit(1)
