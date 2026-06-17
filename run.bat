@@ -14,7 +14,7 @@ if errorlevel 1 (
 )
 
 REM Paketleri kontrol et, eksikse yukle
-python -c "import PyQt6" 2>nul || (
+python -c "import PyQt6; import reportlab; import openpyxl" 2>nul || (
     echo Gerekli kutuphaneler yukleniyor, lutfen bekleyin...
     pip install -r requirements.txt
     if errorlevel 1 (
