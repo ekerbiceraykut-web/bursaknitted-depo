@@ -43,6 +43,8 @@ _LIST_FUNCS = {
     "get_locations", "get_all_users", "get_fire_records",
     "get_movements", "get_all_movements", "get_movements_by_range",
     "get_all_orders", "get_all_purchase_orders",
+    "get_pending_approval_orders", "get_shippable_orders",
+    "get_order_shipments", "get_po_receipts", "get_boyahane_queue",
 }
 
 _REAUTH_IN_PROGRESS = False
