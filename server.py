@@ -541,6 +541,18 @@ class APIHandler(BaseHTTPRequestHandler):
                 rid = int(path.split("/")[-2])
                 db.update_boyahane_receipt_status(rid, body.get("status",""))
                 self._send(_ok())
+            elif path.startswith("/api/boyahane/receipts/"):
+                rid = int(path.split("/")[-1])
+                db.update_boyahane_receipt(
+                    rid,
+                    meter=body.get("meter", 0),
+                    kg=body.get("kg", 0),
+                    lot=body.get("lot", ""),
+                    location=body.get("location", ""),
+                    location_group=body.get("location_group", ""),
+                    user_name=body.get("user_name", "") or user["full_name"],
+                )
+                self._send(_ok())
             else:
                 self._send(_err("Endpoint bulunamadı"), 404)
         except Exception as e:
@@ -575,6 +587,12 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/purchase_orders/"):
                 po_id = int(path.split("/")[-1])
                 db.delete_purchase_order(po_id)
+                self._send(_ok())
+            elif path.startswith("/api/boyahane/receipts/"):
+                rid = int(path.split("/")[-1])
+                qs2 = urlparse(self.path).query
+                uname = dict(p.split("=") for p in qs2.split("&") if "=" in p).get("user_name","")
+                db.delete_boyahane_receipt(rid, user_name=uname or user["full_name"])
                 self._send(_ok())
             elif path.startswith("/api/locations/"):
                 lid = int(path.split("/")[-1])

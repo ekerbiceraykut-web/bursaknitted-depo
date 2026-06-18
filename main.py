@@ -3891,6 +3891,11 @@ class StockTable(QWidget):
         fid = self._selected_id()
         if not fid:
             return
+        if db.is_fabric_linked_to_order(fid):
+            QMessageBox.warning(self, "Düzenlenemez",
+                "Bu kumaş bir sipariş satınalmasına bağlıdır.\n"
+                "Stok listesinden düzenlenemez; değişiklik için planlama ekranını kullanın.")
+            return
         fabric = db.get_fabric(fid)
         dlg = FabricDialog(self, fabric)
         if dlg.exec():
@@ -3901,6 +3906,11 @@ class StockTable(QWidget):
     def _delete(self):
         fid = self._selected_id()
         if not fid:
+            return
+        if db.is_fabric_linked_to_order(fid):
+            QMessageBox.warning(self, "Silinemez",
+                "Bu kumaş bir sipariş satınalmasına bağlıdır.\n"
+                "Stok listesinden silinemez; işlem için planlama ekranını kullanın.")
             return
         fabric = db.get_fabric(fid)
         reply = QMessageBox.question(
@@ -4467,10 +4477,24 @@ class OrdersView(QWidget):
             self.refresh()
 
     def _delete_order(self):
+        if CURRENT_USER.get("role") != "admin":
+            QMessageBox.warning(self, "Yetersiz Yetki",
+                "Sipariş silme işlemi yalnızca admin tarafından yapılabilir.")
+            return
         oid = self._selected_id()
         if not oid:
             return
-        if QMessageBox.question(self, "Sil", "Sipariş silinsin mi?",
+        order = db.get_order(oid)
+        if not order:
+            return
+        status = order.get("status","")
+        if status not in ("ONAYDA", "İPTAL"):
+            QMessageBox.warning(self, "Silinemez",
+                f"Bu sipariş şu an '{status}' durumunda.\n\n"
+                "Silebilmek için siparişin önce İPTAL edilmesi gerekir.")
+            return
+        if QMessageBox.question(self, "Sil",
+                f"{order.get('order_no','')} numaralı sipariş kalıcı olarak silinsin mi?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             db.delete_order(oid)
             self.refresh()
@@ -5610,7 +5634,14 @@ class BoyahanePlanningView(QWidget):
         btn_row = QHBoxLayout()
         b_status = QPushButton("📝 Durum Değiştir")
         b_status.clicked.connect(self._change_status)
+        b_edit = QPushButton("✏ Düzenle")
+        b_edit.clicked.connect(self._edit_receipt)
+        b_del = QPushButton("🗑 Sil")
+        b_del.clicked.connect(self._delete_receipt)
+        b_del.setStyleSheet("color:#C62828;")
         btn_row.addWidget(b_status)
+        btn_row.addWidget(b_edit)
+        btn_row.addWidget(b_del)
         btn_row.addStretch()
 
         # Özet
@@ -5686,6 +5717,115 @@ class BoyahanePlanningView(QWidget):
         if dlg.exec():
             db.update_boyahane_receipt_status(receipt_id, combo.currentText())
             self.refresh()
+
+    def _selected_receipt_id(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "Önce bir satır seçin.")
+            return None
+        cell = self.table.item(row, 0)
+        return cell.data(Qt.ItemDataRole.UserRole) if cell else None
+
+    def _edit_receipt(self):
+        role = CURRENT_USER.get("role","")
+        if role not in ("admin", "planlama"):
+            QMessageBox.warning(self, "Yetersiz Yetki",
+                "Mal girişi düzenleme yalnızca planlamacı veya admin tarafından yapılabilir.")
+            return
+        receipt_id = self._selected_receipt_id()
+        if not receipt_id:
+            return
+
+        # Seçili satırdan mevcut verileri oku
+        row = self.table.currentRow()
+        def _txt(col): return self.table.item(row, col).text() if self.table.item(row, col) else ""
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Mal Girişi Düzenle")
+        dlg.setMinimumWidth(420)
+        form = QFormLayout(dlg)
+
+        metre_sb = QDoubleSpinBox(); metre_sb.setRange(0, 9_999_999); metre_sb.setDecimals(2)
+        metre_sb.setSuffix(" mt")
+        try: metre_sb.setValue(float(_txt(5)))
+        except ValueError: pass
+
+        kilo_sb = QDoubleSpinBox(); kilo_sb.setRange(0, 9_999_999); kilo_sb.setDecimals(2)
+        kilo_sb.setSuffix(" kg")
+        try: kilo_sb.setValue(float(_txt(6)))
+        except ValueError: pass
+
+        lot_e = QLineEdit(_txt(3) if self.table.columnCount() > 3 else "")
+
+        loc_cb = QComboBox()
+        loc_cb.addItem("— Lokasyon Seçiniz —", ("", ""))
+        for loc in db.get_active_locations():
+            grp = loc.get("group_name","")
+            loc_cb.addItem(f"[{grp}]  {loc['name']}", (loc["name"], grp))
+        cur_loc = _txt(9)
+        for i in range(loc_cb.count()):
+            d = loc_cb.itemData(i)
+            if isinstance(d, tuple) and d[0] == cur_loc:
+                loc_cb.setCurrentIndex(i); break
+
+        form.addRow("Metre:", metre_sb)
+        form.addRow("Kilo:", kilo_sb)
+        form.addRow("Lot No:", lot_e)
+        form.addRow("Lokasyon:", loc_cb)
+
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        form.addRow(btns)
+
+        if dlg.exec():
+            loc_data = loc_cb.currentData()
+            loc_name, grp = loc_data if isinstance(loc_data, tuple) else ("", "")
+            if not loc_name:
+                QMessageBox.warning(self, "Eksik", "Lokasyon seçilmelidir.")
+                return
+            try:
+                db.update_boyahane_receipt(
+                    receipt_id,
+                    meter=metre_sb.value(),
+                    kg=kilo_sb.value(),
+                    lot=lot_e.text().strip(),
+                    location=loc_name,
+                    location_group=grp,
+                    user_name=CURRENT_USER["full_name"],
+                )
+                self.refresh()
+                QMessageBox.information(self, "Güncellendi",
+                    "Mal girişi ve bağlı stok kaydı güncellendi.")
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Güncellenemedi:\n{e}")
+
+    def _delete_receipt(self):
+        role = CURRENT_USER.get("role","")
+        if role not in ("admin", "planlama"):
+            QMessageBox.warning(self, "Yetersiz Yetki",
+                "Mal girişi silme yalnızca planlamacı veya admin tarafından yapılabilir.")
+            return
+        receipt_id = self._selected_receipt_id()
+        if not receipt_id:
+            return
+        row = self.table.currentRow()
+        po_no   = self.table.item(row, 1).text() if self.table.item(row, 1) else ""
+        product = self.table.item(row, 3).text() if self.table.item(row, 3) else ""
+        reply = QMessageBox.question(
+            self, "Mal Girişini Sil",
+            f"<b>{po_no} / {product}</b> kaydı silinsin mi?<br><br>"
+            f"<span style='color:#C62828'>Bağlı stok kaydı da silinir ve "
+            f"sipariş miktarları güncellenir.</span>",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            try:
+                db.delete_boyahane_receipt(receipt_id, user_name=CURRENT_USER["full_name"])
+                self.refresh()
+                QMessageBox.information(self, "Silindi",
+                    "Mal girişi ve bağlı stok kaydı silindi, sipariş miktarları güncellendi.")
+            except Exception as e:
+                QMessageBox.critical(self, "Hata", f"Silinemedi:\n{e}")
 
 
 class SevkiyatView(QWidget):

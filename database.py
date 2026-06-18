@@ -895,6 +895,17 @@ def reverse_movement(movement_id):
     conn.close()
 
 
+def is_fabric_linked_to_order(fabric_id):
+    """Kumaş bir sipariş PO'suna bağlıysa True döner."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT 1 FROM purchase_order_receipts WHERE fabric_id=? LIMIT 1",
+        (fabric_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
 def soft_delete_fabric(fabric_id, user_name=""):
     """Stoktan siler ama tüm hareket geçmişi korunur."""
     conn = get_connection()
@@ -1671,6 +1682,108 @@ def update_boyahane_receipt_status(receipt_id, status):
     conn = get_connection()
     conn.execute("UPDATE purchase_order_receipts SET status=? WHERE id=?",
                  (status, receipt_id))
+    conn.commit()
+    conn.close()
+
+
+def update_boyahane_receipt(receipt_id, meter, kg, lot, location, location_group,
+                             user_name=""):
+    """Mal girişi kaydını ve bağlı kumaş kaydını günceller, PO kalemine yansıtır."""
+    conn = get_connection()
+    r = conn.execute("SELECT * FROM purchase_order_receipts WHERE id=?",
+                     (receipt_id,)).fetchone()
+    if not r:
+        conn.close()
+        return
+
+    old_m = float(r["meter"] or 0)
+    old_k = float(r["kg"] or 0)
+    po_item_id = r["po_item_id"]
+    fabric_id  = r["fabric_id"]
+
+    # Makbuz güncelle
+    conn.execute("""
+        UPDATE purchase_order_receipts
+        SET meter=?, kg=?, lot=?, location=?, location_group=?
+        WHERE id=?
+    """, (meter, kg, lot, location, location_group, receipt_id))
+
+    # Bağlı kumaşı güncelle
+    if fabric_id:
+        conn.execute("""
+            UPDATE fabrics
+            SET meter=?, kg=?, lot=?, location=?,
+                updated_at=datetime('now','localtime')
+            WHERE id=?
+        """, (meter, kg, lot, location, fabric_id))
+
+    # PO kaleminin received toplamını yeniden hesapla
+    totals = conn.execute("""
+        SELECT COALESCE(SUM(meter),0) AS sm, COALESCE(SUM(kg),0) AS sk
+        FROM purchase_order_receipts WHERE po_item_id=?
+    """, (po_item_id,)).fetchone()
+    conn.execute("""
+        UPDATE purchase_order_items
+        SET received_meter=?, received_kg=?
+        WHERE id=?
+    """, (totals["sm"], totals["sk"], po_item_id))
+
+    conn.commit()
+    conn.close()
+
+
+def delete_boyahane_receipt(receipt_id, user_name=""):
+    """Mal girişi kaydını siler, bağlı kumaşı soft-delete yapar, PO kalemini günceller."""
+    conn = get_connection()
+    r = conn.execute("SELECT * FROM purchase_order_receipts WHERE id=?",
+                     (receipt_id,)).fetchone()
+    if not r:
+        conn.close()
+        return
+
+    po_item_id = r["po_item_id"]
+    po_id      = r["po_id"]
+    fabric_id  = r["fabric_id"]
+
+    # Makbuzu sil
+    conn.execute("DELETE FROM purchase_order_receipts WHERE id=?", (receipt_id,))
+
+    # Bağlı kumaşı soft-delete
+    if fabric_id:
+        fabric = conn.execute("SELECT * FROM fabrics WHERE id=?", (fabric_id,)).fetchone()
+        if fabric:
+            conn.execute("""
+                UPDATE fabrics
+                SET deleted_at=datetime('now','localtime'), deleted_by=?,
+                    updated_at=datetime('now','localtime')
+                WHERE id=?
+            """, (user_name, fabric_id))
+            conn.execute("""
+                INSERT INTO movements
+                    (fabric_id, movement_type, meter, kg, piece_count, notes, user_name, location)
+                VALUES (?, 'SİLME', ?, ?, '', ?, ?, ?)
+            """, (fabric_id, fabric["meter"] or 0, fabric["kg"] or 0,
+                  "Boyahane girişi silindi", user_name, fabric["location"] or ""))
+
+    # PO kalemine kalan toplamı yaz
+    totals = conn.execute("""
+        SELECT COALESCE(SUM(meter),0) AS sm, COALESCE(SUM(kg),0) AS sk
+        FROM purchase_order_receipts WHERE po_item_id=?
+    """, (po_item_id,)).fetchone()
+    conn.execute("""
+        UPDATE purchase_order_items SET received_meter=?, received_kg=? WHERE id=?
+    """, (totals["sm"], totals["sk"], po_item_id))
+
+    # PO genel durumunu güncelle
+    all_items = conn.execute(
+        "SELECT meter, kg, received_meter, received_kg FROM purchase_order_items WHERE po_id=?",
+        (po_id,)
+    ).fetchall()
+    any_recv = any((x["received_meter"] or 0) > 0 for x in all_items)
+    fully    = all((x["received_meter"] or 0) >= (x["meter"] or 0) for x in all_items)
+    new_st   = "TAMAMLANDI" if fully else ("KISMİ GELDİ" if any_recv else "BEKLEMEDE")
+    conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (new_st, po_id))
+
     conn.commit()
     conn.close()
 

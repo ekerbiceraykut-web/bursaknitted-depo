@@ -472,6 +472,19 @@ def get_boyahane_queue(status_filter=""):
 def update_boyahane_receipt_status(receipt_id, status):
     _put(f"/api/boyahane/receipts/{receipt_id}/status", {"status": status})
 
+def update_boyahane_receipt(receipt_id, meter, kg, lot, location, location_group,
+                             user_name=""):
+    _put(f"/api/boyahane/receipts/{receipt_id}",
+         {"meter": meter, "kg": kg, "lot": lot,
+          "location": location, "location_group": location_group,
+          "user_name": user_name})
+
+def delete_boyahane_receipt(receipt_id, user_name=""):
+    import urllib.parse as _up
+    qs = _up.urlencode({"user_name": user_name}) if user_name else ""
+    path = f"/api/boyahane/receipts/{receipt_id}" + (f"?{qs}" if qs else "")
+    _delete(path)
+
 
 # ── Ayarlar ──────────────────────────────────────────────────────
 
