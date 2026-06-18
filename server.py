@@ -171,11 +171,21 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._send(_ok([dict(r) for r in db.get_all_users()]))
 
             # ── Siparişler ───────────────────────────────────────
+            elif path == "/api/orders/pending_approval":
+                self._send(_ok(db.get_pending_approval_orders()))
+
+            elif path == "/api/orders/shippable":
+                self._send(_ok(db.get_shippable_orders()))
+
             elif path == "/api/orders":
                 rows = db.get_all_orders(
                     search=qs.get("search",[""])[0],
                     status=qs.get("status",[""])[0])
                 self._send(_ok([dict(r) for r in rows]))
+
+            elif path == "/api/order_shipments":
+                oid = qs.get("order_id",[""])[0]
+                self._send(_ok(db.get_order_shipments(int(oid) if oid else None)))
 
             elif path.startswith("/api/orders/"):
                 oid = int(path.split("/")[-1])
@@ -390,6 +400,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 self._send(_ok({"id": oid, "order_no": order_no}))
 
+            # ── Sevkiyat ekle ──────────────────────────────────────
+            elif path == "/api/order_shipments":
+                db.add_order_shipment(
+                    body.get("order_id"), body.get("items",[]),
+                    created_by=body.get("created_by") or user["full_name"])
+                self._send(_ok())
+
             # ── Satınalma siparişi ekle ────────────────────────────
             elif path == "/api/purchase_orders":
                 po_id, po_no = db.add_purchase_order(
@@ -480,6 +497,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 if user.get("role") != "admin":
                     return self._send(_err("Yetki yok"), 403)
                 db.toggle_user_active(uid)
+                self._send(_ok())
+            elif path.startswith("/api/orders/") and path.endswith("/approve"):
+                oid = int(path.split("/")[-2])
+                db.approve_order(oid, body.get("admin_name",""))
                 self._send(_ok())
             elif path.startswith("/api/orders/") and path.endswith("/status"):
                 oid = int(path.split("/")[-2])

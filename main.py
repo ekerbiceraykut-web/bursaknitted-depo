@@ -1605,7 +1605,8 @@ class UserManagementDialog(QDialog):
         uname = QLineEdit(); fname = QLineEdit()
         pw1 = QLineEdit(); pw1.setEchoMode(QLineEdit.EchoMode.Password)
         pw2 = QLineEdit(); pw2.setEchoMode(QLineEdit.EchoMode.Password)
-        role_cb = QComboBox(); role_cb.addItems(["kullanici", "admin"])
+        role_cb = QComboBox()
+        role_cb.addItems(["kullanici", "admin", "planlama", "satışçı", "depo-sevkiyat"])
         form.addRow("Kullanıcı Adı *:", uname)
         form.addRow("Ad Soyad:", fname)
         form.addRow("Şifre *:", pw1)
@@ -4246,7 +4247,11 @@ class OrdersView(QWidget):
                        "Lab No", "Açıklama", "Metre", "Kilo", "Birim Fiyat", "Tutar",
                        "Baskı Tipi", "Zemin Rengi", "Baskı Desen No", "", ""]
 
-    STATUS_OPTIONS = ["PLANLAMA BEKLİYOR", "PLANLANDI", "ÜRETİMDE", "SEVK EDİLDİ", "TAMAMLANDI", "İPTAL"]
+    STATUS_OPTIONS = [
+        "ONAYDA", "ONAYLANDI - PLANLAMADA", "PLANLAMA - GÖRDÜ", "PLANLANDI",
+        "BOYAHANAYA SEVKLER BAŞLADI", "TÜM KUMAŞLAR BOYAHANEDE",
+        "MÜŞTERİYE SEVKLER BAŞLADI", "SİPARİŞ TAMAMLANDI", "İPTAL",
+    ]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4405,7 +4410,7 @@ class OrdersView(QWidget):
             oid, order_no = db.add_order(**data, created_by=CURRENT_USER["full_name"])
             self.refresh()
             QMessageBox.information(self, "Sipariş Oluşturuldu",
-                f"Sipariş kaydedildi.\n\nSipariş No: {order_no}\nDurum: PLANLAMA BEKLİYOR")
+                f"Sipariş kaydedildi.\n\nSipariş No: {order_no}\nDurum: ONAYDA\n\nAdmin onayı bekleniyor.")
 
     def _selected_id(self):
         item = self.table.currentItem()
@@ -4856,7 +4861,18 @@ class GoodsReceiptDialog(QDialog):
 
 
 class PlanningView(QWidget):
-    _PLANNING_STATUSES = ["PLANLAMA BEKLİYOR", "PLANLANDI"]
+    _PLANNING_STATUSES = [
+        "ONAYDA", "ONAYLANDI - PLANLAMADA", "PLANLAMA - GÖRDÜ",
+        "PLANLANDI", "BOYAHANAYA SEVKLER BAŞLADI", "TÜM KUMAŞLAR BOYAHANEDE",
+    ]
+    _STATUS_COLORS = {
+        "ONAYDA":                    "#B71C1C",
+        "ONAYLANDI - PLANLAMADA":    "#E65100",
+        "PLANLAMA - GÖRDÜ":          "#F57F17",
+        "PLANLANDI":                 "#1565C0",
+        "BOYAHANAYA SEVKLER BAŞLADI":"#6A1B9A",
+        "TÜM KUMAŞLAR BOYAHANEDE":  "#2E7D32",
+    }
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -4881,10 +4897,16 @@ class PlanningView(QWidget):
         left = QWidget()
         ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 4, 0)
         ll.addWidget(QLabel("<b>Aktif Planlamalar</b>"))
+        self._pending_lbl = QLabel()
+        self._pending_lbl.setStyleSheet(
+            "background:#B71C1C;color:white;font-weight:bold;"
+            "padding:4px 8px;border-radius:4px;")
+        self._pending_lbl.setVisible(False)
+        ll.addWidget(self._pending_lbl)
         self.queue_table = QTableWidget()
         self.queue_table.setColumnCount(5)
         self.queue_table.setHorizontalHeaderLabels(
-            ["Sipariş No", "Müşteri", "Termin", "Kalem", "Durum"])
+            ["Sipariş No", "Müşteri", "Termin", "Ürün Kodu", "Durum"])
         self.queue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.queue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.queue_table.verticalHeader().setVisible(False)
@@ -4898,6 +4920,15 @@ class PlanningView(QWidget):
         qhdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.queue_table.itemSelectionChanged.connect(self._on_queue_select)
         ll.addWidget(self.queue_table)
+
+        # Admin onay butonu
+        self._btn_approve = QPushButton("✅ Seçili Siparişi Onayla")
+        self._btn_approve.setStyleSheet(
+            "background:#1B5E20;color:white;font-weight:bold;"
+            "border-radius:4px;padding:5px 10px;")
+        self._btn_approve.clicked.connect(self._approve_order)
+        self._btn_approve.setVisible(CURRENT_USER.get("role") == "admin")
+        ll.addWidget(self._btn_approve)
         splitter.addWidget(left)
 
         # ── Sağ: Detay (scroll) ──────────────────────────────────
@@ -5042,6 +5073,12 @@ class PlanningView(QWidget):
         from datetime import datetime
         all_orders = db.get_all_orders()
         rows = [r for r in all_orders if r.get("status") in self._PLANNING_STATUSES]
+        pending_count = sum(1 for r in rows if r.get("status") == "ONAYDA")
+        if pending_count:
+            self._pending_lbl.setText(f"⚠ {pending_count} yeni sipariş onay bekliyor!")
+            self._pending_lbl.setVisible(True)
+        else:
+            self._pending_lbl.setVisible(False)
         self.queue_table.blockSignals(True)
         self.queue_table.setSortingEnabled(False)
         self.queue_table.setRowCount(0)
@@ -5058,10 +5095,14 @@ class PlanningView(QWidget):
             except Exception:
                 pass
             self.queue_table.setItem(row, 2, QTableWidgetItem(td))
-            self.queue_table.setItem(row, 3, QTableWidgetItem(str(r.get("item_count",0) or 0)))
+            # Ürün kodları
+            codes = list(dict.fromkeys(
+                it.get("product_code","") for it in (r.get("items") or [])
+                if it.get("product_code")))
+            self.queue_table.setItem(row, 3, QTableWidgetItem(", ".join(codes)))
             st = r.get("status","")
             st_item = QTableWidgetItem(st)
-            color = "#E65100" if st == "PLANLAMA BEKLİYOR" else "#1565C0"
+            color = self._STATUS_COLORS.get(st, "#212121")
             st_item.setForeground(QBrush(QColor(color)))
             self.queue_table.setItem(row, 4, st_item)
             if r["id"] == self._current_order_id:
@@ -5079,11 +5120,44 @@ class PlanningView(QWidget):
             return
         oid = item.data(Qt.ItemDataRole.UserRole)
         order = db.get_order(oid)
-        if order and order.get("status") == "PLANLAMA BEKLİYOR":
-            db.update_order_status(oid, "PLANLANDI")
+        if not order:
+            return
+        st = order.get("status","")
+        if st == "ONAYDA":
+            QMessageBox.warning(self, "Onay Gerekli",
+                "Bu sipariş henüz admin tarafından onaylanmamış.\n"
+                "Planlama başlatmak için önce onaylanması gerekiyor.")
+            return
+        if st == "ONAYLANDI - PLANLAMADA":
+            db.update_order_status(oid, "PLANLAMA - GÖRDÜ")
         self._current_order_id = oid
         self._refresh_queue()
         self._show_detail(oid)
+
+    def _approve_order(self):
+        row = self.queue_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "Önce bir sipariş seçin.")
+            return
+        item = self.queue_table.item(row, 0)
+        if not item:
+            return
+        oid = item.data(Qt.ItemDataRole.UserRole)
+        order = db.get_order(oid)
+        if not order:
+            return
+        if order.get("status") != "ONAYDA":
+            QMessageBox.information(self, "Bilgi",
+                f"Bu sipariş zaten '{order.get('status')}' durumunda.")
+            return
+        reply = QMessageBox.question(self, "Onay",
+            f"{order.get('order_no','')} numaralı sipariş onaylansın mı?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply == QMessageBox.StandardButton.Yes:
+            db.approve_order(oid, CURRENT_USER["full_name"])
+            self._refresh_queue()
+            QMessageBox.information(self, "Onaylandı",
+                "Sipariş onaylandı. Planlama ekibine hazır.")
 
     # ── PO seçildi → kalemler ────────────────────────────────────
     def _on_po_select(self):
@@ -5377,7 +5451,13 @@ class PlanningView(QWidget):
                     delivery_terms=d["delivery_terms"], expected_delivery=d["expected_delivery"],
                     notes=d["notes"], items=d["items"],
                     created_by=CURRENT_USER["full_name"])
+                # Sipariş durumunu "PLANLANDI" yap
+                cur_st = order.get("status","")
+                if cur_st in ("PLANLAMA - GÖRDÜ", "ONAYLANDI - PLANLAMADA"):
+                    db.update_order_status(self._current_order_id, "PLANLANDI")
                 self._refresh_po_table()
+                if self._current_order_id:
+                    self._show_detail(self._current_order_id)
                 QMessageBox.information(self, "Oluşturuldu", f"Satınalma Siparişi: {po_no}")
             except Exception as e:
                 QMessageBox.critical(self, "Hata", f"PO oluşturulamadı:\n{e}")
@@ -5615,6 +5695,232 @@ class BoyahanePlanningView(QWidget):
         if dlg.exec():
             db.update_boyahane_receipt_status(receipt_id, combo.currentText())
             self.refresh()
+
+
+class SevkiyatView(QWidget):
+    """Depo-Sevkiyat personeli sipariş sevklerini buradan girer."""
+
+    SHIP_STATUSES = ["TÜM KUMAŞLAR BOYAHANEDE", "MÜŞTERİYE SEVKLER BAŞLADI", "PLANLANDI", "BOYAHANAYA SEVKLER BAŞLADI"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._current_order_id = None
+        self._build_ui()
+        self.refresh()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+
+        top = QHBoxLayout()
+        top.addWidget(QLabel("<b>🚚 Sevkiyat Modülü</b>"))
+        top.addStretch()
+        btn_ref = QPushButton("🔄 Yenile"); btn_ref.clicked.connect(self.refresh)
+        top.addWidget(btn_ref)
+        lay.addLayout(top)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        lay.addWidget(splitter)
+
+        # Sol: Sevk edilecek siparişler
+        left = QWidget()
+        ll = QVBoxLayout(left); ll.setContentsMargins(0, 0, 4, 0)
+        ll.addWidget(QLabel("<b>Sevk Edilecek Siparişler</b>"))
+        self.order_table = QTableWidget()
+        self.order_table.setColumnCount(6)
+        self.order_table.setHorizontalHeaderLabels(
+            ["Sipariş No", "Müşteri", "Termin", "Sip.Mt", "Sevk.Mt", "Durum"])
+        self.order_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.order_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.order_table.verticalHeader().setVisible(False)
+        self.order_table.setSortingEnabled(True)
+        ohdr = self.order_table.horizontalHeader()
+        ohdr.setSectionsMovable(True)
+        ohdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for i in (0, 2, 3, 4, 5):
+            ohdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        self.order_table.itemSelectionChanged.connect(self._on_order_select)
+        ll.addWidget(self.order_table)
+        splitter.addWidget(left)
+
+        # Sağ: Sevk formu + geçmiş
+        right = QWidget()
+        rl = QVBoxLayout(right); rl.setContentsMargins(4, 0, 0, 0)
+
+        self._order_info = QLabel()
+        self._order_info.setStyleSheet("background:#E3F2FD;padding:6px;border-radius:4px;")
+        self._order_info.setWordWrap(True)
+        self._order_info.setVisible(False)
+        rl.addWidget(self._order_info)
+
+        rl.addWidget(QLabel("<b>Yeni Sevk Girişi</b>"))
+        form = QFormLayout(); form.setSpacing(8)
+        self._ship_product = QComboBox()
+        self._ship_product.setEditable(True)
+        self._ship_fabric_type = QComboBox()
+        for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI", "MAMÜL"]:
+            self._ship_fabric_type.addItem(t, t)
+        self._ship_color = QLineEdit()
+        self._ship_lot = QLineEdit(); self._ship_lot.setPlaceholderText("Boş: otomatik")
+        self._ship_meter = QDoubleSpinBox()
+        self._ship_meter.setRange(0, 999999); self._ship_meter.setDecimals(2)
+        self._ship_kg = QDoubleSpinBox()
+        self._ship_kg.setRange(0, 999999); self._ship_kg.setDecimals(2)
+        self._ship_notes = QLineEdit()
+        form.addRow("Ürün Kodu:", self._ship_product)
+        form.addRow("Kumaş Tipi:", self._ship_fabric_type)
+        form.addRow("Renk:", self._ship_color)
+        form.addRow("Lot:", self._ship_lot)
+        form.addRow("Metre:", self._ship_meter)
+        form.addRow("Kilo:", self._ship_kg)
+        form.addRow("Notlar:", self._ship_notes)
+        rl.addLayout(form)
+
+        btn_add = QPushButton("+ Sevk Ekle")
+        btn_add.setStyleSheet("background:#1565C0;color:white;font-weight:bold;"
+                              "border-radius:4px;padding:6px 14px;")
+        btn_add.clicked.connect(self._add_shipment)
+        rl.addWidget(btn_add)
+
+        rl.addWidget(QLabel("<b>Sevkiyat Geçmişi</b>"))
+        self.ship_table = QTableWidget()
+        self.ship_table.setColumnCount(7)
+        self.ship_table.setHorizontalHeaderLabels(
+            ["Tarih", "Ürün Kodu", "Kumaş Tipi", "Renk", "Lot", "Metre", "Kilo"])
+        self.ship_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.ship_table.verticalHeader().setVisible(False)
+        self.ship_table.setSortingEnabled(True)
+        shdr = self.ship_table.horizontalHeader()
+        shdr.setSectionsMovable(True)
+        shdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        for i in (0, 2, 3, 4, 5, 6):
+            shdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        rl.addWidget(self.ship_table)
+        rl.addStretch()
+        splitter.addWidget(right)
+        splitter.setSizes([350, 650])
+
+    def refresh(self):
+        from datetime import datetime
+        orders = db.get_shippable_orders()
+        self.order_table.blockSignals(True)
+        self.order_table.setSortingEnabled(False)
+        self.order_table.setRowCount(0)
+        for r in orders:
+            row = self.order_table.rowCount()
+            self.order_table.insertRow(row)
+            item0 = QTableWidgetItem(r.get("order_no",""))
+            item0.setData(Qt.ItemDataRole.UserRole, r["id"])
+            self.order_table.setItem(row, 0, item0)
+            self.order_table.setItem(row, 1, QTableWidgetItem(r.get("customer_name","") or ""))
+            td = r.get("delivery_date","") or ""
+            try:
+                td = datetime.strptime(td[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+            except Exception:
+                pass
+            self.order_table.setItem(row, 2, QTableWidgetItem(td))
+            tm = float(r.get("total_meter",0) or 0)
+            sm = float(r.get("shipped_meter",0) or 0)
+            self.order_table.setItem(row, 3, QTableWidgetItem(f"{tm:.2f}"))
+            sm_item = QTableWidgetItem(f"{sm:.2f}")
+            sm_item.setForeground(QBrush(QColor("#2E7D32" if sm >= tm else "#C62828")))
+            self.order_table.setItem(row, 4, sm_item)
+            st = r.get("status","")
+            st_item = QTableWidgetItem(st)
+            st_item.setForeground(QBrush(QColor(
+                "#2E7D32" if st == "SİPARİŞ TAMAMLANDI" else
+                "#1565C0" if st == "MÜŞTERİYE SEVKLER BAŞLADI" else "#E65100")))
+            self.order_table.setItem(row, 5, st_item)
+            if r["id"] == self._current_order_id:
+                self.order_table.selectRow(row)
+        self.order_table.setSortingEnabled(True)
+        self.order_table.blockSignals(False)
+
+    def _on_order_select(self):
+        row = self.order_table.currentRow()
+        if row < 0:
+            return
+        item = self.order_table.item(row, 0)
+        if not item:
+            return
+        oid = item.data(Qt.ItemDataRole.UserRole)
+        self._current_order_id = oid
+        order = db.get_order(oid)
+        if order:
+            codes = list(dict.fromkeys(
+                it.get("product_code","") for it in (order.get("items") or [])
+                if it.get("product_code")))
+            self._order_info.setText(
+                f"<b>{order.get('order_no','')} — {order.get('customer_name','')}</b>  "
+                f"Ürünler: {', '.join(codes)}")
+            self._order_info.setVisible(True)
+            # Ürün kodu combosunu doldur
+            self._ship_product.blockSignals(True)
+            self._ship_product.clear()
+            for it in (order.get("items") or []):
+                pc = it.get("product_code","")
+                pn = it.get("product_name","")
+                label = f"{pc} — {pn}" if pn else pc
+                self._ship_product.addItem(label, pc)
+            self._ship_product.blockSignals(False)
+        self._refresh_ship_table(oid)
+
+    def _refresh_ship_table(self, order_id):
+        from datetime import datetime
+        shipments = db.get_order_shipments(order_id)
+        self.ship_table.setSortingEnabled(False)
+        self.ship_table.setRowCount(0)
+        for s in shipments:
+            row = self.ship_table.rowCount()
+            self.ship_table.insertRow(row)
+            dt = s.get("shipment_date","") or ""
+            try:
+                dt = datetime.strptime(dt[:16], "%Y-%m-%d %H:%M").strftime("%d.%m.%Y %H:%M")
+            except Exception:
+                pass
+            for col, val in enumerate([
+                dt, s.get("product_code",""), s.get("fabric_type",""),
+                s.get("color",""), s.get("lot",""),
+                f"{float(s.get('meter',0) or 0):.2f}",
+                f"{float(s.get('kg',0) or 0):.2f}",
+            ]):
+                cell = QTableWidgetItem(str(val))
+                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self.ship_table.setItem(row, col, cell)
+        self.ship_table.setSortingEnabled(True)
+
+    def _add_shipment(self):
+        if not self._current_order_id:
+            QMessageBox.information(self, "Bilgi", "Önce sol taraftan bir sipariş seçin.")
+            return
+        meter = self._ship_meter.value()
+        kg = self._ship_kg.value()
+        if meter <= 0 and kg <= 0:
+            QMessageBox.warning(self, "Hata", "Metre veya kilo girilmelidir.")
+            return
+        import datetime as _dt
+        lot = self._ship_lot.text().strip()
+        if not lot:
+            lot = f"SEV-{_dt.date.today().strftime('%Y%m%d')}"
+        items = [{
+            "product_code": self._ship_product.currentData() or self._ship_product.currentText(),
+            "product_name": "",
+            "fabric_type": self._ship_fabric_type.currentData() or "",
+            "color": self._ship_color.text().strip(),
+            "lot": lot,
+            "meter": meter,
+            "kg": kg,
+            "notes": self._ship_notes.text().strip(),
+        }]
+        try:
+            db.add_order_shipment(self._current_order_id, items, CURRENT_USER["full_name"])
+            self._ship_meter.setValue(0)
+            self._ship_kg.setValue(0)
+            self._ship_lot.clear()
+            self._ship_notes.clear()
+            self.refresh()
+            self._refresh_ship_table(self._current_order_id)
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Sevk kaydedilemedi:\n{e}")
 
 
 class LocationView(QWidget):
@@ -6037,16 +6343,9 @@ class MainWindow(QMainWindow):
         self.orders_view = OrdersView(self)
         self.planning_view = PlanningView(self)
         self.boyahane_view = BoyahanePlanningView(self)
+        self.sevkiyat_view = SevkiyatView(self)
 
-        # Dashboard sadece admin'e göster
-        if CURRENT_USER.get("role") == "admin":
-            self.tabs.addTab(self.dashboard, "📊 Dashboard")
-        self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
-        self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
-        self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
-        self.tabs.addTab(self.orders_view, "📋 Siparişler")
-        self.tabs.addTab(self.planning_view, "📌 Planlama")
-        self.tabs.addTab(self.boyahane_view, "🧶 Boyahane Planlama")
+        self._rebuild_tabs()
         self.tabs.currentChanged.connect(self._on_tab_change)
         layout.addWidget(self.tabs)
 
@@ -6123,7 +6422,9 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(2000, self._refresh_backup_indicator)
 
     def _update_user_label(self):
-        role_icon = "👑" if CURRENT_USER.get("role") == "admin" else "👤"
+        icons = {"admin": "👑", "planlama": "📌", "satışçı": "📋",
+                 "depo-sevkiyat": "🚚"}
+        role_icon = icons.get(CURRENT_USER.get("role", ""), "👤")
         self._user_label.setText(f"{role_icon} {CURRENT_USER.get('full_name', '')}")
 
     def _new_order(self):
@@ -6134,7 +6435,7 @@ class MainWindow(QMainWindow):
             self.orders_view.refresh()
             self.planning_view.refresh()
             QMessageBox.information(self, "Sipariş Oluşturuldu",
-                f"Sipariş kaydedildi.\n\nSipariş No: {order_no}\nDurum: PLANLAMA BEKLİYOR")
+                f"Sipariş kaydedildi.\n\nSipariş No: {order_no}\nDurum: ONAYDA\n\nAdmin onayı bekleniyor.")
 
     def _user_mgmt(self):
         if CURRENT_USER.get("role") != "admin":
@@ -6158,15 +6459,25 @@ class MainWindow(QMainWindow):
         """Oturum değişince tabları role göre yeniden oluştur."""
         while self.tabs.count():
             self.tabs.removeTab(0)
-        if CURRENT_USER.get("role") == "admin":
+        role = CURRENT_USER.get("role", "")
+        if role == "admin":
             self.tabs.addTab(self.dashboard, "📊 Dashboard")
-        self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
-        self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
-        self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
-        self.tabs.addTab(self.orders_view, "📋 Siparişler")
-        self.tabs.addTab(self.planning_view, "📌 Planlama")
-        self.tabs.addTab(self.boyahane_view, "🧶 Boyahane Planlama")
+        if role in ("admin", "kullanici", "depo-sevkiyat"):
+            self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
+            self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
+        if role in ("admin", "kullanici"):
+            self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
+        if role in ("admin", "satışçı", "kullanici"):
+            self.tabs.addTab(self.orders_view, "📋 Siparişler")
+        if role in ("admin", "planlama", "kullanici"):
+            self.tabs.addTab(self.planning_view, "📌 Planlama")
+            self.tabs.addTab(self.boyahane_view, "🧶 Boyahane Planlama")
+        if role in ("admin", "depo-sevkiyat", "kullanici"):
+            self.tabs.addTab(self.sevkiyat_view, "🚚 Sevkiyat")
         self.stock_table.refresh_with_locations()
+        # Admin: onay bekleyen sipariş bildirimi
+        if role == "admin":
+            QTimer.singleShot(1500, self._check_pending_orders)
 
     def _toggle_web(self):
         import web_server as ws
@@ -6372,6 +6683,29 @@ class MainWindow(QMainWindow):
         w = self.tabs.widget(idx)
         if w is not None and hasattr(w, "refresh"):
             w.refresh()
+        # Admin planlama sekmesine geçince pending check
+        if CURRENT_USER.get("role") == "admin" and w is self.planning_view:
+            self._check_pending_orders()
+
+    def _check_pending_orders(self):
+        pending = db.get_pending_approval_orders()
+        if not pending:
+            return
+        nos = ", ".join(p.get("order_no","") for p in pending[:5])
+        extra = f" ve {len(pending)-5} daha..." if len(pending) > 5 else ""
+        dlg = QDialog(self); dlg.setWindowTitle("⚠ Onay Bekleyen Siparişler")
+        lay = QVBoxLayout(dlg)
+        lbl = QLabel(
+            f"<b>{len(pending)} sipariş admin onayı bekliyor!</b><br><br>"
+            f"<span style='color:#B71C1C'>{nos}{extra}</span><br><br>"
+            "Planlama ekranından siparişi seçip <b>✅ Seçili Siparişi Onayla</b> "
+            "butonuna tıklayarak onaylayabilirsiniz.")
+        lbl.setWordWrap(True); lbl.setTextFormat(Qt.TextFormat.RichText)
+        lay.addWidget(lbl)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        btns.accepted.connect(dlg.accept)
+        lay.addWidget(btns)
+        dlg.exec()
 
     def update_status(self, count, summary):
         if not hasattr(self, "status"):

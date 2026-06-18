@@ -245,6 +245,26 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_receipts_item ON purchase_order_receipts(po_item_id);
     """)
 
+    # Sevkiyat kayıtları
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS order_shipments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            order_id INTEGER NOT NULL,
+            order_item_id INTEGER DEFAULT 0,
+            product_code TEXT DEFAULT '',
+            product_name TEXT DEFAULT '',
+            fabric_type TEXT DEFAULT '',
+            color TEXT DEFAULT '',
+            lot TEXT DEFAULT '',
+            meter REAL DEFAULT 0,
+            kg REAL DEFAULT 0,
+            notes TEXT DEFAULT '',
+            shipment_date TEXT DEFAULT (datetime('now','localtime')),
+            created_by TEXT DEFAULT '',
+            status TEXT DEFAULT 'HAZIRLANIYOR'
+        );
+    """)
+
     # Boyahane fire kayıtları
     c.execute("""
         CREATE TABLE IF NOT EXISTS fire_records (
@@ -1319,8 +1339,8 @@ def add_order(customer_id, customer_name, customer_ref, currency, payment_method
     c.execute("""
         INSERT INTO orders (order_no, order_date, customer_id, customer_name, customer_ref,
                             currency, payment_method, delivery_terms, delivery_address,
-                            delivery_date, notes, created_by)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            delivery_date, notes, created_by, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ONAYDA')
     """, (order_no, order_date, customer_id, customer_name, customer_ref,
           currency, payment_method, delivery_terms, delivery_address,
           delivery_date, notes, created_by))
@@ -1539,6 +1559,31 @@ def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="",
           item["unit_price"] or 0, user_name,
           "BEKLEMEDE" if (location_group or "") != "DEPO" else "DEPODA"))
     conn3.commit()
+
+    # Sipariş durumunu otomatik güncelle (boyahane sevk varsa)
+    if (location_group or "") not in ("DEPO", ""):
+        po_row2 = conn3.execute("SELECT order_id FROM purchase_orders WHERE id=?", (po_id,)).fetchone()
+        if po_row2 and po_row2["order_id"]:
+            oid2 = po_row2["order_id"]
+            cur = conn3.execute("SELECT status FROM orders WHERE id=?", (oid2,)).fetchone()
+            cur_status = cur["status"] if cur else ""
+            if cur_status in ("PLANLANDI", "PLANLAMA - GÖRDÜ"):
+                # İlk boyahane sevki
+                conn3.execute("UPDATE orders SET status='BOYAHANAYA SEVKLER BAŞLADI' WHERE id=?", (oid2,))
+            elif cur_status == "BOYAHANAYA SEVKLER BAŞLADI":
+                # Tüm PO miktarı geldi mi kontrol et
+                total_needed = conn3.execute(
+                    "SELECT COALESCE(SUM(oi.meter),0) FROM order_items oi WHERE oi.order_id=?", (oid2,)
+                ).fetchone()[0]
+                total_boyahane = conn3.execute("""
+                    SELECT COALESCE(SUM(r.meter),0)
+                    FROM purchase_order_receipts r
+                    JOIN purchase_orders po ON po.id=r.po_id
+                    WHERE po.order_id=? AND r.location_group != 'DEPO' AND r.location_group != ''
+                """, (oid2,)).fetchone()[0]
+                if float(total_boyahane) >= float(total_needed) * 0.99:
+                    conn3.execute("UPDATE orders SET status='TÜM KUMAŞLAR BOYAHANEDE' WHERE id=?", (oid2,))
+            conn3.commit()
     conn3.close()
 
 
@@ -1583,6 +1628,117 @@ def update_boyahane_receipt_status(receipt_id, status):
                  (status, receipt_id))
     conn.commit()
     conn.close()
+
+
+# ── Sipariş Onay ─────────────────────────────────────────────────
+
+def approve_order(order_id, admin_name=""):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE orders SET status='ONAYLANDI - PLANLAMADA', created_by=COALESCE(NULLIF(created_by,''),?) WHERE id=?",
+        (admin_name, order_id))
+    conn.commit()
+    conn.close()
+
+
+def get_pending_approval_orders():
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM orders WHERE status='ONAYDA' ORDER BY id DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ── Sevkiyat ─────────────────────────────────────────────────────
+
+def add_order_shipment(order_id, items, created_by=""):
+    """items: list of {product_code, product_name, fabric_type, color, lot, meter, kg, notes}"""
+    conn = get_connection()
+    for it in items:
+        conn.execute("""
+            INSERT INTO order_shipments
+                (order_id, order_item_id, product_code, product_name, fabric_type,
+                 color, lot, meter, kg, notes, created_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (order_id,
+              it.get("order_item_id", 0),
+              it.get("product_code", ""),
+              it.get("product_name", ""),
+              it.get("fabric_type", ""),
+              it.get("color", ""),
+              it.get("lot", ""),
+              it.get("meter", 0),
+              it.get("kg", 0),
+              it.get("notes", ""),
+              created_by))
+
+    # Sipariş durumunu otomatik güncelle
+    cur = conn.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
+    cur_status = cur["status"] if cur else ""
+    if cur_status not in ("MÜŞTERİYE SEVKLER BAŞLADI", "SİPARİŞ TAMAMLANDI", "İPTAL"):
+        conn.execute("UPDATE orders SET status='MÜŞTERİYE SEVKLER BAŞLADI' WHERE id=?", (order_id,))
+
+    # Toplam sipariş metresi vs toplam sevk metresi
+    total_ordered = conn.execute(
+        "SELECT COALESCE(SUM(meter),0) FROM order_items WHERE order_id=?", (order_id,)
+    ).fetchone()[0]
+    total_shipped = conn.execute(
+        "SELECT COALESCE(SUM(meter),0) FROM order_shipments WHERE order_id=?", (order_id,)
+    ).fetchone()[0]
+    if float(total_ordered) > 0 and float(total_shipped) >= float(total_ordered) * 0.99:
+        conn.execute("UPDATE orders SET status='SİPARİŞ TAMAMLANDI' WHERE id=?", (order_id,))
+
+    conn.commit()
+    conn.close()
+
+
+def get_order_shipments(order_id=None):
+    conn = get_connection()
+    if order_id:
+        rows = conn.execute(
+            "SELECT * FROM order_shipments WHERE order_id=? ORDER BY shipment_date DESC",
+            (order_id,)
+        ).fetchall()
+    else:
+        rows = conn.execute("""
+            SELECT s.*, o.order_no, o.customer_name
+            FROM order_shipments s
+            JOIN orders o ON o.id = s.order_id
+            ORDER BY s.shipment_date DESC
+        """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_shippable_orders():
+    """Sevk edilebilir veya sevk sürecindeki siparişler."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT o.*,
+            (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id) AS item_count,
+            (SELECT COALESCE(SUM(oi.meter),0) FROM order_items oi WHERE oi.order_id=o.id) AS total_meter,
+            (SELECT COALESCE(SUM(s.meter),0) FROM order_shipments s WHERE s.order_id=o.id) AS shipped_meter
+        FROM orders o
+        WHERE o.status IN (
+            'TÜM KUMAŞLAR BOYAHANEDE','MÜŞTERİYE SEVKLER BAŞLADI',
+            'PLANLANDI','BOYAHANAYA SEVKLER BAŞLADI'
+        )
+        ORDER BY o.id DESC
+    """).fetchall()
+    ids = [r["id"] for r in rows]
+    items_by_order = {}
+    if ids:
+        placeholders = ",".join("?" * len(ids))
+        for ir in conn.execute(
+            f"SELECT * FROM order_items WHERE order_id IN ({placeholders}) ORDER BY order_id,sort_order,id", ids
+        ).fetchall():
+            items_by_order.setdefault(ir["order_id"], []).append(dict(ir))
+    conn.close()
+    result = [dict(r) for r in rows]
+    for r in result:
+        r["items"] = items_by_order.get(r["id"], [])
+    return result
 
 
 # ── Ayarlar ──────────────────────────────────────────────────────

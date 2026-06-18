@@ -394,6 +394,30 @@ def update_order_status(order_id, status):
     _put(f"/api/orders/{order_id}/status", {"status": status})
 
 
+def approve_order(order_id, admin_name=""):
+    _put(f"/api/orders/{order_id}/approve", {"admin_name": admin_name})
+
+
+def get_pending_approval_orders():
+    return _get("/api/orders/pending_approval") or []
+
+
+def add_order_shipment(order_id, items, created_by=""):
+    return _post("/api/order_shipments", {
+        "order_id": order_id, "items": items, "created_by": created_by})
+
+
+def get_order_shipments(order_id=None):
+    params = {}
+    if order_id:
+        params["order_id"] = str(order_id)
+    return _get("/api/order_shipments", params) or []
+
+
+def get_shippable_orders():
+    return _get("/api/orders/shippable") or []
+
+
 # ── Satınalma Siparişleri ──────────────────────────────────────────
 
 def get_fabric_stock_in_depo(product_code, fabric_type="HAM"):
