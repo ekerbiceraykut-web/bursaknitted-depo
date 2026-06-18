@@ -1568,12 +1568,13 @@ class UserManagementDialog(QDialog):
         # Butonlar
         btn_row = QHBoxLayout()
         btn_add  = QPushButton("+ Yeni Kullanıcı"); btn_add.clicked.connect(self._add)
+        btn_edit = QPushButton("✏ Düzenle");         btn_edit.clicked.connect(self._edit)
         btn_pw   = QPushButton("🔑 Şifre Değiştir"); btn_pw.clicked.connect(self._change_pw)
         btn_tog  = QPushButton("⏸ Aktif/Pasif");    btn_tog.clicked.connect(self._toggle)
         btn_del  = QPushButton("✕ Sil")
         btn_del.setStyleSheet("background:#757575; color:white; border-radius:4px; padding:6px 14px;")
         btn_del.clicked.connect(self._delete)
-        for b in (btn_add, btn_pw, btn_tog, btn_del):
+        for b in (btn_add, btn_edit, btn_pw, btn_tog, btn_del):
             btn_row.addWidget(b)
         btn_row.addStretch()
         layout.addLayout(btn_row)
@@ -1630,6 +1631,33 @@ class UserManagementDialog(QDialog):
                 self._load()
             except Exception as e:
                 QMessageBox.critical(self, "Hata", f"Kullanıcı eklenemedi:\n{e}")
+
+    def _edit(self):
+        uid = self._selected_id()
+        if not uid:
+            return
+        row = self.table.currentRow()
+        cur_fname = self.table.item(row, 1).text() if self.table.item(row, 1) else ""
+        cur_role  = self.table.item(row, 2).text() if self.table.item(row, 2) else ""
+        cur_uname = self.table.item(row, 0).text() if self.table.item(row, 0) else ""
+        dlg = QDialog(self); dlg.setWindowTitle(f"Kullanıcı Düzenle — {cur_uname}")
+        dlg.setMinimumWidth(320)
+        lay = QVBoxLayout(dlg); form = QFormLayout(); form.setSpacing(8)
+        fname = QLineEdit(cur_fname)
+        role_cb = QComboBox()
+        role_cb.addItems(["kullanici", "admin", "planlama", "satışçı", "depo-sevkiyat"])
+        idx = role_cb.findText(cur_role)
+        if idx >= 0:
+            role_cb.setCurrentIndex(idx)
+        form.addRow("Ad Soyad:", fname)
+        form.addRow("Rol:", role_cb)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if dlg.exec():
+            db.update_user(uid, fname.text().strip(), role_cb.currentText())
+            self._load()
 
     def _change_pw(self):
         uid = self._selected_id()

@@ -718,6 +718,14 @@ def update_user_password(user_id, new_password):
     conn.close()
 
 
+def update_user(user_id, full_name, role):
+    conn = get_connection()
+    conn.execute("UPDATE users SET full_name=?, role=? WHERE id=?",
+                 (full_name, role, user_id))
+    conn.commit()
+    conn.close()
+
+
 def toggle_user_active(user_id):
     conn = get_connection()
     conn.execute("UPDATE users SET active = 1 - active WHERE id=?", (user_id,))

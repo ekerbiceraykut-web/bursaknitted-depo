@@ -344,6 +344,9 @@ def add_user(username, full_name, password, role="kullanici"):
     _post("/api/users", {"username": username, "full_name": full_name,
                          "password": password, "role": role})
 
+def update_user(uid, full_name, role):
+    _put(f"/api/users/{uid}", {"full_name": full_name, "role": role})
+
 def update_user_password(uid, pw):
     _put(f"/api/users/{uid}/password", {"password": pw})
 

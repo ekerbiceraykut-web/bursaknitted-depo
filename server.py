@@ -486,6 +486,13 @@ class APIHandler(BaseHTTPRequestHandler):
                 db.update_location(lid, body.get("name",""), body.get("group_name","DEPO"),
                                    body.get("description",""), body.get("active",1))
                 self._send(_ok())
+            elif path.startswith("/api/users/") and not any(
+                    path.endswith(s) for s in ("/password", "/toggle")):
+                uid = int(path.split("/")[-1])
+                if user.get("role") != "admin":
+                    return self._send(_err("Yetki yok"), 403)
+                db.update_user(uid, body.get("full_name",""), body.get("role","kullanici"))
+                self._send(_ok())
             elif path.startswith("/api/users/") and path.endswith("/password"):
                 uid = int(path.split("/")[-2])
                 if user.get("role") != "admin":
