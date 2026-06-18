@@ -45,6 +45,7 @@ _LIST_FUNCS = {
     "get_all_orders", "get_all_purchase_orders",
     "get_pending_approval_orders", "get_shippable_orders",
     "get_order_shipments", "get_po_receipts", "get_boyahane_queue",
+    "get_po_items_for_order",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -4505,29 +4506,25 @@ PO_STATUS_OPTIONS = ["BEKLEMEDE", "GÖNDERİLDİ", "KISMİ GELDİ", "TAMAMLANDI"
 
 
 class PurchaseOrderDialog(QDialog):
-    ITEM_COLS = ["Ürün Kodu", "Ürün Adı", "Kompozisyon", "En", "Gramaj",
-                 "Kumaş Tipi", "Metre", "Kilo", "Birim Fiyat", "Açıklama", "Tutar"]
+    """Kalem bazında tedarikçi + kumaş tipi seçimli PO oluşturma."""
+    FABRIC_TYPES = ["HAM", "PFD", "Boyalı", "Baskılı", "Mamül", "Diğer"]
+    # col: 0=Ürün Kodu, 1=Ürün Adı, 2=Kumaş Tipi(widget), 3=Tedarikçi(widget),
+    #      4=Ham Sip.Mt(+%20), 5=Kilo, 6=Açıklama
+    ITEM_COLS = ["Ürün Kodu", "Ürün Adı", "Kumaş Tipi", "Tedarikçi", "Ham Sip. Mt (+%20)", "Kilo", "Açıklama"]
 
     def __init__(self, parent=None, missing_items=None, po=None):
         super().__init__(parent)
         self.setWindowTitle("Satınalma Siparişi Oluştur")
-        self.setMinimumSize(900, 560)
+        self.setMinimumSize(1050, 520)
+        self._suppliers = []
         self._build_ui()
+        self._reload_suppliers()
         if missing_items:
             self._fill_items(missing_items)
 
     def _build_ui(self):
         lay = QVBoxLayout(self)
         form = QFormLayout(); form.setSpacing(8)
-
-        self.supplier = QComboBox()
-        self._load_suppliers()
-        self.supplier.currentIndexChanged.connect(self._on_supplier_change)
-
-        self.currency = QComboBox()
-        for code in CURRENCY_OPTIONS:
-            self.currency.addItem(f"{code} ({CURRENCY_SYMBOLS[code]})", code)
-
         self.payment_method = QLineEdit()
         self.delivery_terms = QLineEdit()
         self.expected_delivery = QDateEdit()
@@ -4535,14 +4532,17 @@ class PurchaseOrderDialog(QDialog):
         self.expected_delivery.setDate(QDate.currentDate().addDays(30))
         self.expected_delivery.setDisplayFormat("dd.MM.yyyy")
         self.notes = QLineEdit()
-
-        form.addRow("Tedarikçi *:", self.supplier)
-        form.addRow("Para Birimi:", self.currency)
         form.addRow("Ödeme Şekli:", self.payment_method)
         form.addRow("Teslimat Şartları:", self.delivery_terms)
         form.addRow("Termin:", self.expected_delivery)
         form.addRow("Notlar:", self.notes)
         lay.addLayout(form)
+
+        hint = QLabel("<i>Her kalem için kumaş tipi ve tedarikçi ayrı seçilebilir. "
+                      "Aynı tedarikçiye ait kalemler otomatik aynı PO'ya eklenir. "
+                      "Metre değerleri %20 fazlasıyla hesaplanmıştır.</i>")
+        hint.setStyleSheet("color:#757575;font-size:11px;"); hint.setWordWrap(True)
+        lay.addWidget(hint)
 
         self.table = QTableWidget()
         self.table.setColumnCount(len(self.ITEM_COLS))
@@ -4552,12 +4552,13 @@ class PurchaseOrderDialog(QDialog):
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.cellChanged.connect(self._on_cell_changed)
         lay.addWidget(self.table)
 
         btn_row = QHBoxLayout()
+        b_add_sup = QPushButton("+ Yeni Tedarikçi Ekle")
+        b_add_sup.clicked.connect(self._add_supplier)
         b_del = QPushButton("✕ Kalem Kaldır"); b_del.clicked.connect(self._del_row)
-        btn_row.addWidget(b_del); btn_row.addStretch()
+        btn_row.addWidget(b_add_sup); btn_row.addWidget(b_del); btn_row.addStretch()
         lay.addLayout(btn_row)
 
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -4565,170 +4566,165 @@ class PurchaseOrderDialog(QDialog):
         btns.rejected.connect(self.reject)
         lay.addWidget(btns)
 
-    def _load_suppliers(self, select_id=None):
-        self.supplier.blockSignals(True)
-        self.supplier.clear()
-        self.supplier.addItem("— Tedarikçi Seçiniz —", None)
-        for s in db.get_all_suppliers():
-            label = s["name"] + (f" ({s['code']})" if s.get("code") else "")
-            self.supplier.addItem(label, (s["id"], s["name"]))
-        self.supplier.addItem("+ Yeni Tedarikçi Ekle...", "__NEW__")
-        if select_id is not None:
-            for i in range(self.supplier.count()):
-                d = self.supplier.itemData(i)
-                if isinstance(d, tuple) and d[0] == select_id:
-                    self.supplier.setCurrentIndex(i)
-                    break
-        self.supplier.blockSignals(False)
+    def _reload_suppliers(self):
+        self._suppliers = db.get_all_suppliers()
+        for row in range(self.table.rowCount()):
+            sup_cb = self.table.cellWidget(row, 3)
+            if isinstance(sup_cb, QComboBox):
+                prev = sup_cb.currentData()
+                self._fill_supplier_combo(sup_cb, select_data=prev)
 
-    def _on_supplier_change(self, idx):
-        if self.supplier.currentData() != "__NEW__":
-            return
+    def _fill_supplier_combo(self, cb, select_data=None):
+        cb.blockSignals(True)
+        cb.clear()
+        cb.addItem("— Tedarikçi —", None)
+        for s in self._suppliers:
+            label = s["name"] + (f" ({s['code']})" if s.get("code") else "")
+            cb.addItem(label, (s["id"], s["name"]))
+        if select_data:
+            for i in range(cb.count()):
+                if cb.itemData(i) == select_data:
+                    cb.setCurrentIndex(i); break
+        cb.blockSignals(False)
+
+    def _add_supplier(self):
         dlg = QDialog(self); dlg.setWindowTitle("Yeni Tedarikçi Ekle")
         form = QFormLayout(dlg)
         name_e = QLineEdit(); code_e = QLineEdit()
         phone_e = QLineEdit(); email_e = QLineEdit()
-        form.addRow("Tedarikçi Adı *:", name_e)
-        form.addRow("Kodu:", code_e)
-        form.addRow("Telefon:", phone_e)
-        form.addRow("E-posta:", email_e)
-        btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
-        form.addRow(btns)
+        form.addRow("Tedarikçi Adı *:", name_e); form.addRow("Kodu:", code_e)
+        form.addRow("Telefon:", phone_e); form.addRow("E-posta:", email_e)
+        btns2 = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns2.accepted.connect(dlg.accept); btns2.rejected.connect(dlg.reject)
+        form.addRow(btns2)
         if dlg.exec() and name_e.text().strip():
-            sid = db.add_supplier(name_e.text().strip(), code_e.text().strip(),
-                                  phone_e.text().strip(), email=email_e.text().strip())
-            self._load_suppliers(select_id=sid)
-        else:
-            self.supplier.blockSignals(True)
-            self.supplier.setCurrentIndex(0)
-            self.supplier.blockSignals(False)
+            db.add_supplier(name_e.text().strip(), code_e.text().strip(),
+                            phone_e.text().strip(), email=email_e.text().strip())
+            self._reload_suppliers()
 
     def _fill_items(self, items):
-        self.table.blockSignals(True)
         self.table.setRowCount(0)
         for item in items:
             self._insert_row(item)
-        self.table.blockSignals(False)
-        self._recalc_all()
 
     def _insert_row(self, item=None):
         item = item or {}
         row = self.table.rowCount()
         self.table.insertRow(row)
-        values = [
-            item.get("product_code",""), item.get("product_name",""),
-            item.get("composition",""),  item.get("width",""),
-            item.get("gramaj",""),       item.get("fabric_type","HAM"),
-            str(item.get("meter") or 0),str(item.get("kg") or 0),
-            str(item.get("unit_price") or 0), item.get("description",""),
-            "0.00",
-        ]
-        for col, val in enumerate(values):
-            cell = QTableWidgetItem(val)
-            if col == len(self.ITEM_COLS) - 1:
-                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                cell.setBackground(QBrush(QColor("#F5F5F5")))
-            self.table.setItem(row, col, cell)
 
-    def _add_row(self):
-        self.table.blockSignals(True)
-        self._insert_row()
-        self.table.blockSignals(False)
+        # Kumaş Tipi combo (col 2)
+        ft_cb = QComboBox()
+        for ft in self.FABRIC_TYPES:
+            ft_cb.addItem(ft, ft)
+        preset_ft = item.get("fabric_type", "HAM") or "HAM"
+        idx = ft_cb.findData(preset_ft)
+        if idx >= 0: ft_cb.setCurrentIndex(idx)
+        self.table.setCellWidget(row, 2, ft_cb)
+
+        # Tedarikçi combo (col 3)
+        sup_cb = QComboBox()
+        self._fill_supplier_combo(sup_cb)
+        self.table.setCellWidget(row, 3, sup_cb)
+
+        # %20 fazla metre
+        orig_meter = float(item.get("meter") or 0)
+        meter_with_bonus = round(orig_meter * 1.20, 2)
+
+        for col, val in [
+            (0, str(item.get("product_code",""))),
+            (1, str(item.get("product_name",""))),
+            (4, str(meter_with_bonus)),
+            (5, str(item.get("kg") or 0)),
+            (6, str(item.get("description",""))),
+        ]:
+            self.table.setItem(row, col, QTableWidgetItem(val))
 
     def _del_row(self):
         row = self.table.currentRow()
         if row >= 0:
             self.table.removeRow(row)
 
-    def _on_cell_changed(self, row, col):
-        if col in (6, 8):
-            self._recalc_row(row)
-
-    def _recalc_row(self, row):
-        try:
-            m = float(self.table.item(row, 6).text() or 0)
-            p = float(self.table.item(row, 8).text() or 0)
-            total = m * p
-        except (ValueError, AttributeError):
-            total = 0.0
-        self.table.blockSignals(True)
-        cell = self.table.item(row, 10)
-        if not cell:
-            cell = QTableWidgetItem()
-            cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            cell.setBackground(QBrush(QColor("#F5F5F5")))
-            self.table.setItem(row, 10, cell)
-        cell.setText(f"{total:,.2f}")
-        self.table.blockSignals(False)
-
-    def _recalc_all(self):
-        for row in range(self.table.rowCount()):
-            self._recalc_row(row)
-
     def _validate(self):
-        if not isinstance(self.supplier.currentData(), tuple):
-            QMessageBox.warning(self, "Eksik Bilgi", "Tedarikçi seçilmelidir.")
+        if self.table.rowCount() == 0:
+            QMessageBox.warning(self, "Eksik Bilgi", "En az bir kalem eklenmelidir.")
             return
         for row in range(self.table.rowCount()):
+            sup_cb = self.table.cellWidget(row, 3)
+            if not isinstance(sup_cb, QComboBox) or not isinstance(sup_cb.currentData(), tuple):
+                QMessageBox.warning(self, "Eksik Bilgi",
+                    f"Kalem {row+1} için tedarikçi seçilmelidir.")
+                return
             try:
-                if float(self.table.item(row, 6).text() or 0) > 0:
-                    self.accept()
+                it = self.table.item(row, 4)
+                if float(it.text() if it else "0") <= 0:
+                    QMessageBox.warning(self, "Eksik Bilgi",
+                        f"Kalem {row+1} için geçerli metre girilmelidir.")
                     return
-            except (ValueError, AttributeError):
-                pass
-        QMessageBox.warning(self, "Eksik Bilgi", "En az bir kalem için metre girilmelidir.")
+            except ValueError:
+                QMessageBox.warning(self, "Geçersiz Değer",
+                    f"Kalem {row+1} için sayısal metre giriniz.")
+                return
+        self.accept()
 
     def get_data(self):
-        sid, sname = self.supplier.currentData()
-        items = []
+        """Tedarikçiye göre gruplu PO listesi döner."""
+        def _cell(row, col):
+            it = self.table.item(row, col)
+            return it.text().strip() if it else ""
+
+        items_by_supplier = {}
         for row in range(self.table.rowCount()):
-            def _cell(c, r=row):
-                it = self.table.item(r, c)
-                return it.text().strip() if it else ""
-            try:
-                meter = float(_cell(6) or 0)
-            except ValueError:
-                meter = 0.0
-            try:
-                kg = float(_cell(7) or 0)
-            except ValueError:
-                kg = 0.0
-            try:
-                unit_price = float(_cell(8) or 0)
-            except ValueError:
-                unit_price = 0.0
-            items.append({
-                "product_code": _cell(0), "product_name": _cell(1),
-                "composition":  _cell(2), "width":        _cell(3),
-                "gramaj":       _cell(4), "fabric_type":  _cell(5) or "HAM",
-                "meter":        meter,    "kg":           kg,
-                "unit_price":   unit_price, "description": _cell(9),
+            sup_cb = self.table.cellWidget(row, 3)
+            ft_cb  = self.table.cellWidget(row, 2)
+            sup_data = sup_cb.currentData() if isinstance(sup_cb, QComboBox) else None
+            if not isinstance(sup_data, tuple):
+                continue
+            sid, sname = sup_data
+            ft = ft_cb.currentData() if isinstance(ft_cb, QComboBox) else "HAM"
+            try: meter = float(_cell(row, 4) or 0)
+            except ValueError: meter = 0.0
+            try: kg = float(_cell(row, 5) or 0)
+            except ValueError: kg = 0.0
+            key = (sid, sname)
+            if key not in items_by_supplier:
+                items_by_supplier[key] = []
+            items_by_supplier[key].append({
+                "product_code": _cell(row, 0),
+                "product_name": _cell(row, 1),
+                "fabric_type":  ft,
+                "meter":        meter,
+                "kg":           kg,
+                "unit_price":   0,
+                "description":  _cell(row, 6),
+                "composition":  "",
+                "width":        "",
+                "gramaj":       "",
             })
         return {
-            "supplier_id":       sid,
-            "supplier_name":     sname,
-            "currency":          self.currency.currentData(),
             "payment_method":    self.payment_method.text().strip(),
             "delivery_terms":    self.delivery_terms.text().strip(),
             "expected_delivery": self.expected_delivery.date().toString("yyyy-MM-dd"),
             "notes":             self.notes.text().strip(),
-            "items":             items,
+            "po_groups": [
+                {"supplier_id": k[0], "supplier_name": k[1], "items": v}
+                for k, v in items_by_supplier.items()
+            ],
         }
 
 
 class ItemReceiptDialog(QDialog):
-    """Tek PO kalemine mal girişi: metre, kilo, lokasyon."""
+    """Tek PO kalemine mal girişi: metre, kilo, lot, lokasyon."""
     def __init__(self, parent=None, po_item=None):
         super().__init__(parent)
         self.po_item = po_item or {}
         it = self.po_item
         self.setWindowTitle(
             f"Mal Girişi — {it.get('product_code','')} / {it.get('fabric_type','')}")
-        self.setMinimumWidth(400)
+        self.setMinimumWidth(440)
         self._build_ui()
 
     def _build_ui(self):
+        import datetime as _dt
         lay = QVBoxLayout(self)
         it = self.po_item
         remaining = max(0.0, (it.get("meter") or 0) - (it.get("received_meter") or 0))
@@ -4750,11 +4746,10 @@ class ItemReceiptDialog(QDialog):
         self.kilo.setRange(0, 9_999_999); self.kilo.setDecimals(2)
         self.kilo.setSuffix(" kg")
 
-        self.unit_price = QDoubleSpinBox()
-        self.unit_price.setRange(0, 9_999_999); self.unit_price.setDecimals(4)
-        self.unit_price.setValue(float(it.get("unit_price") or 0))
-        self._total_lbl = QLabel("0.00")
-        self._total_lbl.setStyleSheet("font-weight:bold;font-size:14px;")
+        ft_short = (it.get("fabric_type") or "HAM").split()[0][:3].upper()
+        date_str = _dt.date.today().strftime("%Y%m%d")
+        self.lot = QLineEdit()
+        self.lot.setPlaceholderText(f"Boş bırakılırsa otomatik: {ft_short}-{date_str}-001")
 
         self.location = QComboBox()
         self.location.addItem("— Lokasyon Seçiniz —", ("", ""))
@@ -4763,16 +4758,11 @@ class ItemReceiptDialog(QDialog):
             self.location.addItem(f"[{grp}]  {loc['name']}", (loc["name"], grp))
         self._routing_lbl = QLabel()
         self._routing_lbl.setStyleSheet("color:#1565C0;font-style:italic;font-size:11px;")
-
-        self.metre.valueChanged.connect(self._recalc)
-        self.unit_price.valueChanged.connect(self._recalc)
         self.location.currentIndexChanged.connect(self._update_routing)
-        self._recalc()
 
         form.addRow("Gelen Metre:", self.metre)
         form.addRow("Gelen Kilo:", self.kilo)
-        form.addRow("Birim Fiyat:", self.unit_price)
-        form.addRow("Toplam Tutar:", self._total_lbl)
+        form.addRow("Lot No:", self.lot)
         form.addRow("Lokasyon:", self.location)
         form.addRow("", self._routing_lbl)
         lay.addLayout(form)
@@ -4782,12 +4772,6 @@ class ItemReceiptDialog(QDialog):
         btns.accepted.connect(self._validate)
         btns.rejected.connect(self.reject)
         lay.addWidget(btns)
-
-    def _recalc(self):
-        total = self.metre.value() * self.unit_price.value()
-        cur = self.po_item.get("currency","") or "USD"
-        sym = CURRENCY_SYMBOLS.get(cur, "$")
-        self._total_lbl.setText(f"{sym}{total:,.2f}")
 
     def _update_routing(self):
         data = self.location.currentData()
@@ -4810,7 +4794,7 @@ class ItemReceiptDialog(QDialog):
     def get_data(self):
         loc_name, grp = self.location.currentData()
         return {"metre": self.metre.value(), "kilo": self.kilo.value(),
-                "unit_price": self.unit_price.value(),
+                "lot": self.lot.text().strip(),
                 "location": loc_name, "location_group": grp}
 
 
@@ -5022,11 +5006,13 @@ class PlanningView(QWidget):
         btn_po.clicked.connect(self._create_po)
         rl.addWidget(btn_po)
 
-        rl.addWidget(QLabel("<b>Satınalma Siparişleri</b>"))
+        rl.addWidget(QLabel("<b>Satınalma Kalemleri</b> (çift tıklayarak mal girişi yapabilirsiniz)"))
         self.po_table = QTableWidget()
-        self.po_table.setColumnCount(6)
-        self.po_table.setHorizontalHeaderLabels(
-            ["PO No", "Tedarikçi", "Para Birimi", "Tutar", "Termin", "Durum"])
+        self.po_table.setColumnCount(12)
+        self.po_table.setHorizontalHeaderLabels([
+            "PO No", "Tedarikçi", "Ürün Kodu", "Kumaş Tipi",
+            "Ham Sip.Mt", "Ham Sip.Kg", "Gelen Mt", "Kalan Mt",
+            "Gelen Kg", "Kalan Kg", "Birim Fiyat", "Durum"])
         self.po_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.po_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.po_table.verticalHeader().setVisible(False)
@@ -5034,10 +5020,12 @@ class PlanningView(QWidget):
         phdr = self.po_table.horizontalHeader()
         phdr.setSectionsMovable(True)
         phdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        for i in (0, 2, 3, 4, 5):
+        phdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        for i in (0, 3, 4, 5, 6, 7, 8, 9, 10, 11):
             phdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-        self.po_table.setMaximumHeight(160)
-        self.po_table.itemSelectionChanged.connect(self._on_po_select)
+        self.po_table.setMaximumHeight(200)
+        self.po_table.itemSelectionChanged.connect(self._on_po_item_select)
+        self.po_table.cellDoubleClicked.connect(self._po_item_dbl_click)
         rl.addWidget(self.po_table)
 
         po_btns = QHBoxLayout()
@@ -5049,40 +5037,18 @@ class PlanningView(QWidget):
         po_btns.addStretch()
         rl.addLayout(po_btns)
 
-        po_items_hint = QLabel(
-            "<i>Ürün satırına çift tıklayarak mal girişi yapabilirsiniz.</i>")
-        po_items_hint.setStyleSheet("color:#757575;font-size:11px;")
-        rl.addWidget(po_items_hint)
-        self.po_items_table = QTableWidget()
-        self.po_items_table.setColumnCount(7)
-        self.po_items_table.setHorizontalHeaderLabels([
-            "Ürün Kodu", "Kumaş Tipi", "Sip. Metre", "Gelen Metre",
-            "Gelen Kilo", "Birim Fiyat", "Toplam"])
-        self.po_items_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.po_items_table.verticalHeader().setVisible(False)
-        self.po_items_table.setSortingEnabled(True)
-        pihdr = self.po_items_table.horizontalHeader()
-        pihdr.setSectionsMovable(True)
-        pihdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for i in (1, 2, 3, 4, 5, 6):
-            pihdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
-        self.po_items_table.setMaximumHeight(150)
-        self.po_items_table.cellDoubleClicked.connect(self._po_item_dbl_click)
-        rl.addWidget(self.po_items_table)
-
-        rl.addWidget(QLabel("<b>Mal Giriş Kalemleri</b> (her giriş ayrı satır)"))
+        rl.addWidget(QLabel("<b>Mal Giriş Kayıtları</b> (her giriş ayrı satır)"))
         self.po_receipts_table = QTableWidget()
-        self.po_receipts_table.setColumnCount(8)
+        self.po_receipts_table.setColumnCount(7)
         self.po_receipts_table.setHorizontalHeaderLabels([
-            "Tarih", "Ürün Kodu", "Kumaş Tipi", "Metre", "Kilo",
-            "Lokasyon", "Birim Fiyat", "Toplam"])
+            "Tarih", "Ürün Kodu", "Kumaş Tipi", "Lot", "Metre", "Kilo", "Lokasyon"])
         self.po_receipts_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.po_receipts_table.verticalHeader().setVisible(False)
         self.po_receipts_table.setSortingEnabled(True)
         rrhdr = self.po_receipts_table.horizontalHeader()
         rrhdr.setSectionsMovable(True)
-        rrhdr.setSectionResizeMode(5, QHeaderView.ResizeMode.Stretch)
-        for i in (0, 1, 2, 3, 4, 6, 7):
+        rrhdr.setSectionResizeMode(6, QHeaderView.ResizeMode.Stretch)
+        for i in (0, 1, 2, 3, 4, 5):
             rrhdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         self.po_receipts_table.setMaximumHeight(160)
         rl.addWidget(self.po_receipts_table)
@@ -5189,59 +5155,25 @@ class PlanningView(QWidget):
             QMessageBox.information(self, "Onaylandı",
                 "Sipariş onaylandı. Planlama ekibine hazır.")
 
-    # ── PO seçildi → kalemler ────────────────────────────────────
-    def _on_po_select(self):
+    # ── PO kalemi seçildi → makbuzları göster ───────────────────
+    def _on_po_item_select(self):
         row = self.po_table.currentRow()
         if row < 0:
-            self.po_items_table.setRowCount(0)
             self.po_receipts_table.setRowCount(0)
             return
         item = self.po_table.item(row, 0)
         if not item:
             return
-        po_id = item.data(Qt.ItemDataRole.UserRole)
-        po = db.get_purchase_order(po_id)
-        if not po:
-            return
-        cur = po.get("currency","USD")
-        sym = CURRENCY_SYMBOLS.get(cur, "$")
-
-        self.po_items_table.setSortingEnabled(False)
-        self.po_items_table.setRowCount(0)
-        for it in (po.get("items") or []):
-            r2 = self.po_items_table.rowCount()
-            self.po_items_table.insertRow(r2)
-            om = float(it.get("meter",0) or 0)
-            rm = float(it.get("received_meter",0) or 0)
-            rk = float(it.get("received_kg",0) or 0)
-            up = float(it.get("unit_price",0) or 0)
-            total = rm * up
-            cell0 = QTableWidgetItem(it.get("product_code",""))
-            cell0.setData(Qt.ItemDataRole.UserRole, it.get("id"))
-            cell0.setFlags(cell0.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.po_items_table.setItem(r2, 0, cell0)
-            for col, val in enumerate([
-                it.get("fabric_type",""),
-                f"{om:.2f}", f"{rm:.2f}", f"{rk:.2f}",
-                f"{sym}{up:,.4f}", f"{sym}{total:,.2f}",
-            ], start=1):
-                cell = QTableWidgetItem(str(val))
-                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if col == 3:
-                    cell.setForeground(QBrush(QColor("#2E7D32" if rm >= om else "#C62828")))
-                self.po_items_table.setItem(r2, col, cell)
-        self.po_items_table.setSortingEnabled(True)
-        self._refresh_receipts_table(po_id)
+        data = item.data(Qt.ItemDataRole.UserRole)
+        po_id = data[0] if isinstance(data, tuple) else data
+        if po_id:
+            self._refresh_receipts_table(po_id)
 
     def _refresh_receipts_table(self, po_id):
         from datetime import datetime
         receipts = db.get_po_receipts(po_id)
         self.po_receipts_table.setSortingEnabled(False)
         self.po_receipts_table.setRowCount(0)
-        # Determine currency from po
-        po = db.get_purchase_order(po_id)
-        cur = (po.get("currency","USD") if po else "USD")
-        sym = CURRENCY_SYMBOLS.get(cur, "$")
         for r in receipts:
             row = self.po_receipts_table.rowCount()
             self.po_receipts_table.insertRow(row)
@@ -5252,43 +5184,39 @@ class PlanningView(QWidget):
                 pass
             m = float(r.get("meter",0) or 0)
             k = float(r.get("kg",0) or 0)
-            up = float(r.get("unit_price",0) or 0)
-            total = m * up
             grp = r.get("location_group","")
             for col, val in enumerate([
                 dt,
                 r.get("product_code",""),
                 r.get("fabric_type",""),
+                r.get("lot","") or "",
                 f"{m:.2f}",
                 f"{k:.2f}",
                 f"{r.get('location','')} [{grp}]",
-                f"{sym}{up:,.4f}",
-                f"{sym}{total:,.2f}",
             ]):
                 cell = QTableWidgetItem(str(val))
                 cell.setData(Qt.ItemDataRole.UserRole, r.get("id"))
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if col == 5 and grp != "DEPO":
+                if col == 6 and grp != "DEPO":
                     cell.setForeground(QBrush(QColor("#E65100")))
                 self.po_receipts_table.setItem(row, col, cell)
         self.po_receipts_table.setSortingEnabled(True)
 
-    # ── Çift tıklama mal girişi ───────────────────────────────────
+    # ── Çift tıklama mal girişi (po_table satırına) ──────────────
     def _po_item_dbl_click(self, row, _col):
-        cell = self.po_items_table.item(row, 0)
+        cell = self.po_table.item(row, 0)
         if not cell:
             return
-        item_id = cell.data(Qt.ItemDataRole.UserRole)
-        if not item_id:
+        data = cell.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(data, tuple):
             return
-        # PO'dan tam item verisini al
-        po_id = self._selected_po_id_silent()
-        if not po_id:
+        po_id, po_item_id = data
+        if not po_item_id:
             return
         po = db.get_purchase_order(po_id)
         if not po:
             return
-        po_item = next((i for i in (po.get("items") or []) if i.get("id") == item_id), None)
+        po_item = next((i for i in (po.get("items") or []) if i.get("id") == po_item_id), None)
         if not po_item:
             return
         dlg = ItemReceiptDialog(self, po_item=po_item)
@@ -5296,11 +5224,10 @@ class PlanningView(QWidget):
             d = dlg.get_data()
             try:
                 db.receive_purchase_order_item(
-                    item_id, d["metre"], d["kilo"],
+                    po_item_id, d["metre"], d["kilo"],
                     d["location"], user_name=CURRENT_USER["full_name"],
-                    location_group=d["location_group"])
+                    location_group=d["location_group"], lot=d["lot"])
                 self._refresh_po_table()
-                self._on_po_select()
                 self._refresh_receipts_table(po_id)
                 if self._current_order_id:
                     self._show_detail(self._current_order_id)
@@ -5316,7 +5243,10 @@ class PlanningView(QWidget):
         if row < 0:
             return None
         item = self.po_table.item(row, 0)
-        return item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not item:
+            return None
+        data = item.data(Qt.ItemDataRole.UserRole)
+        return data[0] if isinstance(data, tuple) else data
 
     # ── Detay paneli ─────────────────────────────────────────────
     def _show_detail(self, order_id):
@@ -5394,50 +5324,72 @@ class PlanningView(QWidget):
         self._right_scroll.setVisible(True)
 
     def _refresh_po_table(self, order_id=None):
-        from datetime import datetime
         oid = order_id or self._current_order_id
         if not oid:
             return
-        rows = db.get_all_purchase_orders(order_id=oid)
+        items = db.get_po_items_for_order(oid)
         self.po_table.blockSignals(True)
         self.po_table.setSortingEnabled(False)
         self.po_table.setRowCount(0)
-        for r in rows:
+        for it in items:
             row = self.po_table.rowCount()
             self.po_table.insertRow(row)
-            item0 = QTableWidgetItem(r.get("po_no",""))
-            item0.setData(Qt.ItemDataRole.UserRole, r["id"])
+            po_id = it.get("po_id") or it.get("po_id_ref")
+            item_id = it.get("id")
+            om = float(it.get("meter",0) or 0)
+            ok = float(it.get("kg",0) or 0)
+            rm = float(it.get("received_meter",0) or 0)
+            rk = float(it.get("received_kg",0) or 0)
+            kalan_m = max(0.0, om - rm)
+            kalan_k = max(0.0, ok - rk)
+            up = float(it.get("unit_price",0) or 0)
+            po_status = it.get("po_status","") or ""
+
+            item0 = QTableWidgetItem(it.get("po_no",""))
+            item0.setData(Qt.ItemDataRole.UserRole, (po_id, item_id))
+            item0.setFlags(item0.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.po_table.setItem(row, 0, item0)
-            self.po_table.setItem(row, 1, QTableWidgetItem(r.get("supplier_name","") or ""))
-            cur = r.get("currency","USD")
-            self.po_table.setItem(row, 2, QTableWidgetItem(cur))
-            sym = CURRENCY_SYMBOLS.get(cur, "$")
-            total = r.get("total_amount", 0) or 0
-            self.po_table.setItem(row, 3, QTableWidgetItem(f"{sym}{total:,.2f}"))
-            td = r.get("expected_delivery","") or ""
-            try:
-                td = datetime.strptime(td[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
-            except Exception:
-                pass
-            self.po_table.setItem(row, 4, QTableWidgetItem(td))
-            sc = {"TAMAMLANDI": "#2E7D32", "GÖNDERİLDİ": "#1565C0",
-                  "KISMİ GELDİ": "#E65100", "İPTAL": "#757575"}.get(r.get("status",""))
-            s_item = QTableWidgetItem(r.get("status",""))
-            if sc:
-                s_item.setForeground(QBrush(QColor(sc)))
-            self.po_table.setItem(row, 5, s_item)
+
+            vals = [
+                it.get("supplier_name","") or "",        # 1 Tedarikçi
+                it.get("product_code","") or "",          # 2 Ürün Kodu
+                it.get("fabric_type","") or "",           # 3 Kumaş Tipi
+                f"{om:.2f}",                              # 4 Ham Sip.Mt
+                f"{ok:.2f}",                              # 5 Ham Sip.Kg
+                f"{rm:.2f}",                              # 6 Gelen Mt
+                f"{kalan_m:.2f}",                         # 7 Kalan Mt
+                f"{rk:.2f}",                              # 8 Gelen Kg
+                f"{kalan_k:.2f}",                         # 9 Kalan Kg
+                f"{up:.4f}" if up else "—",               # 10 Birim Fiyat
+                po_status,                                # 11 Durum
+            ]
+            for col, val in enumerate(vals, start=1):
+                cell = QTableWidgetItem(str(val))
+                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if col == 6:  # Gelen Mt
+                    cell.setForeground(QBrush(QColor("#2E7D32" if rm >= om else "#C62828")))
+                if col == 7 and kalan_m > 0:  # Kalan Mt
+                    cell.setForeground(QBrush(QColor("#E65100")))
+                if col == 11:
+                    sc = {"TAMAMLANDI": "#2E7D32", "GÖNDERİLDİ": "#1565C0",
+                          "KISMİ GELDİ": "#E65100", "İPTAL": "#757575"}.get(po_status)
+                    if sc:
+                        cell.setForeground(QBrush(QColor(sc)))
+                self.po_table.setItem(row, col, cell)
         self.po_table.setSortingEnabled(True)
         self.po_table.blockSignals(False)
-        self.po_items_table.setRowCount(0)
         self.po_receipts_table.setRowCount(0)
 
     def _selected_po_id(self):
         row = self.po_table.currentRow()
         if row < 0:
-            QMessageBox.information(self, "Bilgi", "Önce bir satınalma siparişi seçin.")
+            QMessageBox.information(self, "Bilgi", "Önce bir satınalma kalemi seçin.")
             return None
         item = self.po_table.item(row, 0)
-        return item.data(Qt.ItemDataRole.UserRole) if item else None
+        if not item:
+            return None
+        data = item.data(Qt.ItemDataRole.UserRole)
+        return data[0] if isinstance(data, tuple) else data
 
     # ── PO Oluştur ───────────────────────────────────────────────
     def _create_po(self):
@@ -5474,21 +5426,30 @@ class PlanningView(QWidget):
         if dlg.exec():
             d = dlg.get_data()
             try:
-                _, po_no = db.add_purchase_order(
-                    supplier_id=d["supplier_id"], supplier_name=d["supplier_name"],
-                    order_id=self._current_order_id, order_no=order.get("order_no",""),
-                    currency=d["currency"], payment_method=d["payment_method"],
-                    delivery_terms=d["delivery_terms"], expected_delivery=d["expected_delivery"],
-                    notes=d["notes"], items=d["items"],
-                    created_by=CURRENT_USER["full_name"])
-                # Sipariş durumunu "PLANLANDI" yap
+                created_po_nos = []
+                for grp in d["po_groups"]:
+                    _, po_no = db.add_purchase_order(
+                        supplier_id=grp["supplier_id"],
+                        supplier_name=grp["supplier_name"],
+                        order_id=self._current_order_id,
+                        order_no=order.get("order_no",""),
+                        currency="",
+                        payment_method=d["payment_method"],
+                        delivery_terms=d["delivery_terms"],
+                        expected_delivery=d["expected_delivery"],
+                        notes=d["notes"],
+                        items=grp["items"],
+                        created_by=CURRENT_USER["full_name"])
+                    created_po_nos.append(po_no)
                 cur_st = order.get("status","")
                 if cur_st in ("PLANLAMA - GÖRDÜ", "ONAYLANDI - PLANLAMADA"):
                     db.update_order_status(self._current_order_id, "PLANLANDI")
                 self._refresh_po_table()
                 if self._current_order_id:
                     self._show_detail(self._current_order_id)
-                QMessageBox.information(self, "Oluşturuldu", f"Satınalma Siparişi: {po_no}")
+                po_list = "\n".join(f"  • {n}" for n in created_po_nos)
+                QMessageBox.information(self, "Oluşturuldu",
+                    f"{len(created_po_nos)} adet satınalma siparişi oluşturuldu:\n{po_list}")
             except Exception as e:
                 QMessageBox.critical(self, "Hata", f"PO oluşturulamadı:\n{e}")
 
@@ -5563,7 +5524,7 @@ class PlanningView(QWidget):
         if not po_id:
             return
         row = self.po_table.currentRow()
-        current_status = self.po_table.item(row, 5).text() if row >= 0 else ""
+        current_status = self.po_table.item(row, 11).text() if row >= 0 else ""
         dlg = QDialog(self); dlg.setWindowTitle("PO Durumu Değiştir")
         form = QFormLayout(dlg)
         combo = QComboBox()
@@ -5587,10 +5548,10 @@ class PlanningView(QWidget):
             return
         row = self.po_table.currentRow()
         po_no = self.po_table.item(row, 0).text() if row >= 0 else str(po_id)
-        current_status = self.po_table.item(row, 5).text() if row >= 0 else ""
+        current_status = self.po_table.item(row, 11).text() if row >= 0 else ""
         if current_status not in ("TAMAMLANDI", "İPTAL"):
             QMessageBox.warning(self, "Silinemez",
-                f"'{po_no}' siparişi şu an '{current_status}' durumunda.\n\n"
+                f"'{po_no}' PO'su şu an '{current_status}' durumunda.\n\n"
                 "Silebilmek için önce 'Durum Değiştir' butonu ile\n"
                 "TAMAMLANDI veya İPTAL durumuna getiriniz.")
             return

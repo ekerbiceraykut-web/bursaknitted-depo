@@ -212,6 +212,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 po_id = int(path.split("/")[-2])
                 self._send(_ok(db.get_po_receipts(po_id)))
 
+            elif path.startswith("/api/purchase_orders/by_order/") and path.endswith("/items"):
+                order_id = int(path.split("/")[-2])
+                self._send(_ok(db.get_po_items_for_order(order_id)))
+
             elif path.startswith("/api/purchase_orders/"):
                 po_id = int(path.split("/")[-1])
                 r = db.get_purchase_order(po_id)
@@ -424,8 +428,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 item_id = int(path.split("/")[-2])
                 db.receive_purchase_order_item(
                     item_id, body.get("meter",0), body.get("kg",0),
-                    body.get("location",""), user_name=user["full_name"],
-                    location_group=body.get("location_group","")
+                    body.get("location",""), user_name=body.get("user_name","") or user["full_name"],
+                    location_group=body.get("location_group",""),
+                    lot=body.get("lot","")
                 )
                 self._send(_ok())
 

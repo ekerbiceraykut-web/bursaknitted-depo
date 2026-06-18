@@ -455,10 +455,13 @@ def delete_purchase_order(po_id):
     _delete(f"/api/purchase_orders/{po_id}")
 
 def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="",
-                                location_group=""):
+                                location_group="", lot=""):
     _post(f"/api/purchase_orders/items/{po_item_id}/receive",
           {"meter": meter, "kg": kg, "location": location,
-           "location_group": location_group})
+           "location_group": location_group, "lot": lot, "user_name": user_name})
+
+def get_po_items_for_order(order_id):
+    return _get(f"/api/purchase_orders/by_order/{order_id}/items") or []
 
 def get_po_receipts(po_id):
     return _get(f"/api/purchase_orders/{po_id}/receipts") or []

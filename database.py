@@ -325,6 +325,11 @@ def init_db():
         "ALTER TABLE movements ADD COLUMN out_zemin_rengi TEXT DEFAULT ''",
         "ALTER TABLE movements ADD COLUMN out_baski_desen_no TEXT DEFAULT ''",
         "ALTER TABLE suppliers ADD COLUMN email TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_receipts ADD COLUMN lot TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_items ADD COLUMN color TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_items ADD COLUMN lab_no TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_items ADD COLUMN zemin_rengi TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_items ADD COLUMN baski_desen_no TEXT DEFAULT ''",
     ]
     for sql in migrations:
         try:
@@ -1514,7 +1519,7 @@ def delete_purchase_order(po_id):
 
 
 def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="",
-                                location_group=""):
+                                location_group="", lot=""):
     """Mal geldi: stok girişi kaydı. Her çağrı ayrı purchase_order_receipts satırı."""
     conn = get_connection()
     item = conn.execute("SELECT * FROM purchase_order_items WHERE id=?", (po_item_id,)).fetchone()
@@ -1544,12 +1549,27 @@ def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="",
     conn.commit()
     conn.close()
 
+    # Lot otomatik üret
+    if not lot:
+        fabric_type_short = (item["fabric_type"] or "HAM").split()[0][:3].upper()
+        import datetime as _dt2
+        date_str = _dt2.date.today().strftime("%Y%m%d")
+        conn_lot = get_connection()
+        existing = conn_lot.execute(
+            "SELECT COUNT(*) FROM purchase_order_receipts WHERE received_at LIKE ?",
+            (f"{_dt2.date.today().isoformat()}%",)
+        ).fetchone()[0]
+        conn_lot.close()
+        lot = f"{fabric_type_short}-{date_str}-{existing+1:03d}"
+
     order_no_tag = f"SİPARİŞ:{po_row['order_no']} | PO:{po_row['po_no']} | " if po_row else ""
     fabric_id = add_fabric(
         product_name=item["product_name"] or "", product_code=item["product_code"],
-        color="", location=location, meter=meter or 0, kg=kg or 0,
+        color=dict(item).get("color","") or "", location=location,
+        meter=meter or 0, kg=kg or 0,
         piece_count="", birim_fiyat=item["unit_price"] or 0,
-        fabric_type=item["fabric_type"] or "HAM", lot="", lab_no="",
+        fabric_type=item["fabric_type"] or "HAM", lot=lot,
+        lab_no=dict(item).get("lab_no","") or "",
         description=f"{order_no_tag}{item['description'] or ''}",
         user_name=user_name, entry_location=location,
     )
@@ -1558,14 +1578,15 @@ def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="",
     conn3.execute("""
         INSERT INTO purchase_order_receipts
             (po_id, po_item_id, fabric_id, product_code, product_name, fabric_type,
-             meter, kg, location, location_group, unit_price, user_name, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             meter, kg, location, location_group, unit_price, user_name, status, lot)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (po_id, po_item_id, fabric_id,
           item["product_code"] or "", item["product_name"] or "",
           item["fabric_type"] or "HAM",
           meter or 0, kg or 0, location, location_group or "",
           item["unit_price"] or 0, user_name,
-          "BEKLEMEDE" if (location_group or "") != "DEPO" else "DEPODA"))
+          "BEKLEMEDE" if (location_group or "") != "DEPO" else "DEPODA",
+          lot))
     conn3.commit()
 
     # Sipariş durumunu otomatik güncelle (boyahane sevk varsa)
@@ -1593,6 +1614,22 @@ def receive_purchase_order_item(po_item_id, meter, kg, location, user_name="",
                     conn3.execute("UPDATE orders SET status='TÜM KUMAŞLAR BOYAHANEDE' WHERE id=?", (oid2,))
             conn3.commit()
     conn3.close()
+
+
+def get_po_items_for_order(order_id):
+    """Bir siparişe bağlı tüm PO kalemlerini döner (PO bilgisiyle birlikte)."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT pi.*,
+               po.po_no, po.supplier_name, po.supplier_id, po.status AS po_status,
+               po.id AS po_id_ref
+        FROM purchase_order_items pi
+        JOIN purchase_orders po ON po.id = pi.po_id
+        WHERE po.order_id = ?
+        ORDER BY po.id, pi.sort_order, pi.id
+    """, (order_id,)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_po_receipts(po_id):
