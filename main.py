@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QCompleter, QDateEdit, QTreeWidget, QTreeWidgetItem,
     QScrollArea, QGridLayout
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant, QDate
+from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant, QDate, QSortFilterProxyModel
 from PyQt6.QtGui import QFont, QColor, QIcon, QBrush, QPixmap
 
 
@@ -119,6 +119,48 @@ import order_pdf
 from order_pdf import CURRENCY_SYMBOLS
 
 CURRENCY_OPTIONS = ["USD", "EUR", "GBP", "TRY"]
+
+
+def _make_searchable(cb: QComboBox):
+    """QComboBox'u aranabilir hâle getirir.
+
+    • Yazılan metne göre tamamlayıcı popup'ta sadece eşleşen satırlar görünür.
+    • Seçim sonrası veya alan boşaltılınca tam liste geri gelir.
+    • currentIndexChanged sinyali doğru index ile ateşlenir.
+    """
+    cb.setEditable(True)
+    cb.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+
+    proxy = QSortFilterProxyModel(cb)
+    proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+    proxy.setFilterKeyColumn(0)
+    proxy.setSourceModel(cb.model())
+
+    completer = QCompleter(proxy, cb)
+    completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+    completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+    cb.setCompleter(completer)
+
+    def _on_completion(text):
+        # Proxy üzerinden seçilen metni kaynak modelde bul ve index'i set et
+        idx = cb.findText(text, Qt.MatchFlag.MatchFixedString)
+        proxy.setFilterFixedString("")
+        if idx >= 0:
+            cb.setCurrentIndex(idx)
+
+    completer.activated.connect(_on_completion)
+
+    def _on_text(text):
+        proxy.setFilterFixedString(text)
+        if text:
+            cb.showPopup()
+
+    cb.lineEdit().textEdited.connect(_on_text)
+
+    def _on_activated(_idx):
+        proxy.setFilterFixedString("")
+
+    cb.activated.connect(_on_activated)
 
 FABRIC_TYPE_COLORS = {"HAM": QColor("#5D4037"), "PFD": QColor("#00695C"),
                       "BOYALI": QColor("#545454"), "İPLİĞİ BOYALI": QColor("#EF6C00"),
@@ -1704,12 +1746,7 @@ class FabricDialog(QDialog):
 
         # Ürün kodu — katalogdan sadece seçim (aranabilir, serbest metin kabul edilmez)
         self.product_code = QComboBox()
-        self.product_code.setEditable(True)
-        self.product_code.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        completer = self.product_code.completer()
-        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        _make_searchable(self.product_code)
         self.product_code.currentIndexChanged.connect(self._on_product_change)
 
         # Ürün açıklaması — serbest metin, elle girilir
@@ -1723,16 +1760,12 @@ class FabricDialog(QDialog):
         # Hedef Lokasyon — iki kademeli (grup → depo)
         self.loc_group_combo = QComboBox()   # 1. kademe: grup seçimi (DEPO / DIŞ DEPO …)
         self.location_combo  = QComboBox()   # 2. kademe: ilgili gruptaki lokasyonlar
+        _make_searchable(self.location_combo)
         self.loc_group_combo.currentIndexChanged.connect(self._on_loc_group_change)
 
         # Satın alma lokasyonu — müşteri listesinden seçim
         self.entry_loc = QComboBox()
-        self.entry_loc.setEditable(True)
-        self.entry_loc.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        _ec = self.entry_loc.completer()
-        _ec.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        _ec.setFilterMode(Qt.MatchFlag.MatchContains)
-        _ec.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        _make_searchable(self.entry_loc)
         self._load_locations()
         self._load_entry_customers()
 
@@ -2338,6 +2371,7 @@ class OrderDialog(QDialog):
         form1.setSpacing(10)
 
         self.customer = QComboBox()
+        _make_searchable(self.customer)
         self._load_customers()
         self.customer.currentIndexChanged.connect(self._on_customer_change)
         form1.addRow("Müşteri *:", self.customer)
@@ -2700,10 +2734,12 @@ class CellEditDialog(QDialog):
             self.depo.addItem("DEPO", "__DEPO__")
             for n in dis:
                 self.depo.addItem(n, n)
+            _make_searchable(self.depo)
             self.raf = QComboBox()
             self.raf.addItem("— Raf Seçiniz —", "")
             for n in self._rafs:
                 self.raf.addItem(n, n)
+            _make_searchable(self.raf)
             self.raf_label = QLabel("Raf:")
             cur_loc = cur or ""
             if cur_loc in self._rafs:
@@ -2722,6 +2758,7 @@ class CellEditDialog(QDialog):
             locs = db.get_active_locations()
             for l in sorted(locs, key=lambda x: (x["group_name"] != "DEPO", x["name"])):
                 self.widget.addItem(l["name"], l["name"])
+            _make_searchable(self.widget)
             idx = self.widget.findData(cur or "")
             if idx < 0 and cur:
                 self.widget.addItem(cur, cur)
@@ -2893,13 +2930,16 @@ class MovementDialog(QDialog):
             self.dest_type.currentIndexChanged.connect(self._on_dest_type_change)
 
             self.dest_customer = QComboBox()
+            _make_searchable(self.dest_customer)
             self.lbl_customer = QLabel("Müşteri:")
             self._load_customers()
 
             # Lokasyon — iki kademeli: DEPO / dış depolar, DEPO seçilirse raf
             self.dest_depo = QComboBox()
+            _make_searchable(self.dest_depo)
             self.lbl_depo = QLabel("Lokasyon:")
             self.dest_raf = QComboBox()
+            _make_searchable(self.dest_raf)
             self.lbl_raf = QLabel("Raf:")
             self._load_locations()
             self.dest_depo.currentIndexChanged.connect(self._on_dest_depo_change)
@@ -4664,6 +4704,7 @@ class PurchaseOrderDialog(QDialog):
         # col 3: Tedarikçi combo
         sup_cb = QComboBox()
         self._fill_supplier_combo(sup_cb, select_data=item.get("_supplier_data"))
+        _make_searchable(sup_cb)
         self.table.setCellWidget(row, 3, sup_cb)
 
         # col 4: Para Birimi combo
@@ -4934,6 +4975,7 @@ class ItemReceiptDialog(QDialog):
         for loc in db.get_active_locations():
             grp = loc.get("group_name","")
             self.location.addItem(f"[{grp}]  {loc['name']}", (loc["name"], grp))
+        _make_searchable(self.location)
         self._routing_lbl = QLabel()
         self._routing_lbl.setStyleSheet("color:#1565C0;font-style:italic;font-size:11px;")
         self.location.currentIndexChanged.connect(self._update_routing)
@@ -5023,6 +5065,7 @@ class GoodsReceiptDialog(QDialog):
         for loc in db.get_active_locations():
             if loc["group_name"] == "DEPO":
                 self.location.addItem(loc["name"], loc["name"])
+        _make_searchable(self.location)
         form.addRow("DEPO Lokasyonu *:", self.location)
         lay.addLayout(form)
 
@@ -5789,6 +5832,7 @@ class PlanningView(QWidget):
         for loc in db.get_active_locations():
             grp = loc.get("group_name","")
             loc_cb.addItem(f"[{grp}]  {loc['name']}", (loc["name"], grp))
+        _make_searchable(loc_cb)
         cur_loc = _txt(6).split(" [")[0]  # strip " [GRP]"
         for i in range(loc_cb.count()):
             d = loc_cb.itemData(i)
@@ -6024,6 +6068,7 @@ class BoyahanePlanningView(QWidget):
         for loc in db.get_active_locations():
             grp = loc.get("group_name","")
             loc_cb.addItem(f"[{grp}]  {loc['name']}", (loc["name"], grp))
+        _make_searchable(loc_cb)
         cur_loc = _txt(9)
         for i in range(loc_cb.count()):
             d = loc_cb.itemData(i)
@@ -6148,7 +6193,7 @@ class SevkiyatView(QWidget):
         rl.addWidget(QLabel("<b>Yeni Sevk Girişi</b>"))
         form = QFormLayout(); form.setSpacing(8)
         self._ship_product = QComboBox()
-        self._ship_product.setEditable(True)
+        _make_searchable(self._ship_product)
         self._ship_fabric_type = QComboBox()
         for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI", "MAMÜL"]:
             self._ship_fabric_type.addItem(t, t)
