@@ -3993,6 +3993,10 @@ class OrderDialog(QDialog):
         self.delivery_address = QLineEdit()
         form1.addRow("Teslimat Adresi:", self.delivery_address)
 
+        self.sales_rep = QComboBox()
+        self._load_sales_reps()
+        form1.addRow("Siparişi Alan:", self.sales_rep)
+
         self.notes = QTextEdit()
         self.notes.setMaximumHeight(70)
         form1.addRow("Notlar:", self.notes)
@@ -4141,6 +4145,21 @@ class OrderDialog(QDialog):
         QMessageBox.information(self, "PDF Oluşturuldu", f"Kaydedildi:\n{path}")
 
     # ── Müşteri ──────────────────────────────────────────────────
+    def _load_sales_reps(self, select_name=None):
+        self.sales_rep.blockSignals(True)
+        self.sales_rep.clear()
+        self.sales_rep.addItem("— Seçiniz —", "")
+        for u in (db.get_all_users() or []):
+            full = u.get("full_name","") or u.get("username","")
+            self.sales_rep.addItem(full, full)
+        if select_name:
+            idx = self.sales_rep.findData(select_name)
+            if idx < 0:
+                self.sales_rep.addItem(select_name, select_name)
+                idx = self.sales_rep.count() - 1
+            self.sales_rep.setCurrentIndex(idx)
+        self.sales_rep.blockSignals(False)
+
     def _load_customers(self, select_id=None):
         self._customers = {}
         self.customer.blockSignals(True)
@@ -4228,6 +4247,7 @@ class OrderDialog(QDialog):
             self.delivery_terms.setEditText(o.get("delivery_terms") or "")
 
         self.delivery_address.setText(o.get("delivery_address") or "")
+        self._load_sales_reps(select_name=o.get("sales_rep") or "")
         self.notes.setPlainText(o.get("notes") or "")
         self._refresh_items_table()
 
@@ -4255,6 +4275,7 @@ class OrderDialog(QDialog):
             "delivery_address": self.delivery_address.text().strip(),
             "delivery_date": self.delivery_date.date().toString("yyyy-MM-dd"),
             "order_date": self.order_date.date().toString("yyyy-MM-dd"),
+            "sales_rep": self.sales_rep.currentData() or "",
             "notes": self.notes.toPlainText().strip(),
             "items": self._items,
         }
@@ -6757,7 +6778,7 @@ class SiparisOnayDialog(QDialog):
             ("Para Birimi:",       o.get("currency",""),                  False),
             ("Ödeme Şekli:",       o.get("payment_method",""),            False),
             ("Teslimat Şartları:", o.get("delivery_terms",""),            False),
-            ("Menşei:",            cfg.get("origin",""),                  False),
+            ("Siparişi Alan:",     o.get("sales_rep","") or "—",         False),
             ("Oluşturan:",         o.get("created_by",""),                False),
         ]
         for i, (lbl, val, bold) in enumerate(bas_rows):

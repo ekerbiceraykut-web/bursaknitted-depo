@@ -413,27 +413,27 @@ def get_order(oid):
 
 def add_order(customer_id, customer_name, customer_ref, currency, payment_method,
                delivery_terms, delivery_address, delivery_date, order_date,
-               notes, items, created_by=""):
+               notes, items, created_by="", sales_rep=""):
     r = _post("/api/orders", {
         "customer_id": customer_id, "customer_name": customer_name, "customer_ref": customer_ref,
         "currency": currency,
         "payment_method": payment_method, "delivery_terms": delivery_terms,
         "delivery_address": delivery_address, "delivery_date": delivery_date,
         "order_date": order_date, "notes": notes,
-        "items": items, "created_by": created_by,
+        "items": items, "created_by": created_by, "sales_rep": sales_rep,
     })
     return r["id"], r["order_no"]
 
 def update_order(oid, customer_id, customer_name, customer_ref, currency,
                  payment_method, delivery_terms, delivery_address, delivery_date,
-                 order_date, notes, items):
+                 order_date, notes, items, sales_rep=""):
     _put(f"/api/orders/{oid}", {
         "customer_id": customer_id, "customer_name": customer_name, "customer_ref": customer_ref,
         "currency": currency,
         "payment_method": payment_method, "delivery_terms": delivery_terms,
         "delivery_address": delivery_address, "delivery_date": delivery_date,
         "order_date": order_date, "notes": notes,
-        "items": items,
+        "items": items, "sales_rep": sales_rep,
     })
 
 def delete_order(oid):

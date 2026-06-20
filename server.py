@@ -424,7 +424,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("delivery_address",""), body.get("delivery_date",""),
                     body.get("order_date",""), body.get("notes",""),
                     body.get("items",[]),
-                    created_by=body.get("created_by") or user["full_name"]
+                    created_by=body.get("created_by") or user["full_name"],
+                    sales_rep=body.get("sales_rep","")
                 )
                 self._send(_ok({"id": oid, "order_no": order_no}))
 
@@ -568,7 +569,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("currency","USD"), body.get("payment_method",""), body.get("delivery_terms",""),
                     body.get("delivery_address",""), body.get("delivery_date",""),
                     body.get("order_date",""), body.get("notes",""),
-                    body.get("items",[])
+                    body.get("items",[]),
+                    sales_rep=body.get("sales_rep","")
                 )
                 self._send(_ok())
             elif path == "/api/settings/company":

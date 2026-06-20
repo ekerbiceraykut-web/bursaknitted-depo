@@ -177,6 +177,7 @@ def init_db():
             notes TEXT DEFAULT '',
             status TEXT DEFAULT 'PLANLAMA BEKLİYOR',
             created_by TEXT DEFAULT '',
+            sales_rep TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now','localtime'))
         );
 
@@ -371,6 +372,7 @@ def init_db():
         )""",
         "ALTER TABLE fabrics ADD COLUMN lab_no TEXT DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN currency TEXT DEFAULT 'USD'",
+        "ALTER TABLE orders ADD COLUMN sales_rep TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN print_type TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN zemin_rengi TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN baski_desen_no TEXT DEFAULT ''",
@@ -1478,18 +1480,18 @@ def _insert_order_items(conn, order_id, items):
 
 def add_order(customer_id, customer_name, customer_ref, currency, payment_method,
                delivery_terms, delivery_address, delivery_date, order_date,
-               notes, items, created_by=""):
+               notes, items, created_by="", sales_rep=""):
     conn = get_connection()
     order_no = _generate_order_no(conn)
     c = conn.cursor()
     c.execute("""
         INSERT INTO orders (order_no, order_date, customer_id, customer_name, customer_ref,
                             currency, payment_method, delivery_terms, delivery_address,
-                            delivery_date, notes, created_by, status)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ONAYDA')
+                            delivery_date, notes, created_by, sales_rep, status)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ONAYDA')
     """, (order_no, order_date, customer_id, customer_name, customer_ref,
           currency, payment_method, delivery_terms, delivery_address,
-          delivery_date, notes, created_by))
+          delivery_date, notes, created_by, sales_rep))
     oid = c.lastrowid
     _insert_order_items(conn, oid, items)
     conn.commit()
@@ -1499,16 +1501,16 @@ def add_order(customer_id, customer_name, customer_ref, currency, payment_method
 
 def update_order(order_id, customer_id, customer_name, customer_ref, currency,
                  payment_method, delivery_terms, delivery_address, delivery_date,
-                 order_date, notes, items):
+                 order_date, notes, items, sales_rep=""):
     conn = get_connection()
     conn.execute("""
         UPDATE orders SET customer_id=?, customer_name=?, customer_ref=?, currency=?,
                           payment_method=?, delivery_terms=?, delivery_address=?,
-                          delivery_date=?, order_date=?, notes=?
+                          delivery_date=?, order_date=?, notes=?, sales_rep=?
         WHERE id=?
     """, (customer_id, customer_name, customer_ref, currency,
           payment_method, delivery_terms, delivery_address,
-          delivery_date, order_date, notes, order_id))
+          delivery_date, order_date, notes, sales_rep, order_id))
     conn.execute("DELETE FROM order_items WHERE order_id=?", (order_id,))
     _insert_order_items(conn, order_id, items)
     conn.commit()

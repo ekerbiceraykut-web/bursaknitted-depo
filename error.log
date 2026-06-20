@@ -87,3 +87,20 @@ Traceback (most recent call last):
   File "/Users/aykut/tekstil-stok/main.py", line 8268, in refresh
     self.stat_items.setText(str(summary["total_items"] or 0))
 TypeError: 'NoneType' object is not subscriptable
+
+============================================================
+2026-06-21 01:29:07.466210
+Traceback (most recent call last):
+  File "/Users/aykut/tekstil-stok/main.py", line 9111, in <module>
+    main()
+  File "/Users/aykut/tekstil-stok/main.py", line 9101, in main
+    window = MainWindow()
+  File "/Users/aykut/tekstil-stok/main.py", line 8599, in __init__
+    self._build_ui()
+  File "/Users/aykut/tekstil-stok/main.py", line 8609, in _build_ui
+    self.dashboard = DashboardWidget()
+  File "/Users/aykut/tekstil-stok/main.py", line 8368, in __init__
+    self.refresh()
+  File "/Users/aykut/tekstil-stok/main.py", line 8511, in refresh
+    self.stat_items.setText(str(summary["total_items"] or 0))
+TypeError: 'NoneType' object is not subscriptable
