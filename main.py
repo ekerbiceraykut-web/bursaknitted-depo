@@ -526,6 +526,333 @@ def _den_from(value_str, birim):
     return 0.0
 
 
+class MaliyetWidget(QWidget):
+    """Ürün diyaloğuna gömülebilir maliyet hesaplama widget'ı."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+        self._recalc()
+
+    def _build_ui(self):
+        main = QVBoxLayout(self)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        container = QWidget(); vlay = QVBoxLayout(container)
+        scroll.setWidget(container)
+        main.addWidget(scroll, 1)
+
+        BIRIMLER = ["Den", "dTex", "Nm", "Ne"]
+
+        grp_genel = QGroupBox("Genel Parametreler")
+        fg = QFormLayout(grp_genel); fg.setSpacing(6)
+        self.tarak_eni  = QDoubleSpinBox(); self.tarak_eni.setRange(0,500);  self.tarak_eni.setDecimals(1); self.tarak_eni.setSuffix(" cm")
+        self.cozgu_sik  = QDoubleSpinBox(); self.cozgu_sik.setRange(0,500);  self.cozgu_sik.setDecimals(1); self.cozgu_sik.setSuffix(" uç/cm")
+        self.atki_sik   = QDoubleSpinBox(); self.atki_sik.setRange(0,200);   self.atki_sik.setDecimals(1); self.atki_sik.setSuffix(" atım/cm")
+        self.lbl_toplam_uc    = QLabel("—"); self.lbl_toplam_uc.setStyleSheet("font-weight:bold; color:#1A237E;")
+        self.lbl_toplam_desen = QLabel("—"); self.lbl_toplam_desen.setStyleSheet("font-weight:bold; color:#1A237E;")
+        fg.addRow("Tarak Eni:", self.tarak_eni)
+        fg.addRow("Çözgü Sıklığı (uç/cm):", self.cozgu_sik)
+        fg.addRow("Toplam Çözgü Ucu (otomatik):", self.lbl_toplam_uc)
+        fg.addRow("Atkı Sıklığı (atım/cm):", self.atki_sik)
+        fg.addRow("Toplam Desen Atım (otomatik):", self.lbl_toplam_desen)
+        vlay.addWidget(grp_genel)
+
+        grp_cozgu = QGroupBox("Çözgü İplikleri")
+        gc = QGridLayout(grp_cozgu)
+        for ci, h in enumerate(["", "İplik Adı", "Numara", "Birim", "Uç/cm", "Toplam Uç", "Çekme %", "Fiyat $/kg", "grs/mt", "$/mt"]):
+            lb = QLabel(f"<b>{h}</b>"); lb.setAlignment(Qt.AlignmentFlag.AlignCenter); gc.addWidget(lb, 0, ci)
+        self.cozgu_rows = []
+        for i in range(2):
+            ad    = QLineEdit()
+            num   = QDoubleSpinBox(); num.setRange(0,99999); num.setDecimals(2)
+            bir   = QComboBox(); bir.addItems(BIRIMLER)
+            uc_cm = QDoubleSpinBox(); uc_cm.setRange(0,500); uc_cm.setDecimals(1)
+            tot_uc = QLabel("—"); tot_uc.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); tot_uc.setStyleSheet("color:#555;padding-right:4px;")
+            cek   = QDoubleSpinBox(); cek.setRange(0,50); cek.setDecimals(1); cek.setValue(6.0); cek.setSuffix(" %")
+            fiy   = QDoubleSpinBox(); fiy.setRange(0,999); fiy.setDecimals(2); fiy.setSuffix(" $/kg")
+            grs   = QLabel("0.00"); grs.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); grs.setStyleSheet("color:#1565C0;padding-right:4px;")
+            dol   = QLabel("0.0000"); dol.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); dol.setStyleSheet("color:#2E7D32;padding-right:4px;")
+            for ci, w in enumerate([QLabel(f"Çözgü {i+1}:"), ad, num, bir, uc_cm, tot_uc, cek, fiy, grs, dol]):
+                gc.addWidget(w, i+1, ci)
+            self.cozgu_rows.append({"ad": ad, "num": num, "bir": bir, "uc_cm": uc_cm, "tot_uc": tot_uc, "cek": cek, "fiy": fiy, "grs": grs, "dol": dol})
+            for w in (num, bir, uc_cm, cek, fiy):
+                (w.valueChanged if hasattr(w,'valueChanged') else w.currentIndexChanged).connect(self._recalc)
+        def _auto_cozgu2(*_):
+            r1 = self.cozgu_rows[0]; r2 = self.cozgu_rows[1]
+            if _den_from(str(r2["num"].value()), r2["bir"].currentText()) <= 0: return
+            kalan = max(0.0, self.cozgu_sik.value() - r1["uc_cm"].value())
+            r2["uc_cm"].blockSignals(True); r2["uc_cm"].setValue(round(kalan, 1)); r2["uc_cm"].blockSignals(False)
+            self._recalc()
+        self.cozgu_rows[0]["uc_cm"].valueChanged.connect(_auto_cozgu2)
+        self.cozgu_sik.valueChanged.connect(_auto_cozgu2)
+        self.cozgu_rows[1]["num"].valueChanged.connect(_auto_cozgu2)
+        vlay.addWidget(grp_cozgu)
+
+        grp_atki = QGroupBox("Atkı İplikleri")
+        ga = QGridLayout(grp_atki)
+        for ci, h in enumerate(["", "İplik Adı", "Numara", "Birim", "Desende Atım", "Çekme %", "Fiyat $/kg", "atım/cm", "grs/mt", "$/mt"]):
+            lb = QLabel(f"<b>{h}</b>"); lb.setAlignment(Qt.AlignmentFlag.AlignCenter); ga.addWidget(lb, 0, ci)
+        self.atki_rows = []
+        for i in range(4):
+            ad  = QLineEdit()
+            num = QDoubleSpinBox(); num.setRange(0,99999); num.setDecimals(2)
+            bir = QComboBox(); bir.addItems(BIRIMLER)
+            atm = QSpinBox(); atm.setRange(0,256)
+            cek = QDoubleSpinBox(); cek.setRange(0,50); cek.setDecimals(1); cek.setValue(8.0); cek.setSuffix(" %")
+            fiy = QDoubleSpinBox(); fiy.setRange(0,999); fiy.setDecimals(2); fiy.setSuffix(" $/kg")
+            ppm = QLabel("0.00"); ppm.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); ppm.setStyleSheet("color:#555;padding-right:4px;")
+            grs = QLabel("0.00"); grs.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); grs.setStyleSheet("color:#1565C0;padding-right:4px;")
+            dol = QLabel("0.0000"); dol.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); dol.setStyleSheet("color:#2E7D32;padding-right:4px;")
+            for ci, w in enumerate([QLabel(f"Atkı {i+1}:"), ad, num, bir, atm, cek, fiy, ppm, grs, dol]):
+                ga.addWidget(w, i+1, ci)
+            self.atki_rows.append({"ad": ad, "num": num, "bir": bir, "atm": atm, "cek": cek, "fiy": fiy, "ppm": ppm, "grs": grs, "dol": dol})
+            for w in (num, bir, atm, cek, fiy):
+                (w.valueChanged if hasattr(w,'valueChanged') else w.currentIndexChanged).connect(self._recalc)
+        vlay.addWidget(grp_atki)
+
+        for w in (self.tarak_eni, self.cozgu_sik, self.atki_sik):
+            w.valueChanged.connect(self._recalc)
+
+        grp_islem = QGroupBox("İşlem Maliyetleri")
+        fi = QFormLayout(grp_islem); fi.setSpacing(6)
+        self.fason_dokuma = QDoubleSpinBox(); self.fason_dokuma.setRange(0,9999); self.fason_dokuma.setDecimals(2); self.fason_dokuma.setSuffix(" krş/100 atkı")
+        self.usd_kuru     = QDoubleSpinBox(); self.usd_kuru.setRange(0.01,999);   self.usd_kuru.setDecimals(2);     self.usd_kuru.setValue(35.0); self.usd_kuru.setSuffix(" TL/$")
+        self.lbl_dokuma_mal = QLabel("—"); self.lbl_dokuma_mal.setStyleSheet("font-weight:bold; color:#1A237E;")
+        self.hazirlik_mal   = QDoubleSpinBox(); self.hazirlik_mal.setRange(0,99);  self.hazirlik_mal.setDecimals(4); self.hazirlik_mal.setSuffix(" $/mt")
+        self.boya_mal       = QDoubleSpinBox(); self.boya_mal.setRange(0,99);      self.boya_mal.setDecimals(2);     self.boya_mal.setSuffix(" $/kg")
+        self.boya_fire      = QDoubleSpinBox(); self.boya_fire.setRange(0,50);     self.boya_fire.setDecimals(1);    self.boya_fire.setSuffix(" %")
+        fi.addRow("Fason Dokuma (krş/100 atkı):", self.fason_dokuma)
+        fi.addRow("USD Kuru:", self.usd_kuru)
+        fi.addRow("Dokuma Maliyeti (hesaplanan, $/mt):", self.lbl_dokuma_mal)
+        fi.addRow("Çözgü Hazırlık Maliyeti:", self.hazirlik_mal)
+        fi.addRow("Boya / Apre ($/kg kumaş):", self.boya_mal)
+        fi.addRow("Boya Firesi:", self.boya_fire)
+        for w in (self.fason_dokuma, self.usd_kuru, self.hazirlik_mal, self.boya_mal, self.boya_fire):
+            w.valueChanged.connect(self._recalc)
+        vlay.addWidget(grp_islem)
+
+        grp_sonuc = QGroupBox("Hesaplama Sonucu")
+        fs = QFormLayout(grp_sonuc); fs.setSpacing(6)
+        def _rl(color): l = QLabel("—"); l.setStyleSheet(f"font-size:13px;font-weight:bold;color:{color};"); return l
+        self.res_total_grs  = _rl("#1A237E"); self.res_mat_cost  = _rl("#1565C0")
+        self.res_gri_cost   = _rl("#4A148C"); self.res_boya_cost = _rl("#BF360C")
+        self.res_total_cost = _rl("#B71C1C")
+        fs.addRow("Toplam Gramaj (grs/mt):", self.res_total_grs)
+        fs.addRow("Malzeme Maliyeti ($/mt):", self.res_mat_cost)
+        fs.addRow("Ham Maliyet ($/mt):", self.res_gri_cost)
+        fs.addRow("Boya/Apre Maliyeti ($/mt):", self.res_boya_cost)
+        fs.addRow("Toplam Maliyet ($/mt):", self.res_total_cost)
+        vlay.addWidget(grp_sonuc)
+        vlay.addStretch()
+
+        grp_cvt = QGroupBox("Birim Dönüştürücü")
+        fcvt = QHBoxLayout(grp_cvt)
+        self.cvt_val = QDoubleSpinBox(); self.cvt_val.setRange(0,999999); self.cvt_val.setDecimals(2)
+        self.cvt_bir = QComboBox(); self.cvt_bir.addItems(BIRIMLER)
+        self.cvt_res = QLabel("—"); self.cvt_res.setStyleSheet("font-size:11px;color:#1565C0;")
+        fcvt.addWidget(QLabel("Değer:")); fcvt.addWidget(self.cvt_val)
+        fcvt.addWidget(QLabel("Birim:")); fcvt.addWidget(self.cvt_bir)
+        fcvt.addWidget(QLabel("→")); fcvt.addWidget(self.cvt_res); fcvt.addStretch()
+        self.cvt_val.valueChanged.connect(self._do_convert)
+        self.cvt_bir.currentIndexChanged.connect(self._do_convert)
+        vlay.addWidget(grp_cvt)
+
+    def load(self, p):
+        """Ürün dict'inden verileri yükler (p dict olmalı)."""
+        import json
+        try: self.tarak_eni.setValue(float(p.get("tarak_eni") or 0))
+        except Exception: pass
+        try: self.cozgu_sik.setValue(float(p.get("cozgu_sikligi") or 0))
+        except Exception: pass
+        try: self.atki_sik.setValue(float(p.get("atki_sikligi") or 0))
+        except Exception: pass
+        for i, row in enumerate(self.cozgu_rows):
+            row["ad"].setText(p.get(f"cozgu{i+1}") or "")
+        for i, row in enumerate(self.atki_rows):
+            row["ad"].setText(p.get(f"atki{i+1}") or "")
+        try:
+            mj = json.loads(p.get("maliyet_json") or "{}")
+        except Exception:
+            mj = {}
+        if not mj:
+            self._recalc(); return
+        try: self.fason_dokuma.setValue(float(mj.get("fason_dokuma", 0)))
+        except: pass
+        try: self.usd_kuru.setValue(float(mj.get("usd_kuru", 35.0)))
+        except: pass
+        try: self.hazirlik_mal.setValue(float(mj.get("hazirlik_mal", 0)))
+        except: pass
+        try: self.boya_fire.setValue(float(mj.get("boya_fire", 0)))
+        except: pass
+        try: self.boya_mal.setValue(float(mj.get("boya_mal", 0)))
+        except: pass
+        for i, row in enumerate(self.cozgu_rows):
+            pre = f"c{i+1}_"
+            try:
+                if mj.get(pre+"num"):   row["num"].setValue(float(mj[pre+"num"]))
+                if mj.get(pre+"bir"):   row["bir"].setCurrentText(mj[pre+"bir"])
+                if mj.get(pre+"uc_cm"): row["uc_cm"].setValue(float(mj[pre+"uc_cm"]))
+                if mj.get(pre+"cek"):   row["cek"].setValue(float(mj[pre+"cek"]))
+                if mj.get(pre+"fiy"):   row["fiy"].setValue(float(mj[pre+"fiy"]))
+            except: pass
+        for i, row in enumerate(self.atki_rows):
+            pre = f"a{i+1}_"
+            try:
+                if mj.get(pre+"num"): row["num"].setValue(float(mj[pre+"num"]))
+                if mj.get(pre+"bir"): row["bir"].setCurrentText(mj[pre+"bir"])
+                if mj.get(pre+"atm"): row["atm"].setValue(int(mj[pre+"atm"]))
+                if mj.get(pre+"cek"): row["cek"].setValue(float(mj[pre+"cek"]))
+                if mj.get(pre+"fiy"): row["fiy"].setValue(float(mj[pre+"fiy"]))
+            except: pass
+        self._recalc()
+
+    def get_maliyet_json(self):
+        import json
+        mj = {
+            "fason_dokuma": self.fason_dokuma.value(),
+            "usd_kuru": self.usd_kuru.value(),
+            "hazirlik_mal": self.hazirlik_mal.value(),
+            "boya_mal": self.boya_mal.value(),
+            "boya_fire": self.boya_fire.value(),
+        }
+        for i, row in enumerate(self.cozgu_rows):
+            pre = f"c{i+1}_"
+            mj[pre+"num"]   = row["num"].value()
+            mj[pre+"bir"]   = row["bir"].currentText()
+            mj[pre+"uc_cm"] = row["uc_cm"].value()
+            mj[pre+"cek"]   = row["cek"].value()
+            mj[pre+"fiy"]   = row["fiy"].value()
+        for i, row in enumerate(self.atki_rows):
+            pre = f"a{i+1}_"
+            mj[pre+"num"] = row["num"].value()
+            mj[pre+"bir"] = row["bir"].currentText()
+            mj[pre+"atm"] = row["atm"].value()
+            mj[pre+"cek"] = row["cek"].value()
+            mj[pre+"fiy"] = row["fiy"].value()
+        return json.dumps(mj)
+
+    def _recalc(self):
+        tarak     = self.tarak_eni.value()
+        cozgu_sik = self.cozgu_sik.value()
+        atki_sik  = self.atki_sik.value()
+        toplam_uc = tarak * cozgu_sik
+        self.lbl_toplam_uc.setText(f"{toplam_uc:.0f} uç  ({tarak:.1f} cm × {cozgu_sik:.1f} uç/cm)")
+        desen_atim = max(1, sum(r["atm"].value() for r in self.atki_rows))
+        self.lbl_toplam_desen.setText(
+            f"{desen_atim}  ({' + '.join(str(r['atm'].value()) for r in self.atki_rows if r['atm'].value()>0) or '0'})"
+        )
+        aktif_cozgu = [r for r in self.cozgu_rows if _den_from(str(r["num"].value()), r["bir"].currentText()) > 0]
+        toplam_girilen_uc_cm = sum(r["uc_cm"].value() for r in aktif_cozgu)
+        total_grs = 0.0; total_mat = 0.0
+        for row in self.cozgu_rows:
+            den = _den_from(str(row["num"].value()), row["bir"].currentText())
+            if den <= 0:
+                row["tot_uc"].setText("—"); row["grs"].setText("—"); row["dol"].setText("—"); continue
+            uc_cm = row["uc_cm"].value()
+            if len(aktif_cozgu) == 1:            effective_uc_cm = cozgu_sik
+            elif uc_cm > 0:                       effective_uc_cm = uc_cm
+            else:                                 effective_uc_cm = max(0.0, cozgu_sik - toplam_girilen_uc_cm)
+            total_ends = effective_uc_cm * tarak
+            row["tot_uc"].setText(f"{total_ends:.0f}")
+            grs = total_ends * den / 9000 * (1 + row["cek"].value() / 100) if total_ends > 0 else 0.0
+            mat = grs / 1000 * row["fiy"].value()
+            row["grs"].setText(f"{grs:.2f}"); row["dol"].setText(f"{mat:.4f}")
+            total_grs += grs; total_mat += mat
+        for row in self.atki_rows:
+            den = _den_from(str(row["num"].value()), row["bir"].currentText())
+            atm = row["atm"].value()
+            if den > 0 and atm > 0 and atki_sik > 0 and tarak > 0:
+                p_cm = atki_sik * atm / desen_atim
+                grs  = p_cm * tarak * den / 9000 * (1 + row["cek"].value() / 100)
+            else:
+                grs = 0.0
+            p_cm_d = atki_sik * atm / desen_atim if atm > 0 else 0
+            mat = grs / 1000 * row["fiy"].value()
+            row["ppm"].setText(f"{p_cm_d:.2f}"); row["grs"].setText(f"{grs:.2f}"); row["dol"].setText(f"{mat:.4f}")
+            total_grs += grs; total_mat += mat
+        usd_kuru = max(0.01, self.usd_kuru.value())
+        dok = self.fason_dokuma.value() * atki_sik / 100.0 / usd_kuru
+        self.lbl_dokuma_mal.setText(f"{dok:.4f} $/mt  ({self.fason_dokuma.value():.2f} krş × {atki_sik:.1f} ÷ {usd_kuru:.2f})")
+        haz = self.hazirlik_mal.value(); boya_kg = self.boya_mal.value(); fire_pct = self.boya_fire.value()
+        gri  = total_mat + dok + haz
+        boya = total_grs / 1000 * (1 + fire_pct / 100) * boya_kg
+        top  = gri + boya
+        self.res_total_grs.setText(f"{total_grs:.2f} g/mt")
+        self.res_mat_cost.setText(f"{total_mat:.4f} $/mt")
+        self.res_gri_cost.setText(f"{gri:.4f} $/mt")
+        self.res_boya_cost.setText(f"{boya:.4f} $/mt")
+        self.res_total_cost.setText(f"{top:.4f} $/mt")
+
+    def _do_convert(self):
+        v = self.cvt_val.value(); b = self.cvt_bir.currentText()
+        den = _den_from(str(v), b)
+        if den <= 0: self.cvt_res.setText("—"); return
+        self.cvt_res.setText(f"Den={den:.2f}  |  dTex={den/0.9:.2f}  |  Nm={9000/den:.2f}  |  Ne={5314.95/den:.2f}")
+
+
+class ArmurManagerWidget(QWidget):
+    """Armür desen kütüphanesi — ürün diyaloğuna gömülebilir."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+        self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Ad", "Çözgü", "Atkı", "Notlar", "Tarih"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.doubleClicked.connect(self._edit)
+        lay.addWidget(self.table)
+        btn_row = QHBoxLayout()
+        btn_new = QPushButton("+ Yeni Desen"); btn_new.clicked.connect(self._new)
+        btn_edt = QPushButton("✎ Düzenle");    btn_edt.clicked.connect(self._edit)
+        btn_del = QPushButton("✕ Sil"); btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
+        btn_del.clicked.connect(self._delete)
+        for b in (btn_new, btn_edt, btn_del): btn_row.addWidget(b)
+        btn_row.addStretch(); lay.addLayout(btn_row)
+
+    def _load(self):
+        rows = db.get_all_armur_desenleri() or []
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            it = QTableWidgetItem(r["name"]); it.setData(Qt.ItemDataRole.UserRole, r["id"])
+            self.table.setItem(i, 0, it)
+            self.table.setItem(i, 1, QTableWidgetItem(str(r.get("sutunlar", ""))))
+            self.table.setItem(i, 2, QTableWidgetItem(str(r.get("satirlar", ""))))
+            self.table.setItem(i, 3, QTableWidgetItem(r.get("notes", "")))
+            self.table.setItem(i, 4, QTableWidgetItem(str(r.get("created_at", ""))[:10]))
+        self.table.resizeColumnsToContents()
+
+    def _selected(self):
+        row = self.table.currentRow()
+        if row < 0: QMessageBox.information(self, "Bilgi", "Desen seçin."); return None
+        did = self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        return db.get_armur_desen(did)
+
+    def _new(self):
+        dlg = ArmurDesignDialog(parent=self.window())
+        if dlg.exec(): self._load()
+
+    def _edit(self):
+        d = self._selected()
+        if not d: return
+        dlg = ArmurDesignDialog(d, self.window())
+        if dlg.exec(): self._load()
+
+    def _delete(self):
+        d = self._selected()
+        if not d: return
+        if QMessageBox.question(self, "Sil", f"'{d['name']}' silinsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            db.delete_armur_desen(d["id"]); self._load()
+
+
 class MaliyetDialog(QDialog):
     """Dokuma kumaşı maliyet hesaplama diyalogu.
 
@@ -1745,14 +2072,8 @@ class ProductManagementDialog(QDialog):
         btn_excel = QPushButton("📥 Excel'den İçe Aktar")
         btn_excel.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
         btn_excel.clicked.connect(self._import_excel)
-        btn_maliyet = QPushButton("💰 Maliyet Hesapla")
-        btn_maliyet.setStyleSheet("background:#1565C0;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
-        btn_maliyet.clicked.connect(self._open_maliyet)
-        btn_armur = QPushButton("🔲 Armür Desen")
-        btn_armur.setStyleSheet("background:#6A1B9A;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
-        btn_armur.clicked.connect(self._open_armur)
         btn_close = QPushButton("Kapat"); btn_close.clicked.connect(self.accept)
-        for b in (btn_add, btn_edit, btn_del, btn_excel, btn_maliyet, btn_armur):
+        for b in (btn_add, btn_edit, btn_del, btn_excel):
             btn_row.addWidget(b)
         btn_row.addStretch(); btn_row.addWidget(btn_close)
         lay.addLayout(btn_row)
@@ -1791,9 +2112,11 @@ class ProductManagementDialog(QDialog):
         return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
 
     def _product_dialog(self, p=None):
+        if p is not None and not isinstance(p, dict):
+            p = dict(p)  # sqlite3.Row → dict
         dlg = QDialog(self)
         dlg.setWindowTitle("Ürün" + (" Düzenle" if p else " Ekle"))
-        dlg.setMinimumWidth(500)
+        dlg.setMinimumSize(860, 640)
         lay = QVBoxLayout(dlg)
 
         tabs = QTabWidget()
@@ -1801,15 +2124,15 @@ class ProductManagementDialog(QDialog):
         # ── Sekme 1: Genel ────────────────────────────────────────
         tab1 = QWidget(); f1 = QFormLayout(tab1); f1.setSpacing(8)
         dlg.code     = QLineEdit(p["product_code"] if p else "")
-        dlg.ref      = QLineEdit(p["reference_code"] if p else "")
-        dlg.name     = QLineEdit(p["product_name"] if p else "")
-        dlg.comp     = QLineEdit(p["composition"] if p else "")
-        dlg.width    = QLineEdit(p["width"] if p else "")
-        dlg.gramaj   = QLineEdit(p["gramaj"] if p else "")
-        dlg.shrink   = QLineEdit(p["shrinkage"] if p else "")
+        dlg.ref      = QLineEdit(p.get("reference_code","") if p else "")
+        dlg.name     = QLineEdit(p.get("product_name","") if p else "")
+        dlg.comp     = QLineEdit(p.get("composition","") if p else "")
+        dlg.width    = QLineEdit(p.get("width","") if p else "")
+        dlg.gramaj   = QLineEdit(p.get("gramaj","") if p else "")
+        dlg.shrink   = QLineEdit(p.get("shrinkage","") if p else "")
         dlg.price    = QDoubleSpinBox(); dlg.price.setRange(0, 999999); dlg.price.setDecimals(2)
-        dlg.price.setValue(p["price"] if (p and p["price"]) else 0)
-        dlg.supplier = QLineEdit(p["supplier"] if p else "")
+        dlg.price.setValue(float(p.get("price") or 0) if p else 0)
+        dlg.supplier = QLineEdit(p.get("supplier","") if p else "")
         f1.addRow("Ürün Kodu *:", dlg.code)
         f1.addRow("Kumaş Kodu:", dlg.ref)
         f1.addRow("Ürün Adı/Bilgisi:", dlg.name)
@@ -1823,38 +2146,37 @@ class ProductManagementDialog(QDialog):
 
         # ── Sekme 2: Teknik Özellikler ───────────────────────────
         tab2 = QWidget(); f2 = QFormLayout(tab2); f2.setSpacing(8)
-        def _le(key): return QLineEdit(p[key] if (p and p.get(key)) else "")
-        dlg.cozgu1        = _le("cozgu1")
-        dlg.cozgu2        = _le("cozgu2")
-        dlg.atki1         = _le("atki1")
-        dlg.atki2         = _le("atki2")
-        dlg.atki3         = _le("atki3")
-        dlg.atki4         = _le("atki4")
-        dlg.dokuma_tipi   = _le("dokuma_tipi")
-        dlg.cozgu_sikligi = _le("cozgu_sikligi")
-        dlg.tarak_no      = _le("tarak_no")
-        dlg.tarak_eni     = _le("tarak_eni")
-        dlg.atki_sikligi  = _le("atki_sikligi")
-        dlg.orgu_desen    = _le("orgu_desen")
+        def _le(key): return QLineEdit(p.get(key,"") if p else "")
+        dlg.cozgu1      = _le("cozgu1");      dlg.cozgu2    = _le("cozgu2")
+        dlg.atki1       = _le("atki1");       dlg.atki2     = _le("atki2")
+        dlg.atki3       = _le("atki3");       dlg.atki4     = _le("atki4")
+        dlg.dokuma_tipi = _le("dokuma_tipi"); dlg.tarak_no  = _le("tarak_no")
+        dlg.orgu_desen  = _le("orgu_desen")
         for w, lbl in [
             (dlg.cozgu1, "Çözgü 1:"), (dlg.cozgu2, "Çözgü 2:"),
             (dlg.atki1,  "Atkı 1:"),  (dlg.atki2,  "Atkı 2:"),
             (dlg.atki3,  "Atkı 3:"),  (dlg.atki4,  "Atkı 4:"),
-            (dlg.dokuma_tipi,   "Dokuma Tipi:"),
-            (dlg.cozgu_sikligi, "Çözgü Sıklığı (uç/cm):"),
-            (dlg.tarak_no,      "Tarak No:"),
-            (dlg.tarak_eni,     "Tarak Eni (cm):"),
-            (dlg.atki_sikligi,  "Atkı Sıklığı (atım/cm):"),
-            (dlg.orgu_desen,    "Örgü/Desen:"),
+            (dlg.dokuma_tipi, "Dokuma Tipi:"),
+            (dlg.tarak_no,    "Tarak No:"),
+            (dlg.orgu_desen,  "Örgü/Desen:"),
         ]:
             f2.addRow(lbl, w)
         tabs.addTab(tab2, "Teknik Özellikler")
+
+        # ── Sekme 3: Maliyet Hesaplama ───────────────────────────
+        dlg.maliyet_w = MaliyetWidget()
+        if p:
+            dlg.maliyet_w.load(p)
+        tabs.addTab(dlg.maliyet_w, "Maliyet Hesaplama")
+
+        # ── Sekme 4: Armür Desen ─────────────────────────────────
+        dlg.armur_w = ArmurManagerWidget()
+        tabs.addTab(dlg.armur_w, "Armür Desen")
 
         lay.addWidget(tabs)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(dlg.accept); btns.rejected.connect(dlg.reject)
         lay.addWidget(btns)
-        dlg.adjustSize()
         return dlg
 
     def _collect_product(self, dlg, pid=None, active=1):
@@ -1863,6 +2185,7 @@ class ProductManagementDialog(QDialog):
         if not code:
             QMessageBox.warning(self, "Hata", "Ürün kodu zorunlu!")
             return False
+        mw = dlg.maliyet_w
         kwargs = dict(
             product_name=dlg.name.text(), composition=dlg.comp.text(),
             width=dlg.width.text(), gramaj=dlg.gramaj.text(),
@@ -1872,10 +2195,12 @@ class ProductManagementDialog(QDialog):
             atki1=dlg.atki1.text(), atki2=dlg.atki2.text(),
             atki3=dlg.atki3.text(), atki4=dlg.atki4.text(),
             dokuma_tipi=dlg.dokuma_tipi.text(),
-            cozgu_sikligi=dlg.cozgu_sikligi.text(),
-            tarak_no=dlg.tarak_no.text(), tarak_eni=dlg.tarak_eni.text(),
-            atki_sikligi=dlg.atki_sikligi.text(),
+            tarak_no=dlg.tarak_no.text(),
             orgu_desen=dlg.orgu_desen.text(),
+            cozgu_sikligi=str(mw.cozgu_sik.value()),
+            tarak_eni=str(mw.tarak_eni.value()),
+            atki_sikligi=str(mw.atki_sik.value()),
+            maliyet_json=mw.get_maliyet_json(),
         )
         try:
             if pid:
@@ -1923,17 +2248,6 @@ class ProductManagementDialog(QDialog):
         except Exception as e:
             QMessageBox.critical(self,"Hata",f"İçe aktarma hatası:\n{e}")
 
-    def _open_maliyet(self):
-        pid = self._selected_id()
-        if not pid: return
-        p = db.get_product(pid)
-        dlg = MaliyetDialog(p, self)
-        dlg.exec()
-        self._load(self.search.text())
-
-    def _open_armur(self):
-        dlg = ArmurDesignManagerDialog(self)
-        dlg.exec()
 
 
 class LocationManagementDialog(QDialog):
