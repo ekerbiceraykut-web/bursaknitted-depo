@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QCheckBox, QCompleter, QDateEdit, QTreeWidget, QTreeWidgetItem,
     QScrollArea, QGridLayout
 )
-from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant, QDate, QSortFilterProxyModel
+from PyQt6.QtCore import Qt, QTimer, QSize, QAbstractTableModel, QModelIndex, QVariant, QDate
 from PyQt6.QtGui import QFont, QColor, QIcon, QBrush, QPixmap
 
 
@@ -122,45 +122,103 @@ CURRENCY_OPTIONS = ["USD", "EUR", "GBP", "TRY"]
 
 
 def _make_searchable(cb: QComboBox):
-    """QComboBox'u aranabilir hâle getirir.
+    """QComboBox'u stok-listesi arama kutusuna benzer şekilde aranabilir yapar.
 
-    • Yazılan metne göre tamamlayıcı popup'ta sadece eşleşen satırlar görünür.
-    • Seçim sonrası veya alan boşaltılınca tam liste geri gelir.
-    • currentIndexChanged sinyali doğru index ile ateşlenir.
+    • Yazılan metne göre öğeler anlık filtrelenir; sonuçlar klavye odağı çalmadan
+      combo'nun hemen altında kayan bir QListWidget popup'ta gösterilir.
+    • cb.addItem() / cb.clear() Python-düzeyinde override edilir; orijinal C++
+      metotlar da çağrılarak currentData() / findData() düzgün çalışmaya devam eder.
+    • Seçim sonrası currentIndexChanged doğru index ile ateşlenir.
     """
     cb.setEditable(True)
     cb.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+    cb.setCompleter(None)
 
-    proxy = QSortFilterProxyModel(cb)
-    proxy.setFilterCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-    proxy.setFilterKeyColumn(0)
-    proxy.setSourceModel(cb.model())
+    # ── Öğe deposu ve orijinal metot referansları ────────────────────────────
+    _orig_add   = cb.addItem   # C++ bound metod — override öncesi sakla
+    _orig_clear = cb.clear
+    cb._items   = []           # [(text, data), ...]
 
-    completer = QCompleter(proxy, cb)
-    completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
-    completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
-    cb.setCompleter(completer)
+    # Varsa mevcut öğeleri depoya al
+    existing  = [(cb.itemText(i), cb.itemData(i)) for i in range(cb.count())]
+    saved_idx = cb.currentIndex()
+    _orig_clear()
+    for text, data in existing:
+        cb._items.append((text, data))
+        _orig_add(text, data) if data is not None else _orig_add(text)
 
-    def _on_completion(text):
-        # Proxy üzerinden seçilen metni kaynak modelde bul ve index'i set et
-        idx = cb.findText(text, Qt.MatchFlag.MatchFixedString)
-        proxy.setFilterFixedString("")
-        if idx >= 0:
-            cb.setCurrentIndex(idx)
+    def _addItem(text, data=None):
+        cb._items.append((text, data))
+        _orig_add(text, data) if data is not None else _orig_add(text)
 
-    completer.activated.connect(_on_completion)
+    def _clearItems():
+        cb._items.clear()
+        _orig_clear()
 
-    def _on_text(text):
-        proxy.setFilterFixedString(text)
-        if text:
-            cb.showPopup()
+    cb.addItem = _addItem
+    cb.clear   = _clearItems
 
-    cb.lineEdit().textEdited.connect(_on_text)
+    if saved_idx > 0:
+        cb.setCurrentIndex(saved_idx)
 
-    def _on_activated(_idx):
-        proxy.setFilterFixedString("")
+    # ── Arama popup'u ────────────────────────────────────────────────────────
+    popup = QListWidget()
+    popup.setWindowFlags(Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+    # WA_ShowWithoutActivating KALDIRILDI: macOS'ta o flag tıklamaları engelliyor
+    popup.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    popup.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    popup.setStyleSheet(
+        "QListWidget{border:1px solid #9E9E9E;background:#fff;outline:0;}"
+        "QListWidget::item{padding:5px 10px;}"
+        "QListWidget::item:hover{background:#E3F2FD;}"
+        "QListWidget::item:selected{background:#1565C0;color:#fff;}"
+    )
+    cb._search_popup = popup   # referansı yaşat
 
-    cb.activated.connect(_on_activated)
+    def _refresh():
+        txt = cb.lineEdit().text()
+        popup.clear()
+        if not txt:
+            popup.hide()
+            return
+        low = txt.lower()
+        for text, data in cb._items:
+            if low in text.lower():
+                it = QListWidgetItem(text)
+                it.setData(Qt.ItemDataRole.UserRole, data)
+                popup.addItem(it)
+        if popup.count() == 0:
+            popup.hide()
+            return
+        pos   = cb.mapToGlobal(cb.rect().bottomLeft())
+        w     = max(cb.width(), 220)
+        row_h = popup.sizeHintForRow(0) or 26
+        h     = min(popup.count() * row_h + 6, 240)
+        popup.move(pos)
+        popup.resize(w, h)
+        popup.show()
+        # Popup penceresi açılınca macOS odağı çalabilir;
+        # sıradaki event döngüsünde dialog+lineEdit'e geri ver
+        QTimer.singleShot(0, cb.window().activateWindow)
+        QTimer.singleShot(0, cb.lineEdit().setFocus)
+
+    def _select(item):
+        text = item.text()
+        data = item.data(Qt.ItemDataRole.UserRole)
+        popup.hide()
+        i = cb.findData(data) if data is not None else -1
+        if i < 0:
+            i = cb.findText(text, Qt.MatchFlag.MatchFixedString)
+        prev = cb.currentIndex()
+        cb.lineEdit().setText(text)
+        if i >= 0 and i != prev:
+            cb.setCurrentIndex(i)          # currentIndexChanged ateşlenir
+        elif i == prev:
+            cb.currentIndexChanged.emit(i) # aynı index seçildi; cascade combo'lar için
+
+    popup.itemClicked.connect(_select)
+    cb.lineEdit().textEdited.connect(lambda _: _refresh())
+    cb.destroyed.connect(popup.deleteLater)
 
 FABRIC_TYPE_COLORS = {"HAM": QColor("#5D4037"), "PFD": QColor("#00695C"),
                       "BOYALI": QColor("#545454"), "İPLİĞİ BOYALI": QColor("#EF6C00"),
@@ -2073,12 +2131,7 @@ class OrderItemDialog(QDialog):
         form.setSpacing(10)
 
         self.product_code = QComboBox()
-        self.product_code.setEditable(True)
-        self.product_code.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        completer = self.product_code.completer()
-        completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        completer.setFilterMode(Qt.MatchFlag.MatchContains)
-        completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        _make_searchable(self.product_code)
         self._load_products()
         self.product_code.currentIndexChanged.connect(self._on_product_change)
         form.addRow("Ürün Kodu *:", self.product_code)
