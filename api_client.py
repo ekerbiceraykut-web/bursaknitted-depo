@@ -225,23 +225,59 @@ def get_product_by_code(code):
             return p
     return None
 
-def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier="", reference_code=""):
+def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier="", reference_code="",
+                cozgu1="", cozgu2="", atki1="", atki2="", atki3="", atki4="",
+                dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
+                atki_sikligi="", orgu_desen="", maliyet_json=""):
     r = _post("/api/products", {
         "product_code": product_code, "product_name": product_name,
         "composition": composition, "width": width,
         "gramaj": gramaj, "shrinkage": shrinkage,
         "price": price, "supplier": supplier, "reference_code": reference_code,
+        "cozgu1": cozgu1, "cozgu2": cozgu2,
+        "atki1": atki1, "atki2": atki2, "atki3": atki3, "atki4": atki4,
+        "dokuma_tipi": dokuma_tipi, "cozgu_sikligi": cozgu_sikligi,
+        "tarak_no": tarak_no, "tarak_eni": tarak_eni,
+        "atki_sikligi": atki_sikligi, "orgu_desen": orgu_desen, "maliyet_json": maliyet_json,
     })
     return (r or {}).get("id")
 
-def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1, reference_code=""):
+def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1, reference_code="",
+                   cozgu1="", cozgu2="", atki1="", atki2="", atki3="", atki4="",
+                   dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
+                   atki_sikligi="", orgu_desen="", maliyet_json=""):
     _put(f"/api/products/{pid}", {
         "product_code": product_code, "product_name": product_name,
         "composition": composition, "width": width,
         "gramaj": gramaj, "shrinkage": shrinkage,
         "price": price, "supplier": supplier, "active": active,
         "reference_code": reference_code,
+        "cozgu1": cozgu1, "cozgu2": cozgu2,
+        "atki1": atki1, "atki2": atki2, "atki3": atki3, "atki4": atki4,
+        "dokuma_tipi": dokuma_tipi, "cozgu_sikligi": cozgu_sikligi,
+        "tarak_no": tarak_no, "tarak_eni": tarak_eni,
+        "atki_sikligi": atki_sikligi, "orgu_desen": orgu_desen, "maliyet_json": maliyet_json,
     })
+
+# ── Armür Desenleri ───────────────────────────────────────────────────────────
+
+def get_all_armur_desenleri():
+    return _get("/api/armur") or []
+
+def get_armur_desen(did):
+    return _get(f"/api/armur/{did}")
+
+def add_armur_desen(name, satirlar=8, sutunlar=8, grid="[]", notes=""):
+    r = _post("/api/armur", {"name": name, "satirlar": satirlar, "sutunlar": sutunlar,
+                              "grid": grid, "notes": notes})
+    return (r or {}).get("id")
+
+def update_armur_desen(did, name, satirlar, sutunlar, grid, notes=""):
+    _put(f"/api/armur/{did}", {"name": name, "satirlar": satirlar, "sutunlar": sutunlar,
+                                "grid": grid, "notes": notes})
+
+def delete_armur_desen(did):
+    _delete(f"/api/armur/{did}")
 
 def delete_product(pid):
     _delete(f"/api/products/{pid}")

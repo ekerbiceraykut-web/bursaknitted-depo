@@ -151,6 +151,15 @@ class APIHandler(BaseHTTPRequestHandler):
                 r = db.get_product(pid)
                 self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
 
+            elif path == "/api/armur":
+                rows = db.get_all_armur_desenleri()
+                self._send(_ok(rows))
+
+            elif path.startswith("/api/armur/"):
+                did = int(path.split("/")[-1])
+                r = db.get_armur_desen(did)
+                self._send(_ok(r) if r else _err("Bulunamadı"))
+
             # ── Locations ────────────────────────────────────────
             elif path == "/api/locations/all":
                 rows = db.get_all_locations()
@@ -376,9 +385,21 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("composition",""),  body.get("width",""),
                     body.get("gramaj",""),        body.get("shrinkage",""),
                     body.get("price",0),          body.get("supplier",""),
-                    body.get("reference_code","")
+                    body.get("reference_code",""),
+                    body.get("cozgu1",""), body.get("cozgu2",""),
+                    body.get("atki1",""), body.get("atki2",""), body.get("atki3",""), body.get("atki4",""),
+                    body.get("dokuma_tipi",""), body.get("cozgu_sikligi",""),
+                    body.get("tarak_no",""), body.get("tarak_eni",""),
+                    body.get("atki_sikligi",""), body.get("orgu_desen",""), body.get("maliyet_json","")
                 )
                 self._send(_ok({"id": pid}))
+
+            elif path == "/api/armur":
+                did = db.add_armur_desen(
+                    body.get("name","Yeni Desen"), body.get("satirlar",8), body.get("sutunlar",8),
+                    body.get("grid","[]"), body.get("notes","")
+                )
+                self._send(_ok({"id": did}))
 
             elif path == "/api/products/bulk":
                 n = db.import_products_bulk(body.get("records", []))
@@ -483,7 +504,19 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("composition",""),  body.get("width",""),
                     body.get("gramaj",""),        body.get("shrinkage",""),
                     body.get("price",0),          body.get("supplier",""),
-                    body.get("active",1),         body.get("reference_code","")
+                    body.get("active",1),         body.get("reference_code",""),
+                    body.get("cozgu1",""), body.get("cozgu2",""),
+                    body.get("atki1",""), body.get("atki2",""), body.get("atki3",""), body.get("atki4",""),
+                    body.get("dokuma_tipi",""), body.get("cozgu_sikligi",""),
+                    body.get("tarak_no",""), body.get("tarak_eni",""),
+                    body.get("atki_sikligi",""), body.get("orgu_desen",""), body.get("maliyet_json","")
+                )
+                self._send(_ok())
+            elif path.startswith("/api/armur/"):
+                did = int(path.split("/")[-1])
+                db.update_armur_desen(did,
+                    body.get("name",""), body.get("satirlar",8), body.get("sutunlar",8),
+                    body.get("grid","[]"), body.get("notes","")
                 )
                 self._send(_ok())
             elif path.startswith("/api/locations/"):
@@ -579,6 +612,10 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path.startswith("/api/products/"):
                 pid = int(path.split("/")[-1])
                 db.delete_product(pid)
+                self._send(_ok())
+            elif path.startswith("/api/armur/"):
+                did = int(path.split("/")[-1])
+                db.delete_armur_desen(did)
                 self._send(_ok())
             elif path.startswith("/api/orders/"):
                 oid = int(path.split("/")[-1])

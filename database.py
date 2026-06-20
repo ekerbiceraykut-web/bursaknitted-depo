@@ -118,6 +118,29 @@ def init_db():
             price REAL DEFAULT 0,
             supplier TEXT DEFAULT '',
             active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            cozgu1 TEXT DEFAULT '',
+            cozgu2 TEXT DEFAULT '',
+            atki1 TEXT DEFAULT '',
+            atki2 TEXT DEFAULT '',
+            atki3 TEXT DEFAULT '',
+            atki4 TEXT DEFAULT '',
+            dokuma_tipi TEXT DEFAULT '',
+            cozgu_sikligi TEXT DEFAULT '',
+            tarak_no TEXT DEFAULT '',
+            tarak_eni TEXT DEFAULT '',
+            atki_sikligi TEXT DEFAULT '',
+            orgu_desen TEXT DEFAULT '',
+            maliyet_json TEXT DEFAULT ''
+        );
+
+        CREATE TABLE IF NOT EXISTS armur_desenleri (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            satirlar INTEGER DEFAULT 8,
+            sutunlar INTEGER DEFAULT 8,
+            grid TEXT DEFAULT '[]',
+            notes TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now','localtime'))
         );
 
@@ -312,6 +335,28 @@ def init_db():
         "ALTER TABLE movements ADD COLUMN location TEXT DEFAULT ''",
         "ALTER TABLE customers ADD COLUMN tax_no TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN reference_code TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN cozgu1 TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN cozgu2 TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN atki1 TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN atki2 TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN atki3 TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN atki4 TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN dokuma_tipi TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN cozgu_sikligi TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN tarak_no TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN tarak_eni TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN atki_sikligi TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN orgu_desen TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN maliyet_json TEXT DEFAULT ''",
+        """CREATE TABLE IF NOT EXISTS armur_desenleri (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            satirlar INTEGER DEFAULT 8,
+            sutunlar INTEGER DEFAULT 8,
+            grid TEXT DEFAULT '[]',
+            notes TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
         "ALTER TABLE fabrics ADD COLUMN lab_no TEXT DEFAULT ''",
         "ALTER TABLE orders ADD COLUMN currency TEXT DEFAULT 'USD'",
         "ALTER TABLE fabrics ADD COLUMN print_type TEXT DEFAULT ''",
@@ -541,30 +586,85 @@ def get_product_by_code(code):
     conn.close()
     return row
 
-def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier="", reference_code=""):
+def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier="", reference_code="",
+                cozgu1="", cozgu2="", atki1="", atki2="", atki3="", atki4="",
+                dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
+                atki_sikligi="", orgu_desen="", maliyet_json=""):
     conn = get_connection()
     c = conn.execute(
-        "INSERT INTO products (product_code, reference_code, product_name, composition, width, gramaj, shrinkage, price, supplier) VALUES (?,?,?,?,?,?,?,?,?)",
+        """INSERT INTO products (product_code, reference_code, product_name, composition, width, gramaj, shrinkage, price, supplier,
+           cozgu1, cozgu2, atki1, atki2, atki3, atki4, dokuma_tipi,
+           cozgu_sikligi, tarak_no, tarak_eni, atki_sikligi, orgu_desen, maliyet_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
-         gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip())
+         gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(),
+         cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
+         dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json)
     )
     conn.commit()
     pid = c.lastrowid
     conn.close()
     return pid
 
-def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1, reference_code=""):
+def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1, reference_code="",
+                   cozgu1="", cozgu2="", atki1="", atki2="", atki3="", atki4="",
+                   dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
+                   atki_sikligi="", orgu_desen="", maliyet_json=""):
     conn = get_connection()
     conn.execute(
-        "UPDATE products SET product_code=?, reference_code=?, product_name=?, composition=?, width=?, gramaj=?, shrinkage=?, price=?, supplier=?, active=? WHERE id=?",
+        """UPDATE products SET product_code=?, reference_code=?, product_name=?, composition=?, width=?, gramaj=?, shrinkage=?,
+           price=?, supplier=?, active=?,
+           cozgu1=?, cozgu2=?, atki1=?, atki2=?, atki3=?, atki4=?, dokuma_tipi=?,
+           cozgu_sikligi=?, tarak_no=?, tarak_eni=?, atki_sikligi=?, orgu_desen=?, maliyet_json=?
+           WHERE id=?""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
-         gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(), int(active), pid)
+         gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(), int(active),
+         cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
+         dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json, pid)
     )
     conn.commit(); conn.close()
 
 def delete_product(pid):
     conn = get_connection()
     conn.execute("DELETE FROM products WHERE id=?", (pid,))
+    conn.commit(); conn.close()
+
+# ── Armür Desenleri ────────────────────────────────────────────────────────────
+
+def get_all_armur_desenleri():
+    conn = get_connection()
+    rows = conn.execute("SELECT * FROM armur_desenleri ORDER BY name").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+def get_armur_desen(did):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM armur_desenleri WHERE id=?", (did,)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def add_armur_desen(name, satirlar=8, sutunlar=8, grid="[]", notes=""):
+    conn = get_connection()
+    c = conn.execute(
+        "INSERT INTO armur_desenleri (name, satirlar, sutunlar, grid, notes) VALUES (?,?,?,?,?)",
+        (name.strip(), satirlar, sutunlar, grid, notes.strip())
+    )
+    conn.commit()
+    did = c.lastrowid
+    conn.close()
+    return did
+
+def update_armur_desen(did, name, satirlar, sutunlar, grid, notes=""):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE armur_desenleri SET name=?, satirlar=?, sutunlar=?, grid=?, notes=? WHERE id=?",
+        (name.strip(), satirlar, sutunlar, grid, notes.strip(), did)
+    )
+    conn.commit(); conn.close()
+
+def delete_armur_desen(did):
+    conn = get_connection()
+    conn.execute("DELETE FROM armur_desenleri WHERE id=?", (did,))
     conn.commit(); conn.close()
 
 def import_products_bulk(records):
