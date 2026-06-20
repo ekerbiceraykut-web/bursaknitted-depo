@@ -2147,18 +2147,30 @@ class ProductManagementDialog(QDialog):
         # ── Sekme 2: Teknik Özellikler ───────────────────────────
         tab2 = QWidget(); f2 = QFormLayout(tab2); f2.setSpacing(8)
         def _le(key): return QLineEdit(p.get(key,"") if p else "")
-        dlg.cozgu1      = _le("cozgu1");      dlg.cozgu2    = _le("cozgu2")
-        dlg.atki1       = _le("atki1");       dlg.atki2     = _le("atki2")
-        dlg.atki3       = _le("atki3");       dlg.atki4     = _le("atki4")
-        dlg.dokuma_tipi = _le("dokuma_tipi"); dlg.tarak_no  = _le("tarak_no")
-        dlg.orgu_desen  = _le("orgu_desen")
+        def _dsb(key, suffix="", rng=(0,9999), dec=1):
+            sb = QDoubleSpinBox(); sb.setRange(*rng); sb.setDecimals(dec)
+            if suffix: sb.setSuffix(suffix)
+            try: sb.setValue(float(p.get(key) or 0) if p else 0)
+            except: pass
+            return sb
+        dlg.cozgu1        = _le("cozgu1");      dlg.cozgu2      = _le("cozgu2")
+        dlg.atki1         = _le("atki1");       dlg.atki2       = _le("atki2")
+        dlg.atki3         = _le("atki3");       dlg.atki4       = _le("atki4")
+        dlg.dokuma_tipi   = _le("dokuma_tipi"); dlg.tarak_no    = _le("tarak_no")
+        dlg.orgu_desen    = _le("orgu_desen")
+        dlg.tarak_eni_sb  = _dsb("tarak_eni",    " cm",      (0, 500), 1)
+        dlg.cozgu_sik_sb  = _dsb("cozgu_sikligi"," uç/cm",  (0, 500), 1)
+        dlg.atki_sik_sb   = _dsb("atki_sikligi", " atım/cm", (0, 200), 1)
         for w, lbl in [
-            (dlg.cozgu1, "Çözgü 1:"), (dlg.cozgu2, "Çözgü 2:"),
-            (dlg.atki1,  "Atkı 1:"),  (dlg.atki2,  "Atkı 2:"),
-            (dlg.atki3,  "Atkı 3:"),  (dlg.atki4,  "Atkı 4:"),
-            (dlg.dokuma_tipi, "Dokuma Tipi:"),
-            (dlg.tarak_no,    "Tarak No:"),
-            (dlg.orgu_desen,  "Örgü/Desen:"),
+            (dlg.cozgu1,       "Çözgü 1:"),  (dlg.cozgu2,      "Çözgü 2:"),
+            (dlg.atki1,        "Atkı 1:"),   (dlg.atki2,       "Atkı 2:"),
+            (dlg.atki3,        "Atkı 3:"),   (dlg.atki4,       "Atkı 4:"),
+            (dlg.dokuma_tipi,  "Dokuma Tipi:"),
+            (dlg.tarak_no,     "Tarak No:"),
+            (dlg.tarak_eni_sb, "Tarak Eni (cm):"),
+            (dlg.cozgu_sik_sb, "Çözgü Sıklığı (uç/cm):"),
+            (dlg.atki_sik_sb,  "Atkı Sıklığı (atım/cm):"),
+            (dlg.orgu_desen,   "Örgü/Desen:"),
         ]:
             f2.addRow(lbl, w)
         tabs.addTab(tab2, "Teknik Özellikler")
@@ -2168,6 +2180,27 @@ class ProductManagementDialog(QDialog):
         if p:
             dlg.maliyet_w.load(p)
         tabs.addTab(dlg.maliyet_w, "Maliyet Hesaplama")
+
+        # ── Teknik ↔ Maliyet senkronizasyonu ─────────────────────
+        def _teknik_to_mal(*_):
+            mw = dlg.maliyet_w
+            for src, dst in [(dlg.tarak_eni_sb, mw.tarak_eni),
+                             (dlg.cozgu_sik_sb, mw.cozgu_sik),
+                             (dlg.atki_sik_sb,  mw.atki_sik)]:
+                dst.blockSignals(True); dst.setValue(src.value()); dst.blockSignals(False)
+            mw._recalc()
+        def _mal_to_teknik(*_):
+            mw = dlg.maliyet_w
+            for src, dst in [(mw.tarak_eni, dlg.tarak_eni_sb),
+                             (mw.cozgu_sik, dlg.cozgu_sik_sb),
+                             (mw.atki_sik,  dlg.atki_sik_sb)]:
+                dst.blockSignals(True); dst.setValue(src.value()); dst.blockSignals(False)
+        dlg.tarak_eni_sb.valueChanged.connect(_teknik_to_mal)
+        dlg.cozgu_sik_sb.valueChanged.connect(_teknik_to_mal)
+        dlg.atki_sik_sb.valueChanged.connect(_teknik_to_mal)
+        dlg.maliyet_w.tarak_eni.valueChanged.connect(_mal_to_teknik)
+        dlg.maliyet_w.cozgu_sik.valueChanged.connect(_mal_to_teknik)
+        dlg.maliyet_w.atki_sik.valueChanged.connect(_mal_to_teknik)
 
         # ── Sekme 4: Armür Desen ─────────────────────────────────
         dlg.armur_w = ArmurManagerWidget()
@@ -2197,9 +2230,9 @@ class ProductManagementDialog(QDialog):
             dokuma_tipi=dlg.dokuma_tipi.text(),
             tarak_no=dlg.tarak_no.text(),
             orgu_desen=dlg.orgu_desen.text(),
-            cozgu_sikligi=str(mw.cozgu_sik.value()),
-            tarak_eni=str(mw.tarak_eni.value()),
-            atki_sikligi=str(mw.atki_sik.value()),
+            cozgu_sikligi=str(dlg.cozgu_sik_sb.value()),
+            tarak_eni=str(dlg.tarak_eni_sb.value()),
+            atki_sikligi=str(dlg.atki_sik_sb.value()),
             maliyet_json=mw.get_maliyet_json(),
         )
         try:
