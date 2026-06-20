@@ -1720,14 +1720,10 @@ class FabricDialog(QDialog):
         self.lab_no.setPlaceholderText("Lab dip onay numarası (opsiyonel)")
         self._load_products()
 
-        # Lokasyon — tek kademeli düz liste (tüm aktif lokasyonlar)
-        self.location_combo = QComboBox()
-        self.location_combo.setEditable(True)
-        self.location_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
-        _lc = self.location_combo.completer()
-        _lc.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
-        _lc.setFilterMode(Qt.MatchFlag.MatchContains)
-        _lc.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        # Hedef Lokasyon — iki kademeli (grup → depo)
+        self.loc_group_combo = QComboBox()   # 1. kademe: grup seçimi (DEPO / DIŞ DEPO …)
+        self.location_combo  = QComboBox()   # 2. kademe: ilgili gruptaki lokasyonlar
+        self.loc_group_combo.currentIndexChanged.connect(self._on_loc_group_change)
 
         # Satın alma lokasyonu — müşteri listesinden seçim
         self.entry_loc = QComboBox()
@@ -1791,6 +1787,7 @@ class FabricDialog(QDialog):
 
         form.addRow("Satın Alma Lokasyonu:", self.entry_loc)
 
+        form.addRow("Depo Türü *:", self.loc_group_combo)
         form.addRow("Hedef Lokasyon *:", self.location_combo)
         form.addRow("Lot:", self.lot)
         form.addRow("Metre:", self.meter)
@@ -1876,14 +1873,31 @@ class FabricDialog(QDialog):
 
     def _load_locations(self):
         locs = db.get_active_locations()
-        sorted_locs = sorted(locs, key=lambda x: (x["group_name"] or "", x["name"] or ""))
+        self._all_locs = sorted(locs, key=lambda x: (x["group_name"] or "", x["name"] or ""))
 
+        # 1. kademe: benzersiz grup isimleri
+        groups = list(dict.fromkeys(l["group_name"] or "Diğer" for l in self._all_locs))
+        self.loc_group_combo.blockSignals(True)
+        self.loc_group_combo.clear()
+        self.loc_group_combo.addItem("— Depo Türü Seçiniz —", "")
+        for g in groups:
+            self.loc_group_combo.addItem(g, g)
+        self.loc_group_combo.blockSignals(False)
+
+        # 2. kademe başlangıçta boş
         self.location_combo.clear()
-        self.location_combo.addItem("— Seçiniz —", "")
-        for l in sorted_locs:
-            grp = l["group_name"] or ""
-            label = f"[{grp}] {l['name']}" if grp else l["name"]
-            self.location_combo.addItem(label, l["name"])
+        self.location_combo.addItem("— Önce depo türü seçiniz —", "")
+
+    def _on_loc_group_change(self):
+        grp = self.loc_group_combo.currentData() or ""
+        self.location_combo.clear()
+        if not grp:
+            self.location_combo.addItem("— Önce depo türü seçiniz —", "")
+            return
+        self.location_combo.addItem("— Lokasyon Seçiniz —", "")
+        for l in self._all_locs:
+            if (l["group_name"] or "Diğer") == grp:
+                self.location_combo.addItem(l["name"], l["name"])
 
     def _load_entry_customers(self):
         self.entry_loc.clear()
@@ -1894,6 +1908,9 @@ class FabricDialog(QDialog):
 
     def _selected_location(self):
         return self.location_combo.currentData() or ""
+
+    def _selected_location_group(self):
+        return self.loc_group_combo.currentData() or ""
 
     def _update_print_fields(self):
         """BASKILI / Baskı Tipi seçimine göre Renk, Zemin Rengi, Lab No,
@@ -1920,11 +1937,20 @@ class FabricDialog(QDialog):
         self.lab_no.setText(dict(f).get("lab_no") or "")
         loc_val = f["location"] or ""
         if loc_val:
-            idx = self.location_combo.findData(loc_val)
-            if idx < 0:
+            # Grubunu bul, önce grup seç ki 2. kademe dolsun
+            matched_grp = next(
+                (l["group_name"] or "Diğer" for l in self._all_locs if l["name"] == loc_val),
+                None)
+            if matched_grp:
+                gi = self.loc_group_combo.findData(matched_grp)
+                if gi >= 0:
+                    self.loc_group_combo.setCurrentIndex(gi)  # tetikler _on_loc_group_change
+            else:
+                # Listede yok — gruba göre ekleyelim
                 self.location_combo.addItem(loc_val, loc_val)
-                idx = self.location_combo.count() - 1
-            self.location_combo.setCurrentIndex(idx)
+            idx = self.location_combo.findData(loc_val)
+            if idx >= 0:
+                self.location_combo.setCurrentIndex(idx)
         entry = dict(f).get("entry_location") or ""
         if entry:
             i = self.entry_loc.findData(entry)
