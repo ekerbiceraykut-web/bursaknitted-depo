@@ -6670,6 +6670,240 @@ class GoodsReceiptDialog(QDialog):
         return {"location": self.location.currentData(), "items": results}
 
 
+class SiparisOnayDialog(QDialog):
+    """Admin için sipariş sözleşme önizleme + onay/red dialog."""
+
+    def __init__(self, order, parent=None):
+        super().__init__(parent)
+        self.order    = order
+        self.approved = False   # True → onaylandı, False → reddedildi / kapatıldı
+        self.setWindowTitle(f"Sipariş İnceleme — {order.get('order_no','')}")
+        self.setMinimumSize(820, 680)
+        self._build_ui()
+
+    def _build_ui(self):
+        from datetime import datetime
+        lay = QVBoxLayout(self); lay.setSpacing(8)
+
+        # ── Başlık ──────────────────────────────────────────────────────────
+        hdr = QLabel("📋  SİPARİŞ FORMU — ADMIN İNCELEME")
+        hdr.setStyleSheet(
+            "font-size:16px;font-weight:bold;color:#1A237E;"
+            "padding:8px 12px;background:#E8EAF6;border-radius:6px;")
+        lay.addWidget(hdr)
+
+        # ── Kaydırılabilir içerik ────────────────────────────────────────────
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        inner = QWidget(); scroll.setWidget(inner)
+        vl = QVBoxLayout(inner); vl.setSpacing(14)
+
+        o = self.order
+        cfg = db.get_company_settings() or {}
+
+        def _fmt_date(s):
+            try: return datetime.strptime((s or "")[:10], "%Y-%m-%d").strftime("%d.%m.%Y")
+            except: return s or "—"
+
+        def _grp(title, color="#1565C0"):
+            g = QGroupBox(title); g.setStyleSheet(
+                f"QGroupBox{{font-weight:bold;color:{color};"
+                f"border:1px solid {color};border-radius:6px;margin-top:6px;padding:8px;}}"
+                f"QGroupBox::title{{subcontrol-origin:margin;left:10px;padding:0 4px;}}"
+            ); return g
+
+        # ── 1. Taraflar ──────────────────────────────────────────────────────
+        taraf_grp = _grp("1 — Taraflar")
+        tg = QGridLayout(taraf_grp); tg.setSpacing(4)
+
+        def _th(txt):
+            l = QLabel(txt)
+            l.setStyleSheet("font-weight:bold;color:#fff;background:#1565C0;"
+                            "padding:4px 8px;border-radius:3px;")
+            return l
+
+        tg.addWidget(_th("SATICI"), 0, 0)
+        tg.addWidget(_th("ALICI"), 0, 1)
+
+        def _cell(txt, bold=False):
+            l = QLabel(txt or "—")
+            l.setWordWrap(True)
+            l.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            if bold: l.setStyleSheet("font-weight:bold;font-size:13px;")
+            return l
+
+        satici = QWidget(); sl = QVBoxLayout(satici); sl.setContentsMargins(0,4,0,0)
+        sl.addWidget(_cell(cfg.get("name",""), bold=True))
+        sl.addWidget(_cell(cfg.get("address","")))
+        sl.addWidget(_cell(f"Tel: {cfg.get('phone','')}  |  Vergi: {cfg.get('tax','')}"))
+        sl.addWidget(_cell(cfg.get("email_info","")))
+        tg.addWidget(satici, 1, 0)
+
+        alici = QWidget(); al = QVBoxLayout(alici); al.setContentsMargins(0,4,0,0)
+        al.addWidget(_cell(o.get("customer_name",""), bold=True))
+        al.addWidget(_cell(o.get("delivery_address","")))
+        al.addWidget(_cell(f"Müşteri Ref: {o.get('customer_ref','') or '—'}"))
+        tg.addWidget(alici, 1, 1)
+        tg.setColumnStretch(0, 1); tg.setColumnStretch(1, 1)
+        vl.addWidget(taraf_grp)
+
+        # ── 2. Sipariş Başlık Bilgileri ──────────────────────────────────────
+        bas_grp = _grp("2 — Sipariş Bilgileri")
+        bg = QGridLayout(bas_grp); bg.setSpacing(6)
+        bas_rows = [
+            ("Sipariş No:",        o.get("order_no",""),                  True),
+            ("Sipariş Tarihi:",    _fmt_date(o.get("order_date","")),     False),
+            ("Termin:",            _fmt_date(o.get("delivery_date","")),  True),
+            ("Para Birimi:",       o.get("currency",""),                  False),
+            ("Ödeme Şekli:",       o.get("payment_method",""),            False),
+            ("Teslimat Şartları:", o.get("delivery_terms",""),            False),
+            ("Menşei:",            cfg.get("origin",""),                  False),
+            ("Oluşturan:",         o.get("created_by",""),                False),
+        ]
+        for i, (lbl, val, bold) in enumerate(bas_rows):
+            row_i, col_i = divmod(i, 2)
+            col_base = col_i * 2
+            bg.addWidget(QLabel(f"<b>{lbl}</b>"), row_i, col_base)
+            v = QLabel(val or "—")
+            v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            if bold: v.setStyleSheet("font-weight:bold;color:#C62828;font-size:13px;")
+            bg.addWidget(v, row_i, col_base + 1)
+        bg.setColumnStretch(1, 1); bg.setColumnStretch(3, 1)
+        vl.addWidget(bas_grp)
+
+        # ── 3. Sipariş Kalemleri ─────────────────────────────────────────────
+        kal_grp = _grp("3 — Sipariş Kalemleri")
+        kg = QVBoxLayout(kal_grp)
+        tbl = QTableWidget()
+        cols = ["Ürün Kodu", "Ürün Adı", "Kumaş Tipi", "Renk", "Kompozisyon",
+                "En (cm)", "Gramaj", "Lab No", "Baskı Tipi", "Zemin Rengi",
+                "Baskı Desen No", "Miktar (mt)", "Miktar (kg)", "Birim Fiyat", "Tutar", "Açıklama"]
+        tbl.setColumnCount(len(cols))
+        tbl.setHorizontalHeaderLabels(cols)
+        tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        tbl.verticalHeader().setVisible(False)
+        tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        tbl.setAlternatingRowColors(True)
+        tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        tbl.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
+
+        items = o.get("items") or []
+        toplam_mt = 0.0; toplam_kg = 0.0; toplam_tutar = 0.0
+        cur = o.get("currency","USD")
+        tbl.setRowCount(len(items))
+        for ri, it in enumerate(items):
+            mt  = float(it.get("meter") or 0)
+            kgi = float(it.get("kg") or 0)
+            sp  = float(it.get("sale_price") or 0)
+            tut = mt * sp
+            toplam_mt += mt; toplam_kg += kgi; toplam_tutar += tut
+            vals = [
+                it.get("product_code",""),
+                it.get("product_name",""),
+                it.get("fabric_type",""),
+                it.get("color",""),
+                it.get("composition",""),
+                it.get("width",""),
+                it.get("gramaj",""),
+                it.get("lab_no",""),
+                it.get("print_type",""),
+                it.get("zemin_rengi",""),
+                it.get("baski_desen_no",""),
+                f"{mt:.2f}",
+                f"{kgi:.2f}",
+                f"{sp:.2f}" if sp else "",
+                f"{tut:.2f}" if sp else "",
+                it.get("description",""),
+            ]
+            for ci, v in enumerate(vals):
+                cell = QTableWidgetItem(str(v))
+                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if ci in (11, 12, 13, 14):
+                    cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                tbl.setItem(ri, ci, cell)
+
+        tbl.setMaximumHeight(min(len(items) * 28 + 40, 280))
+        kg.addWidget(tbl)
+
+        # Toplamlar
+        tot_lay = QHBoxLayout(); tot_lay.addStretch()
+        tot_frame = QFrame()
+        tot_frame.setStyleSheet("background:#E3F2FD;border:1px solid #1565C0;"
+                                "border-radius:6px;padding:8px;")
+        tf = QGridLayout(tot_frame); tf.setSpacing(6)
+        for ri2, (lbl, val) in enumerate([
+            ("Toplam Miktar (mt):", f"{toplam_mt:.2f} mt"),
+            ("Toplam Miktar (kg):", f"{toplam_kg:.2f} kg"),
+            ("Toplam Tutar:",       f"{toplam_tutar:.2f} {cur}"),
+        ]):
+            l1 = QLabel(f"<b>{lbl}</b>"); l2 = QLabel(val)
+            if "Tutar" in lbl:
+                l2.setStyleSheet("font-weight:bold;font-size:14px;color:#C62828;")
+            tf.addWidget(l1, ri2, 0); tf.addWidget(l2, ri2, 1)
+        tot_lay.addWidget(tot_frame)
+        kg.addLayout(tot_lay)
+        vl.addWidget(kal_grp)
+
+        # ── 4. Sözleşme Koşulları / Notlar ──────────────────────────────────
+        if o.get("contract_terms","") or o.get("notes",""):
+            not_grp = _grp("4 — Sözleşme Koşulları & Notlar", color="#37474F")
+            nl = QVBoxLayout(not_grp)
+            if o.get("contract_terms",""):
+                nl.addWidget(QLabel("<b>Sözleşme Koşulları:</b>"))
+                ct = QLabel(o.get("contract_terms",""))
+                ct.setWordWrap(True)
+                ct.setStyleSheet("background:#FAFAFA;border:1px solid #CFD8DC;"
+                                 "border-radius:4px;padding:6px;")
+                ct.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                nl.addWidget(ct)
+            if o.get("notes",""):
+                nl.addWidget(QLabel("<b>Notlar:</b>"))
+                nt = QLabel(o.get("notes",""))
+                nt.setWordWrap(True)
+                nt.setStyleSheet("background:#FFFDE7;border:1px solid #F9A825;"
+                                 "border-radius:4px;padding:6px;")
+                nt.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                nl.addWidget(nt)
+            vl.addWidget(not_grp)
+
+        vl.addStretch()
+        lay.addWidget(scroll, 1)
+
+        # ── Alt butonlar ────────────────────────────────────────────────────
+        sep = QFrame(); sep.setFrameShape(QFrame.Shape.HLine)
+        sep.setStyleSheet("color:#CFD8DC;"); lay.addWidget(sep)
+
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+
+        btn_red = QPushButton("✕  Reddet / Kapat")
+        btn_red.setStyleSheet(
+            "background:#B71C1C;color:white;font-weight:bold;"
+            "border-radius:6px;padding:8px 22px;font-size:13px;")
+        btn_red.clicked.connect(self.reject)
+
+        btn_ok = QPushButton("✅  Onayla")
+        btn_ok.setStyleSheet(
+            "background:#1B5E20;color:white;font-weight:bold;"
+            "border-radius:6px;padding:8px 28px;font-size:14px;")
+        btn_ok.clicked.connect(self._do_approve)
+
+        btn_row.addWidget(btn_red)
+        btn_row.addSpacing(12)
+        btn_row.addWidget(btn_ok)
+        lay.addLayout(btn_row)
+
+    def _do_approve(self):
+        reply = QMessageBox.question(
+            self, "Onayla",
+            f"<b>{self.order.get('order_no','')}</b> numaralı sipariş onaylansın mı?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.approved = True
+            self.accept()
+
+
 class PlanningView(QWidget):
     _PLANNING_STATUSES = [
         "ONAYDA", "ONAYLANDI - PLANLAMADA", "PLANLAMA - GÖRDÜ",
@@ -6927,9 +7161,18 @@ class PlanningView(QWidget):
             return
         st = order.get("status","")
         if st == "ONAYDA":
-            QMessageBox.warning(self, "Onay Gerekli",
-                "Bu sipariş henüz admin tarafından onaylanmamış.\n"
-                "Planlama başlatmak için önce onaylanması gerekiyor.")
+            if CURRENT_USER.get("role") == "admin":
+                dlg = SiparisOnayDialog(order, self)
+                dlg.exec()
+                if dlg.approved:
+                    db.approve_order(oid, CURRENT_USER["full_name"])
+                    self._refresh_queue()
+                    QMessageBox.information(self, "Onaylandı",
+                        f"{order.get('order_no','')} onaylandı. Planlama ekibine hazır.")
+            else:
+                QMessageBox.warning(self, "Onay Gerekli",
+                    "Bu sipariş henüz admin tarafından onaylanmamış.\n"
+                    "Planlama başlatmak için önce onaylanması gerekiyor.")
             return
         if st == "ONAYLANDI - PLANLAMADA":
             db.update_order_status(oid, "PLANLAMA - GÖRDÜ")

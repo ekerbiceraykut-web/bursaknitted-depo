@@ -70,3 +70,20 @@ Traceback (most recent call last):
   File "/Users/aykut/tekstil-stok/main.py", line 8455, in _update_user_label
     self._user_label.setText(f"{role_icon} {CURRENT_USER.get('full_name', '')}")
 AttributeError: 'MainWindow' object has no attribute '_user_label'
+
+============================================================
+2026-06-21 01:19:19.265299
+Traceback (most recent call last):
+  File "/Users/aykut/tekstil-stok/main.py", line 8868, in <module>
+    main()
+  File "/Users/aykut/tekstil-stok/main.py", line 8858, in main
+    window = MainWindow()
+  File "/Users/aykut/tekstil-stok/main.py", line 8356, in __init__
+    self._build_ui()
+  File "/Users/aykut/tekstil-stok/main.py", line 8366, in _build_ui
+    self.dashboard = DashboardWidget()
+  File "/Users/aykut/tekstil-stok/main.py", line 8125, in __init__
+    self.refresh()
+  File "/Users/aykut/tekstil-stok/main.py", line 8268, in refresh
+    self.stat_items.setText(str(summary["total_items"] or 0))
+TypeError: 'NoneType' object is not subscriptable
