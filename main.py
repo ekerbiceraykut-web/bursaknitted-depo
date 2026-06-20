@@ -3230,7 +3230,8 @@ class UserManagementDialog(QDialog):
         pw1 = QLineEdit(); pw1.setEchoMode(QLineEdit.EchoMode.Password)
         pw2 = QLineEdit(); pw2.setEchoMode(QLineEdit.EchoMode.Password)
         role_cb = QComboBox()
-        role_cb.addItems(["kullanici", "admin", "planlama", "satışçı", "depo-sevkiyat"])
+        role_cb.addItems(["kullanici", "admin", "planlama", "satışçı", "depo-sevkiyat",
+                          "muhasebe", "fason-takip", "kartela", "kalite-kontrol"])
         form.addRow("Kullanıcı Adı *:", uname)
         form.addRow("Ad Soyad:", fname)
         form.addRow("Şifre *:", pw1)
@@ -3266,7 +3267,8 @@ class UserManagementDialog(QDialog):
         lay = QVBoxLayout(dlg); form = QFormLayout(); form.setSpacing(8)
         fname = QLineEdit(cur_fname)
         role_cb = QComboBox()
-        role_cb.addItems(["kullanici", "admin", "planlama", "satışçı", "depo-sevkiyat"])
+        role_cb.addItems(["kullanici", "admin", "planlama", "satışçı", "depo-sevkiyat",
+                          "muhasebe", "fason-takip", "kartela", "kalite-kontrol"])
         idx = role_cb.findText(cur_role)
         if idx >= 0:
             role_cb.setCurrentIndex(idx)
@@ -5940,7 +5942,7 @@ class OrdersView(QWidget):
 
     COLS = ["Sipariş No", "Sip. Tarihi", "Müşteri", "Müşteri Referans", "Kalem",
             "Para Birimi", "Toplam Tutar", "Termin", "Ödeme Şekli",
-            "Teslimat Şartları", "Durum", "Oluşturan",
+            "Teslimat Şartları", "Durum", "Oluşturan", "Siparişi Alan",
             "Baskı Tipi", "Zemin Rengi", "Baskı Desen No",
             "Teslimat Adresi", "Notlar"]
 
@@ -5948,7 +5950,7 @@ class OrdersView(QWidget):
     # kullanır — her siparişin kalemlerinden önce bu etiket satırı gösterilir.
     ITEM_COL_LABELS = ["Ürün Kodu", "Kompozisyon", "En", "Gramaj", "Kumaş Tipi", "Renk",
                        "Lab No", "Açıklama", "Metre", "Kilo", "Birim Fiyat", "Tutar",
-                       "Baskı Tipi", "Zemin Rengi", "Baskı Desen No", "", ""]
+                       "Baskı Tipi", "Zemin Rengi", "Baskı Desen No", "", "", ""]
 
     STATUS_OPTIONS = [
         "ONAYDA", "ONAYLANDI - PLANLAMADA", "PLANLAMA - GÖRDÜ", "PLANLANDI",
@@ -6055,6 +6057,7 @@ class OrdersView(QWidget):
                 r.get("delivery_terms") or "",
                 r.get("status") or "",
                 r.get("created_by") or "",
+                r.get("sales_rep") or "",
                 "", "", "",
                 r.get("delivery_address") or "",
                 (r.get("notes") or "").replace("\n", " "),
@@ -6096,7 +6099,7 @@ class OrdersView(QWidget):
                     it.get("print_type") or "",
                     it.get("zemin_rengi") or "",
                     it.get("baski_desen_no") or "",
-                    "", "",
+                    "", "", "",
                 ]
                 child = QTreeWidgetItem([str(v) for v in child_vals])
                 for col in (8, 9, 10, 11):
