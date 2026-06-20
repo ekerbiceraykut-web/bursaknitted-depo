@@ -390,7 +390,10 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("atki1",""), body.get("atki2",""), body.get("atki3",""), body.get("atki4",""),
                     body.get("dokuma_tipi",""), body.get("cozgu_sikligi",""),
                     body.get("tarak_no",""), body.get("tarak_eni",""),
-                    body.get("atki_sikligi",""), body.get("orgu_desen",""), body.get("maliyet_json","")
+                    body.get("atki_sikligi",""), body.get("orgu_desen",""), body.get("maliyet_json",""),
+                    body.get("teknik_aciklama",""), body.get("price_currency","USD"),
+                    body.get("jakar_desen_ad",""), body.get("jakar_desen_data",""),
+                    body.get("jakar_jpeg_ad",""), body.get("jakar_jpeg_data","")
                 )
                 self._send(_ok({"id": pid}))
 
@@ -509,7 +512,10 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("atki1",""), body.get("atki2",""), body.get("atki3",""), body.get("atki4",""),
                     body.get("dokuma_tipi",""), body.get("cozgu_sikligi",""),
                     body.get("tarak_no",""), body.get("tarak_eni",""),
-                    body.get("atki_sikligi",""), body.get("orgu_desen",""), body.get("maliyet_json","")
+                    body.get("atki_sikligi",""), body.get("orgu_desen",""), body.get("maliyet_json",""),
+                    body.get("teknik_aciklama",""), body.get("price_currency","USD"),
+                    body.get("jakar_desen_ad",""), body.get("jakar_desen_data",""),
+                    body.get("jakar_jpeg_ad",""), body.get("jakar_jpeg_data","")
                 )
                 self._send(_ok())
             elif path.startswith("/api/armur/"):

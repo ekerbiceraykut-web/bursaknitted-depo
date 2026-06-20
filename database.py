@@ -131,7 +131,13 @@ def init_db():
             tarak_eni TEXT DEFAULT '',
             atki_sikligi TEXT DEFAULT '',
             orgu_desen TEXT DEFAULT '',
-            maliyet_json TEXT DEFAULT ''
+            maliyet_json TEXT DEFAULT '',
+            teknik_aciklama TEXT DEFAULT '',
+            price_currency TEXT DEFAULT 'USD',
+            jakar_desen_ad TEXT DEFAULT '',
+            jakar_desen_data TEXT DEFAULT '',
+            jakar_jpeg_ad TEXT DEFAULT '',
+            jakar_jpeg_data TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS armur_desenleri (
@@ -348,6 +354,12 @@ def init_db():
         "ALTER TABLE products ADD COLUMN atki_sikligi TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN orgu_desen TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN maliyet_json TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN teknik_aciklama TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN price_currency TEXT DEFAULT 'USD'",
+        "ALTER TABLE products ADD COLUMN jakar_desen_ad TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN jakar_desen_data TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN jakar_jpeg_ad TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN jakar_jpeg_data TEXT DEFAULT ''",
         """CREATE TABLE IF NOT EXISTS armur_desenleri (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -589,17 +601,22 @@ def get_product_by_code(code):
 def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier="", reference_code="",
                 cozgu1="", cozgu2="", atki1="", atki2="", atki3="", atki4="",
                 dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
-                atki_sikligi="", orgu_desen="", maliyet_json=""):
+                atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
+                jakar_desen_ad="", jakar_desen_data="",
+                jakar_jpeg_ad="", jakar_jpeg_data=""):
     conn = get_connection()
     c = conn.execute(
         """INSERT INTO products (product_code, reference_code, product_name, composition, width, gramaj, shrinkage, price, supplier,
            cozgu1, cozgu2, atki1, atki2, atki3, atki4, dokuma_tipi,
-           cozgu_sikligi, tarak_no, tarak_eni, atki_sikligi, orgu_desen, maliyet_json)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           cozgu_sikligi, tarak_no, tarak_eni, atki_sikligi, orgu_desen, maliyet_json, teknik_aciklama, price_currency,
+           jakar_desen_ad, jakar_desen_data, jakar_jpeg_ad, jakar_jpeg_data)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(),
          cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
-         dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json)
+         dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json,
+         teknik_aciklama.strip(), price_currency, jakar_desen_ad.strip(), jakar_desen_data,
+         jakar_jpeg_ad.strip(), jakar_jpeg_data)
     )
     conn.commit()
     pid = c.lastrowid
@@ -609,18 +626,23 @@ def add_product(product_code, product_name="", composition="", width="", gramaj=
 def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1, reference_code="",
                    cozgu1="", cozgu2="", atki1="", atki2="", atki3="", atki4="",
                    dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
-                   atki_sikligi="", orgu_desen="", maliyet_json=""):
+                   atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
+                   jakar_desen_ad="", jakar_desen_data="",
+                   jakar_jpeg_ad="", jakar_jpeg_data=""):
     conn = get_connection()
     conn.execute(
         """UPDATE products SET product_code=?, reference_code=?, product_name=?, composition=?, width=?, gramaj=?, shrinkage=?,
            price=?, supplier=?, active=?,
            cozgu1=?, cozgu2=?, atki1=?, atki2=?, atki3=?, atki4=?, dokuma_tipi=?,
-           cozgu_sikligi=?, tarak_no=?, tarak_eni=?, atki_sikligi=?, orgu_desen=?, maliyet_json=?
+           cozgu_sikligi=?, tarak_no=?, tarak_eni=?, atki_sikligi=?, orgu_desen=?, maliyet_json=?, teknik_aciklama=?, price_currency=?,
+           jakar_desen_ad=?, jakar_desen_data=?, jakar_jpeg_ad=?, jakar_jpeg_data=?
            WHERE id=?""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(), int(active),
          cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
-         dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json, pid)
+         dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json,
+         teknik_aciklama.strip(), price_currency, jakar_desen_ad.strip(), jakar_desen_data,
+         jakar_jpeg_ad.strip(), jakar_jpeg_data, pid)
     )
     conn.commit(); conn.close()
 

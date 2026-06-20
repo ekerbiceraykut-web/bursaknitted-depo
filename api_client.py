@@ -228,7 +228,9 @@ def get_product_by_code(code):
 def add_product(product_code, product_name="", composition="", width="", gramaj="", shrinkage="", price=0, supplier="", reference_code="",
                 cozgu1="", cozgu2="", atki1="", atki2="", atki3="", atki4="",
                 dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
-                atki_sikligi="", orgu_desen="", maliyet_json=""):
+                atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
+                jakar_desen_ad="", jakar_desen_data="",
+                jakar_jpeg_ad="", jakar_jpeg_data=""):
     r = _post("/api/products", {
         "product_code": product_code, "product_name": product_name,
         "composition": composition, "width": width,
@@ -239,13 +241,18 @@ def add_product(product_code, product_name="", composition="", width="", gramaj=
         "dokuma_tipi": dokuma_tipi, "cozgu_sikligi": cozgu_sikligi,
         "tarak_no": tarak_no, "tarak_eni": tarak_eni,
         "atki_sikligi": atki_sikligi, "orgu_desen": orgu_desen, "maliyet_json": maliyet_json,
+        "teknik_aciklama": teknik_aciklama, "price_currency": price_currency,
+        "jakar_desen_ad": jakar_desen_ad, "jakar_desen_data": jakar_desen_data,
+        "jakar_jpeg_ad": jakar_jpeg_ad, "jakar_jpeg_data": jakar_jpeg_data,
     })
     return (r or {}).get("id")
 
 def update_product(pid, product_code, product_name, composition, width, gramaj, shrinkage, price, supplier, active=1, reference_code="",
                    cozgu1="", cozgu2="", atki1="", atki2="", atki3="", atki4="",
                    dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
-                   atki_sikligi="", orgu_desen="", maliyet_json=""):
+                   atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
+                   jakar_desen_ad="", jakar_desen_data="",
+                   jakar_jpeg_ad="", jakar_jpeg_data=""):
     _put(f"/api/products/{pid}", {
         "product_code": product_code, "product_name": product_name,
         "composition": composition, "width": width,
@@ -257,6 +264,9 @@ def update_product(pid, product_code, product_name, composition, width, gramaj, 
         "dokuma_tipi": dokuma_tipi, "cozgu_sikligi": cozgu_sikligi,
         "tarak_no": tarak_no, "tarak_eni": tarak_eni,
         "atki_sikligi": atki_sikligi, "orgu_desen": orgu_desen, "maliyet_json": maliyet_json,
+        "teknik_aciklama": teknik_aciklama, "price_currency": price_currency,
+        "jakar_desen_ad": jakar_desen_ad, "jakar_desen_data": jakar_desen_data,
+        "jakar_jpeg_ad": jakar_jpeg_ad, "jakar_jpeg_data": jakar_jpeg_data,
     })
 
 # ── Armür Desenleri ───────────────────────────────────────────────────────────
