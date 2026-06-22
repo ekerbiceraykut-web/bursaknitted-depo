@@ -8754,19 +8754,20 @@ class MainWindow(QMainWindow):
         while self.tabs.count():
             self.tabs.removeTab(0)
         role = CURRENT_USER.get("role", "")
+        _yeni_roller = ("muhasebe", "fason-takip", "kartela", "kalite-kontrol")
         if role == "admin":
             self.tabs.addTab(self.dashboard, "📊 Dashboard")
-        if role in ("admin", "kullanici", "depo-sevkiyat"):
+        if role in ("admin", "kullanici", "depo-sevkiyat") or role in _yeni_roller:
             self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
             self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
-        if role in ("admin", "kullanici"):
+        if role in ("admin", "kullanici") or role in _yeni_roller:
             self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
-        if role in ("admin", "satışçı", "kullanici"):
+        if role in ("admin", "satışçı", "kullanici") or role in _yeni_roller:
             self.tabs.addTab(self.orders_view, "📋 Siparişler")
-        if role in ("admin", "planlama", "kullanici"):
+        if role in ("admin", "planlama", "kullanici") or role in _yeni_roller:
             self.tabs.addTab(self.planning_view, "📌 Planlama")
             self.tabs.addTab(self.boyahane_view, "🧶 Boyahane Planlama")
-        if role in ("admin", "depo-sevkiyat", "kullanici"):
+        if role in ("admin", "depo-sevkiyat", "kullanici") or role in _yeni_roller:
             self.tabs.addTab(self.sevkiyat_view, "🚚 Sevkiyat")
         self.stock_table.refresh_with_locations()
         # Admin: onay bekleyen sipariş bildirimi
