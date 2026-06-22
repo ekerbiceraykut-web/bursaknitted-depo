@@ -8757,7 +8757,7 @@ class MainWindow(QMainWindow):
         _yeni_roller = ("muhasebe", "fason-takip", "kartela", "kalite-kontrol")
         if role == "admin":
             self.tabs.addTab(self.dashboard, "📊 Dashboard")
-        if role in ("admin", "kullanici", "depo-sevkiyat") or role in _yeni_roller:
+        if role in ("admin", "kullanici", "depo-sevkiyat", "planlama") or role in _yeni_roller:
             self.tabs.addTab(self.stock_table, "📦 Stok Listesi")
             self.tabs.addTab(self.location_view, "🗂 Lokasyon Görünümü")
         if role in ("admin", "kullanici") or role in _yeni_roller:
