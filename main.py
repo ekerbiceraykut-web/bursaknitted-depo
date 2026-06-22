@@ -8630,6 +8630,11 @@ class MainWindow(QMainWindow):
         layout.setSpacing(0)
 
         self.tabs = QTabWidget()
+        self.tabs.setStyleSheet(
+            "QTabWidget::pane { border-top: 1px solid #CCCCCC; margin-top: 0px; }"
+            "QTabWidget::tab-bar { alignment: left; }"
+            "QTabBar { qproperty-drawBase: 0; }"
+        )
         self.dashboard = DashboardWidget()
         self.stock_table = StockTable(self)
         self.location_view = LocationView()

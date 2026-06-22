@@ -140,3 +140,38 @@ Traceback (most recent call last):
   File "/Users/aykut/tekstil-stok/main.py", line 8719, in _update_user_label
     self._user_label.setText(f"{role_icon} {CURRENT_USER.get('full_name', '')}")
 AttributeError: 'MainWindow' object has no attribute '_user_label'
+
+============================================================
+2026-06-22 12:07:20.080352
+Traceback (most recent call last):
+  File "/Users/aykut/tekstil-stok/main.py", line 92, in wrapper
+    return attr(*args, **kwargs)
+  File "/Users/aykut/tekstil-stok/api_client.py", line 91, in get_all_fabrics
+    return _get("/api/fabrics", {"search": search, "location": location, "fabric_type": fabric_type})
+  File "/Users/aykut/tekstil-stok/api_client.py", line 68, in _get
+    return _request(req, 30)   # bulut sunucu yanıtı yerel ağdan yavaş olabilir
+  File "/Users/aykut/tekstil-stok/api_client.py", line 58, in _request
+    raise Exception(resp.get("error", "API hatası"))
+Exception: Yetkisiz erişim
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/aykut/tekstil-stok/main.py", line 9135, in <module>
+    sys.exit(app.exec())
+  File "/Users/aykut/tekstil-stok/main.py", line 9125, in main
+    threading.Thread(target=_do_backup, daemon=True).start()
+  File "/Users/aykut/tekstil-stok/main.py", line 8623, in __init__
+    self._build_ui()
+  File "/Users/aykut/tekstil-stok/main.py", line 8633, in _build_ui
+    self.tabs.setStyleSheet(
+  File "/Users/aykut/tekstil-stok/main.py", line 8392, in __init__
+    self.refresh()
+  File "/Users/aykut/tekstil-stok/main.py", line 8570, in refresh
+    rows = db.get_all_fabrics(location=loc)
+  File "/Users/aykut/tekstil-stok/main.py", line 95, in wrapper
+    if "Yetkisiz" in str(e) and _reauthenticate(parent):
+  File "/Users/aykut/tekstil-stok/main.py", line 69, in _reauthenticate
+    w._update_user_label()
+  File "/Users/aykut/tekstil-stok/main.py", line 8722, in _update_user_label
+AttributeError: 'MainWindow' object has no attribute '_user_label'
