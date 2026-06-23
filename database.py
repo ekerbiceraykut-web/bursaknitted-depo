@@ -58,6 +58,7 @@ def init_db():
             description TEXT DEFAULT '',
             deleted_at TEXT DEFAULT NULL,
             deleted_by TEXT DEFAULT '',
+            numune_code TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now','localtime')),
             updated_at TEXT DEFAULT (datetime('now','localtime'))
         );
@@ -138,7 +139,8 @@ def init_db():
             jakar_desen_data TEXT DEFAULT '',
             jakar_jpeg_ad TEXT DEFAULT '',
             jakar_jpeg_data TEXT DEFAULT '',
-            product_status TEXT DEFAULT 'AKTİF'
+            product_status TEXT DEFAULT 'AKTİF',
+            numune_code TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS armur_desenleri (
@@ -363,6 +365,8 @@ def init_db():
         "ALTER TABLE products ADD COLUMN jakar_jpeg_ad TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN jakar_jpeg_data TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN product_status TEXT DEFAULT 'AKTİF'",
+        "ALTER TABLE products ADD COLUMN numune_code TEXT DEFAULT ''",
+        "ALTER TABLE fabrics ADD COLUMN numune_code TEXT DEFAULT ''",
         """CREATE TABLE IF NOT EXISTS armur_desenleri (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -401,6 +405,15 @@ def init_db():
     # Giriş lokasyonu boş olan mevcut kayıtlara şimdiki lokasyonunu yaz
     try:
         c.execute("UPDATE fabrics SET entry_location=location WHERE IFNULL(entry_location,'')=''")
+    except Exception:
+        pass
+
+    # Mevcut numune kayıtlarına numune_code'u geriye dönük doldur (bir defalık)
+    try:
+        c.execute("UPDATE products SET numune_code=product_code "
+                  "WHERE product_status='NUMUNE' AND IFNULL(numune_code,'')=''")
+        c.execute("UPDATE fabrics SET numune_code=product_code "
+                  "WHERE product_code LIKE 'NMN-%' AND IFNULL(numune_code,'')=''")
     except Exception:
         pass
 
@@ -585,9 +598,9 @@ def get_all_products(search="", active_only=True, status_filter=""):
         q += " AND product_status=?"
         params.append(status_filter)
     if search:
-        q += " AND (product_code LIKE ? OR product_name LIKE ? OR reference_code LIKE ?)"
+        q += " AND (product_code LIKE ? OR product_name LIKE ? OR reference_code LIKE ? OR numune_code LIKE ?)"
         s = f"%{search}%"
-        params.extend([s, s, s])
+        params.extend([s, s, s, s])
     q += " ORDER BY product_code"
     rows = conn.execute(q, params).fetchall()
     conn.close()
@@ -595,18 +608,39 @@ def get_all_products(search="", active_only=True, status_filter=""):
 
 
 def _generate_numune_code(conn):
+    # Aktife dönüşmüş numuneler de sayılmalı (numune_code'ta saklı) ki kod tekrar etmesin
     row = conn.execute(
-        "SELECT MAX(CAST(SUBSTR(product_code,5) AS INTEGER)) FROM products "
-        "WHERE product_code LIKE 'NMN-%'"
+        "SELECT MAX(CAST(SUBSTR(code,5) AS INTEGER)) FROM ("
+        "  SELECT product_code AS code FROM products WHERE product_code LIKE 'NMN-%'"
+        "  UNION ALL"
+        "  SELECT numune_code AS code FROM products WHERE numune_code LIKE 'NMN-%'"
+        ")"
     ).fetchone()
     return f"NMN-{(row[0] or 0) + 1:03d}"
 
 
 def convert_numune_to_aktif(pid, new_code):
+    new_code = new_code.strip().upper()
     conn = get_connection()
+    row = conn.execute("SELECT product_code, numune_code FROM products WHERE id=?", (pid,)).fetchone()
+    if not row:
+        conn.close()
+        return
+    old_code = row["product_code"]
+    nmn_code = row["numune_code"] or old_code   # eski kayıtlarda numune_code boşsa eski kodu kullan
+
+    # Ürün kataloğu: kod gerçek koda döner, numune_code geriye dönük korunur
     conn.execute(
-        "UPDATE products SET product_code=?, product_status='AKTİF' WHERE id=?",
-        (new_code.strip().upper(), pid)
+        "UPDATE products SET product_code=?, product_status='AKTİF', numune_code=? WHERE id=?",
+        (new_code, nmn_code, pid)
+    )
+    # Stoktaki kayıtlar: o numune koduyla girilmiş tüm kumaşlar gerçek koda döner,
+    # numune_code korunur (hareketler fabric_id ile bağlı olduğundan otomatik takip edilir)
+    conn.execute(
+        "UPDATE fabrics SET product_code=?, "
+        "numune_code=CASE WHEN IFNULL(numune_code,'')='' THEN ? ELSE numune_code END "
+        "WHERE product_code=?",
+        (new_code, nmn_code, old_code)
     )
     conn.commit()
     conn.close()
@@ -630,20 +664,22 @@ def add_product(product_code, product_name="", composition="", width="", gramaj=
                 jakar_desen_ad="", jakar_desen_data="",
                 jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF"):
     conn = get_connection()
+    numune_code = ""
     if product_status == "NUMUNE":
         product_code = _generate_numune_code(conn)
+        numune_code = product_code
     c = conn.execute(
         """INSERT INTO products (product_code, reference_code, product_name, composition, width, gramaj, shrinkage, price, supplier,
            cozgu1, cozgu2, atki1, atki2, atki3, atki4, dokuma_tipi,
            cozgu_sikligi, tarak_no, tarak_eni, atki_sikligi, orgu_desen, maliyet_json, teknik_aciklama, price_currency,
-           jakar_desen_ad, jakar_desen_data, jakar_jpeg_ad, jakar_jpeg_data, product_status)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           jakar_desen_ad, jakar_desen_data, jakar_jpeg_ad, jakar_jpeg_data, product_status, numune_code)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(),
          cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
          dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json,
          teknik_aciklama.strip(), price_currency, jakar_desen_ad.strip(), jakar_desen_data,
-         jakar_jpeg_ad.strip(), jakar_jpeg_data, product_status)
+         jakar_jpeg_ad.strip(), jakar_jpeg_data, product_status, numune_code)
     )
     conn.commit()
     pid = c.lastrowid
@@ -903,9 +939,9 @@ def get_all_fabrics(search="", location="", fabric_type="", include_deleted=Fals
     if not include_deleted:
         query += " AND deleted_at IS NULL"
     if search:
-        query += " AND (product_name LIKE ? OR product_code LIKE ? OR color LIKE ? OR description LIKE ?)"
+        query += " AND (product_name LIKE ? OR product_code LIKE ? OR color LIKE ? OR description LIKE ? OR numune_code LIKE ?)"
         s = f"%{search}%"
-        params.extend([s, s, s, s])
+        params.extend([s, s, s, s, s])
     if location:
         query += " AND location = ?"
         params.append(location)
@@ -952,15 +988,17 @@ def add_fabric(product_name, product_code, color, location, meter, kg,
         lot = _generate_lot(conn)
     if not (entry_location or "").strip():
         entry_location = location   # belirtilmediyse ilk lokasyonu = giriş lokasyonu
+    # Numune koduyla girilen stok için numune_code'u otomatik doldur
+    numune_code = product_code.strip().upper() if str(product_code).strip().upper().startswith("NMN-") else ""
     c.execute("""
         INSERT INTO fabrics (product_name, product_code, color, location,
                              meter, kg, piece_count, birim_fiyat, fabric_type, lot,
                              description, entry_location, lab_no, print_type,
-                             zemin_rengi, baski_desen_no)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                             zemin_rengi, baski_desen_no, numune_code)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (product_name, product_code, color, location,
           meter or 0, kg or 0, piece_count, birim_fiyat or 0, fabric_type, lot,
-          description, entry_location, lab_no, print_type, zemin_rengi, baski_desen_no))
+          description, entry_location, lab_no, print_type, zemin_rengi, baski_desen_no, numune_code))
     fabric_id = c.lastrowid
     if meter or kg:
         c.execute("""
@@ -979,6 +1017,9 @@ def update_fabric(fabric_id, product_name, product_code, color, location,
                   baski_desen_no=None):
     """entry_location/lab_no/print_type/zemin_rengi/baski_desen_no None ise mevcut değer korunur."""
     conn = get_connection()
+    # Numune koduysa numune_code'u set et; değilse mevcut değeri koru (dönüşüm sonrası izi kaybetme)
+    is_nmn = str(product_code).strip().upper().startswith("NMN-")
+    new_nmn = product_code.strip().upper() if is_nmn else None
     conn.execute("""
         UPDATE fabrics SET product_name=?, product_code=?, color=?, location=?,
         meter=?, kg=?, piece_count=?, birim_fiyat=?, fabric_type=?, lot=?, description=?,
@@ -987,11 +1028,12 @@ def update_fabric(fabric_id, product_name, product_code, color, location,
         print_type=COALESCE(?, print_type),
         zemin_rengi=COALESCE(?, zemin_rengi),
         baski_desen_no=COALESCE(?, baski_desen_no),
+        numune_code=COALESCE(?, numune_code),
         updated_at=datetime('now','localtime')
         WHERE id=?
     """, (product_name, product_code, color, location,
           meter or 0, kg or 0, piece_count, birim_fiyat or 0, fabric_type, lot, description,
-          entry_location, lab_no, print_type, zemin_rengi, baski_desen_no, fabric_id))
+          entry_location, lab_no, print_type, zemin_rengi, baski_desen_no, new_nmn, fabric_id))
     conn.commit()
     conn.close()
 

@@ -2413,9 +2413,9 @@ class ProductManagementDialog(QDialog):
         lay.addLayout(btn_row)
 
     def _setup_table(self, tbl):
-        tbl.setColumnCount(9)
+        tbl.setColumnCount(10)
         tbl.setHorizontalHeaderLabels(
-            ["Ürün Kodu", "Açıklama", "Ürün Adı/Bilgisi", "Kompozisyon", "En", "Gramaj",
+            ["Ürün Kodu", "Numune Kodu", "Açıklama", "Ürün Adı/Bilgisi", "Kompozisyon", "En", "Gramaj",
              "Fiyat", "Tedarikçi/Fason", "Durum"])
         tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
@@ -2435,19 +2435,21 @@ class ProductManagementDialog(QDialog):
         italic_font = QFont(); italic_font.setItalic(True)
         for i, r in enumerate(rows):
             is_numune = (r["product_status"] if "product_status" in r.keys() else "AKTİF") == "NUMUNE"
+            numune_code = (r["numune_code"] if "numune_code" in r.keys() else "") or ""
             code_item = QTableWidgetItem(r["product_code"] or "")
             code_item.setData(Qt.ItemDataRole.UserRole, r["id"])
             tbl.setItem(i, 0, code_item)
-            tbl.setItem(i, 1, QTableWidgetItem(r["reference_code"] or ""))
-            tbl.setItem(i, 2, QTableWidgetItem(r["product_name"] or ""))
-            tbl.setItem(i, 3, QTableWidgetItem(r["composition"] or ""))
-            tbl.setItem(i, 4, QTableWidgetItem(r["width"] or ""))
-            tbl.setItem(i, 5, QTableWidgetItem(r["gramaj"] or ""))
+            tbl.setItem(i, 1, QTableWidgetItem(numune_code))
+            tbl.setItem(i, 2, QTableWidgetItem(r["reference_code"] or ""))
+            tbl.setItem(i, 3, QTableWidgetItem(r["product_name"] or ""))
+            tbl.setItem(i, 4, QTableWidgetItem(r["composition"] or ""))
+            tbl.setItem(i, 5, QTableWidgetItem(r["width"] or ""))
+            tbl.setItem(i, 6, QTableWidgetItem(r["gramaj"] or ""))
             price = r["price"] or 0
             price_item = _FireSortItem(f"{price:,.2f}" if price else "")
             price_item.setData(Qt.ItemDataRole.UserRole, price)
-            tbl.setItem(i, 6, price_item)
-            tbl.setItem(i, 7, QTableWidgetItem(r["supplier"] or ""))
+            tbl.setItem(i, 7, price_item)
+            tbl.setItem(i, 8, QTableWidgetItem(r["supplier"] or ""))
             if is_numune:
                 s = QTableWidgetItem("🔶 Numune")
                 s.setForeground(QBrush(QColor("#E65100")))
@@ -2457,7 +2459,7 @@ class ProductManagementDialog(QDialog):
             else:
                 s = QTableWidgetItem("⛔ Pasif")
                 s.setForeground(QBrush(QColor("#C62828")))
-            tbl.setItem(i, 8, s)
+            tbl.setItem(i, 9, s)
             if is_numune:
                 for col in range(tbl.columnCount()):
                     cell = tbl.item(i, col)
@@ -2475,11 +2477,11 @@ class ProductManagementDialog(QDialog):
         all_rows = db.get_all_products(search=search, active_only=False)
         rows = [r for r in all_rows
                 if (r["product_status"] if "product_status" in r.keys() else "AKTİF") != "NUMUNE"]
-        self._fill_table(self.table, rows, "products_header")
+        self._fill_table(self.table, rows, "products_header_v2")
 
     def _load_numune(self, search=""):
         rows = db.get_all_products(search=search, active_only=False, status_filter="NUMUNE")
-        self._fill_table(self.numune_table, rows, "numune_header")
+        self._fill_table(self.numune_table, rows, "numune_header_v2")
 
     def _refresh_all(self):
         self._load(self.search.text())
@@ -3606,8 +3608,12 @@ class FabricDialog(QDialog):
         for r in db.get_all_products(active_only=True):
             code = r["product_code"]
             name = r["product_name"] or ""
+            is_numune = (r["product_status"] if "product_status" in r.keys() else "AKTİF") == "NUMUNE"
             self._products[code] = name
-            self.product_code.addItem(f"{code} — {name}" if name else code, code)
+            label = f"{code} — {name}" if name else code
+            if is_numune:
+                label = "🔶 " + label
+            self.product_code.addItem(label, code)
         if select_code:
             idx = self.product_code.findData(select_code)
             if idx < 0:
@@ -3923,8 +3929,12 @@ class OrderItemDialog(QDialog):
         for r in db.get_all_products(active_only=True):
             code = r["product_code"]
             name = r["product_name"] or ""
+            is_numune = (r["product_status"] if "product_status" in r.keys() else "AKTİF") == "NUMUNE"
             self._products[code] = name
-            self.product_code.addItem(f"{code} — {name}" if name else code, code)
+            label = f"{code} — {name}" if name else code
+            if is_numune:
+                label = "🔶 " + label
+            self.product_code.addItem(label, code)
         if select_code:
             idx = self.product_code.findData(select_code)
             if idx < 0:
@@ -5176,7 +5186,7 @@ class DailyMovementsDialog(QDialog):
             self.count_lbl.setText("Bu kriterlere uyan hareket yok")
 
 
-COLS = ["#", "Ürün Kodu", "Ürün Açıklaması", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok.", "Lab No", "Baskı Tipi", "Zemin Rengi", "Baskı Desen No"]
+COLS = ["#", "Ürün Kodu", "Ürün Açıklaması", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok.", "Lab No", "Baskı Tipi", "Zemin Rengi", "Baskı Desen No", "Numune Kodu"]
 _GREEN = QColor("#1B5E20")
 _GREY  = QColor("#BDBDBD")
 _ALT   = QColor("#F0F4FF")
@@ -5329,6 +5339,7 @@ class FabricModel(QAbstractTableModel):
                 dict(r).get("print_type") or "",
                 dict(r).get("zemin_rengi") or "",
                 dict(r).get("baski_desen_no") or "",
+                dict(r).get("numune_code") or "",
             ))
         self._ids = [r[0] for r in self._rows]
         self.endResetModel()
@@ -5395,9 +5406,13 @@ class FabricModel(QAbstractTableModel):
                                 "BASKILI": QColor("#6A1B9A")}.get(r[6], QColor("#333")))
             if col == 7 and _AUTO_LOT.match(r[7]):
                 return QBrush(QColor("#78909C"))
+            if col == 19 and r[19]:
+                return QBrush(QColor("#E65100"))
 
         if role == Qt.ItemDataRole.FontRole:
             if col == 7 and _AUTO_LOT.match(r[7]):
+                f = QFont(); f.setItalic(True); return f
+            if col == 19 and r[19]:
                 f = QFont(); f.setItalic(True); return f
 
         if role == Qt.ItemDataRole.BackgroundRole:
@@ -5496,11 +5511,13 @@ class StockTable(QWidget):
         hdr.setSectionsMovable(True)   # sütun sürükle-bırak
 
         # Başlangıç genişlikleri (kayıtlı sütun düzeni yoksa kullanılır)
-        col_widths = [36, 100, 130, 160, 110, 90, 70, 90, 72, 65, 80, 110, 120, 130, 220, 90, 90, 90, 100]
+        col_widths = [36, 100, 130, 160, 110, 90, 70, 90, 72, 65, 80, 110, 120, 130, 220, 90, 90, 90, 100, 95]
         def _default_widths():
             for i, w in enumerate(col_widths):
                 self.table.setColumnWidth(i, w)
-        _wire_header_persistence(self.table, "stock_header", _default_widths)
+            # "Numune Kodu" (mantıksal 19) görsel olarak "Ürün Kodu"nun (görsel 1) yanına gelsin
+            hdr.moveSection(hdr.visualIndex(19), 2)
+        _wire_header_persistence(self.table, "stock_header_v2", _default_widths)
 
         layout.addWidget(self.table)
 
