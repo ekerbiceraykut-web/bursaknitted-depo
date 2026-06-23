@@ -137,7 +137,8 @@ def init_db():
             jakar_desen_ad TEXT DEFAULT '',
             jakar_desen_data TEXT DEFAULT '',
             jakar_jpeg_ad TEXT DEFAULT '',
-            jakar_jpeg_data TEXT DEFAULT ''
+            jakar_jpeg_data TEXT DEFAULT '',
+            product_status TEXT DEFAULT 'AKTİF'
         );
 
         CREATE TABLE IF NOT EXISTS armur_desenleri (
@@ -361,6 +362,7 @@ def init_db():
         "ALTER TABLE products ADD COLUMN jakar_desen_data TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN jakar_jpeg_ad TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN jakar_jpeg_data TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN product_status TEXT DEFAULT 'AKTİF'",
         """CREATE TABLE IF NOT EXISTS armur_desenleri (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -573,12 +575,15 @@ def _to_float(val):
     except Exception:
         return 0
 
-def get_all_products(search="", active_only=True):
+def get_all_products(search="", active_only=True, status_filter=""):
     conn = get_connection()
     q = "SELECT * FROM products WHERE 1=1"
     params = []
     if active_only:
         q += " AND active=1"
+    if status_filter:
+        q += " AND product_status=?"
+        params.append(status_filter)
     if search:
         q += " AND (product_code LIKE ? OR product_name LIKE ? OR reference_code LIKE ?)"
         s = f"%{search}%"
@@ -587,6 +592,24 @@ def get_all_products(search="", active_only=True):
     rows = conn.execute(q, params).fetchall()
     conn.close()
     return rows
+
+
+def _generate_numune_code(conn):
+    row = conn.execute(
+        "SELECT MAX(CAST(SUBSTR(product_code,5) AS INTEGER)) FROM products "
+        "WHERE product_code LIKE 'NMN-%'"
+    ).fetchone()
+    return f"NMN-{(row[0] or 0) + 1:03d}"
+
+
+def convert_numune_to_aktif(pid, new_code):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE products SET product_code=?, product_status='AKTİF' WHERE id=?",
+        (new_code.strip().upper(), pid)
+    )
+    conn.commit()
+    conn.close()
 
 def get_product(pid):
     conn = get_connection()
@@ -605,20 +628,22 @@ def add_product(product_code, product_name="", composition="", width="", gramaj=
                 dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
                 atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
                 jakar_desen_ad="", jakar_desen_data="",
-                jakar_jpeg_ad="", jakar_jpeg_data=""):
+                jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF"):
     conn = get_connection()
+    if product_status == "NUMUNE":
+        product_code = _generate_numune_code(conn)
     c = conn.execute(
         """INSERT INTO products (product_code, reference_code, product_name, composition, width, gramaj, shrinkage, price, supplier,
            cozgu1, cozgu2, atki1, atki2, atki3, atki4, dokuma_tipi,
            cozgu_sikligi, tarak_no, tarak_eni, atki_sikligi, orgu_desen, maliyet_json, teknik_aciklama, price_currency,
-           jakar_desen_ad, jakar_desen_data, jakar_jpeg_ad, jakar_jpeg_data)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           jakar_desen_ad, jakar_desen_data, jakar_jpeg_ad, jakar_jpeg_data, product_status)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(),
          cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
          dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json,
          teknik_aciklama.strip(), price_currency, jakar_desen_ad.strip(), jakar_desen_data,
-         jakar_jpeg_ad.strip(), jakar_jpeg_data)
+         jakar_jpeg_ad.strip(), jakar_jpeg_data, product_status)
     )
     conn.commit()
     pid = c.lastrowid
@@ -630,21 +655,21 @@ def update_product(pid, product_code, product_name, composition, width, gramaj, 
                    dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
                    atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
                    jakar_desen_ad="", jakar_desen_data="",
-                   jakar_jpeg_ad="", jakar_jpeg_data=""):
+                   jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF"):
     conn = get_connection()
     conn.execute(
         """UPDATE products SET product_code=?, reference_code=?, product_name=?, composition=?, width=?, gramaj=?, shrinkage=?,
            price=?, supplier=?, active=?,
            cozgu1=?, cozgu2=?, atki1=?, atki2=?, atki3=?, atki4=?, dokuma_tipi=?,
            cozgu_sikligi=?, tarak_no=?, tarak_eni=?, atki_sikligi=?, orgu_desen=?, maliyet_json=?, teknik_aciklama=?, price_currency=?,
-           jakar_desen_ad=?, jakar_desen_data=?, jakar_jpeg_ad=?, jakar_jpeg_data=?
+           jakar_desen_ad=?, jakar_desen_data=?, jakar_jpeg_ad=?, jakar_jpeg_data=?, product_status=?
            WHERE id=?""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(), int(active),
          cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
          dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json,
          teknik_aciklama.strip(), price_currency, jakar_desen_ad.strip(), jakar_desen_data,
-         jakar_jpeg_ad.strip(), jakar_jpeg_data, pid)
+         jakar_jpeg_ad.strip(), jakar_jpeg_data, product_status, pid)
     )
     conn.commit(); conn.close()
 

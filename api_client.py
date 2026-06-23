@@ -230,7 +230,7 @@ def add_product(product_code, product_name="", composition="", width="", gramaj=
                 dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
                 atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
                 jakar_desen_ad="", jakar_desen_data="",
-                jakar_jpeg_ad="", jakar_jpeg_data=""):
+                jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF"):
     r = _post("/api/products", {
         "product_code": product_code, "product_name": product_name,
         "composition": composition, "width": width,
@@ -244,6 +244,7 @@ def add_product(product_code, product_name="", composition="", width="", gramaj=
         "teknik_aciklama": teknik_aciklama, "price_currency": price_currency,
         "jakar_desen_ad": jakar_desen_ad, "jakar_desen_data": jakar_desen_data,
         "jakar_jpeg_ad": jakar_jpeg_ad, "jakar_jpeg_data": jakar_jpeg_data,
+        "product_status": product_status,
     })
     return (r or {}).get("id")
 
@@ -252,7 +253,7 @@ def update_product(pid, product_code, product_name, composition, width, gramaj, 
                    dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
                    atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
                    jakar_desen_ad="", jakar_desen_data="",
-                   jakar_jpeg_ad="", jakar_jpeg_data=""):
+                   jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF"):
     _put(f"/api/products/{pid}", {
         "product_code": product_code, "product_name": product_name,
         "composition": composition, "width": width,
@@ -267,7 +268,11 @@ def update_product(pid, product_code, product_name, composition, width, gramaj, 
         "teknik_aciklama": teknik_aciklama, "price_currency": price_currency,
         "jakar_desen_ad": jakar_desen_ad, "jakar_desen_data": jakar_desen_data,
         "jakar_jpeg_ad": jakar_jpeg_ad, "jakar_jpeg_data": jakar_jpeg_data,
+        "product_status": product_status,
     })
+
+def convert_numune_to_aktif(pid, new_code):
+    _put(f"/api/products/{pid}/convert", {"new_code": new_code})
 
 # ── Armür Desenleri ───────────────────────────────────────────────────────────
 

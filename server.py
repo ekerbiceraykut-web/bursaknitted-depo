@@ -393,7 +393,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("atki_sikligi",""), body.get("orgu_desen",""), body.get("maliyet_json",""),
                     body.get("teknik_aciklama",""), body.get("price_currency","USD"),
                     body.get("jakar_desen_ad",""), body.get("jakar_desen_data",""),
-                    body.get("jakar_jpeg_ad",""), body.get("jakar_jpeg_data","")
+                    body.get("jakar_jpeg_ad",""), body.get("jakar_jpeg_data",""),
+                    body.get("product_status","AKTİF")
                 )
                 self._send(_ok({"id": pid}))
 
@@ -501,6 +502,10 @@ class APIHandler(BaseHTTPRequestHandler):
                                    body.get("tax_no",""), body.get("active",1),
                                    body.get("email",""))
                 self._send(_ok())
+            elif path.startswith("/api/products/") and path.endswith("/convert"):
+                pid = int(path.split("/")[-2])
+                db.convert_numune_to_aktif(pid, body.get("new_code",""))
+                self._send(_ok())
             elif path.startswith("/api/products/"):
                 pid = int(path.split("/")[-1])
                 db.update_product(pid,
@@ -516,7 +521,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("atki_sikligi",""), body.get("orgu_desen",""), body.get("maliyet_json",""),
                     body.get("teknik_aciklama",""), body.get("price_currency","USD"),
                     body.get("jakar_desen_ad",""), body.get("jakar_desen_data",""),
-                    body.get("jakar_jpeg_ad",""), body.get("jakar_jpeg_data","")
+                    body.get("jakar_jpeg_ad",""), body.get("jakar_jpeg_data",""),
+                    body.get("product_status","AKTİF")
                 )
                 self._send(_ok())
             elif path.startswith("/api/armur/"):

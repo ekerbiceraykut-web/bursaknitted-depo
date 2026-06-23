@@ -2331,7 +2331,13 @@ class ProductManagementDialog(QDialog):
         top = QHBoxLayout()
         self.search = QLineEdit(); self.search.setPlaceholderText("Ürün kodu veya adı...")
         self.search.textChanged.connect(lambda: self._load(self.search.text()))
-        top.addWidget(QLabel("Ara:")); top.addWidget(self.search); top.addStretch()
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.search)
+        top.addWidget(QLabel("Göster:"))
+        self.status_filter = QComboBox()
+        self.status_filter.addItems(["Tümü", "AKTİF", "NUMUNE"])
+        self.status_filter.currentIndexChanged.connect(lambda: self._load(self.search.text()))
+        top.addWidget(self.status_filter)
+        top.addStretch()
         lay.addLayout(top)
 
         self.table = QTableWidget()
@@ -2353,20 +2359,28 @@ class ProductManagementDialog(QDialog):
         btn_del   = QPushButton("✕ Sil")
         btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
         btn_del.clicked.connect(self._delete)
+        self.btn_convert = QPushButton("🔄 Aktife Dönüştür")
+        self.btn_convert.setStyleSheet(
+            "background:#E65100;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
+        self.btn_convert.clicked.connect(self._convert_numune)
         btn_excel = QPushButton("📥 Excel'den İçe Aktar")
         btn_excel.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
         btn_excel.clicked.connect(self._import_excel)
         btn_close = QPushButton("Kapat"); btn_close.clicked.connect(self.accept)
-        for b in (btn_add, btn_edit, btn_del, btn_excel):
+        for b in (btn_add, btn_edit, btn_del, self.btn_convert, btn_excel):
             btn_row.addWidget(b)
         btn_row.addStretch(); btn_row.addWidget(btn_close)
         lay.addLayout(btn_row)
 
     def _load(self, search=""):
-        rows = db.get_all_products(search=search, active_only=False)
+        sf = self.status_filter.currentText()
+        status_filter = sf if sf != "Tümü" else ""
+        rows = db.get_all_products(search=search, active_only=False, status_filter=status_filter)
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(rows))
+        italic_font = QFont(); italic_font.setItalic(True)
         for i, r in enumerate(rows):
+            is_numune = (r["product_status"] if "product_status" in r.keys() else "AKTİF") == "NUMUNE"
             code_item = QTableWidgetItem(r["product_code"] or "")
             code_item.setData(Qt.ItemDataRole.UserRole, r["id"])
             self.table.setItem(i, 0, code_item)
@@ -2380,14 +2394,27 @@ class ProductManagementDialog(QDialog):
             price_item.setData(Qt.ItemDataRole.UserRole, price)
             self.table.setItem(i, 6, price_item)
             self.table.setItem(i, 7, QTableWidgetItem(r["supplier"] or ""))
-            s = QTableWidgetItem("✅ Aktif" if r["active"] else "⛔ Pasif")
-            s.setForeground(QBrush(QColor("#2E7D32" if r["active"] else "#C62828")))
+            if is_numune:
+                s = QTableWidgetItem("🔶 Numune")
+                s.setForeground(QBrush(QColor("#E65100")))
+            elif r["active"]:
+                s = QTableWidgetItem("✅ Aktif")
+                s.setForeground(QBrush(QColor("#2E7D32")))
+            else:
+                s = QTableWidgetItem("⛔ Pasif")
+                s.setForeground(QBrush(QColor("#C62828")))
             self.table.setItem(i, 8, s)
+            if is_numune:
+                for col in range(self.table.columnCount()):
+                    cell = self.table.item(i, col)
+                    if cell:
+                        cell.setFont(italic_font)
+                        cell.setForeground(QBrush(QColor("#E65100")))
             for col in range(self.table.columnCount()):
                 cell = self.table.item(i, col)
                 if cell and cell.text():
-                    cell.setToolTip(cell.text())   # sığmayan yazılar üzerine gelince okunur
-        self.table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
+                    cell.setToolTip(cell.text())
+        self.table.setSortingEnabled(True)
         _wire_header_persistence(self.table, "products_header")
 
     def _selected_id(self):
@@ -2407,6 +2434,11 @@ class ProductManagementDialog(QDialog):
 
         # ── Sekme 1: Genel ────────────────────────────────────────
         tab1 = QWidget(); f1 = QFormLayout(tab1); f1.setSpacing(8)
+        cur_status = (p.get("product_status") or "AKTİF") if p else "AKTİF"
+        dlg.product_status = QComboBox()
+        dlg.product_status.addItems(["AKTİF", "NUMUNE"])
+        dlg.product_status.setCurrentText(cur_status)
+
         dlg.code     = QLineEdit(p["product_code"] if p else "")
         dlg.ref      = QLineEdit(p.get("reference_code","") if p else "")
         dlg.name     = QLineEdit(p.get("product_name","") if p else "")
@@ -2422,6 +2454,22 @@ class ProductManagementDialog(QDialog):
         _price_w = QWidget(); _ph = QHBoxLayout(_price_w); _ph.setContentsMargins(0,0,0,0); _ph.setSpacing(6)
         _ph.addWidget(dlg.price, 1); _ph.addWidget(dlg.price_currency)
         dlg.supplier = QLineEdit(p.get("supplier","") if p else "")
+
+        def _on_status_change(txt):
+            is_numune = txt == "NUMUNE"
+            dlg.code.setReadOnly(is_numune)
+            if is_numune:
+                dlg.code.clear()
+                dlg.code.setPlaceholderText("Otomatik atanacak (NMN-XXX)")
+                dlg.code.setStyleSheet("color:#888; background:#FFF8E1;")
+            else:
+                dlg.code.setPlaceholderText("")
+                dlg.code.setStyleSheet("")
+        dlg.product_status.currentTextChanged.connect(_on_status_change)
+        if cur_status == "NUMUNE":
+            _on_status_change("NUMUNE")
+
+        f1.addRow("Ürün Durumu:", dlg.product_status)
         f1.addRow("Ürün Kodu *:", dlg.code)
         f1.addRow("Ürün Adı/Bilgisi:", dlg.name)
         f1.addRow("Kompozisyon:", dlg.comp)
@@ -2577,7 +2625,8 @@ class ProductManagementDialog(QDialog):
         lay.addWidget(tabs)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         def _try_accept():
-            if not dlg.code.text().strip():
+            is_numune = dlg.product_status.currentText() == "NUMUNE"
+            if not is_numune and not dlg.code.text().strip():
                 QMessageBox.warning(dlg, "Eksik Alan", "Ürün kodu zorunludur.\nLütfen Genel sekmesinde ürün kodunu girin.")
                 tabs.setCurrentIndex(0)
                 dlg.code.setFocus()
@@ -2590,8 +2639,9 @@ class ProductManagementDialog(QDialog):
 
     def _collect_product(self, dlg, pid=None, active=1):
         """Dialog alanlarından ürün verisini toplar ve db'ye yazar."""
+        product_status = dlg.product_status.currentText()
         code = dlg.code.text().strip()
-        if not code:
+        if product_status != "NUMUNE" and not code:
             QMessageBox.warning(self, "Hata", "Ürün kodu zorunlu!")
             return False
         mw = dlg.maliyet_w
@@ -2616,6 +2666,7 @@ class ProductManagementDialog(QDialog):
             jakar_desen_data=dlg.jakar_w.get_jc5_b64(),
             jakar_jpeg_ad=dlg.jakar_w.get_jpeg_ad(),
             jakar_jpeg_data=dlg.jakar_w.get_jpeg_b64(),
+            product_status=product_status,
         )
         try:
             if pid:
@@ -2646,6 +2697,54 @@ class ProductManagementDialog(QDialog):
         if QMessageBox.question(self,"Sil","Ürün silinsin mi?",
                 QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             db.delete_product(pid); self._load(self.search.text())
+
+    def _convert_numune(self):
+        pid = self._selected_id()
+        if not pid: return
+        p = db.get_product(pid)
+        if not p:
+            return
+        if isinstance(p, dict):
+            p_status = p.get("product_status") or "AKTİF"
+            p_code   = p.get("product_code") or ""
+        else:
+            p = dict(p)
+            p_status = p.get("product_status") or "AKTİF"
+            p_code   = p.get("product_code") or ""
+        if p_status != "NUMUNE":
+            QMessageBox.information(self, "Bilgi", f"'{p_code}' ürünü zaten aktif.\nSadece NUMUNE ürünler dönüştürülebilir.")
+            return
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Numune → Aktif Dönüşüm")
+        dlg.setMinimumWidth(360)
+        lay = QVBoxLayout(dlg)
+        form = QFormLayout()
+        lbl_old = QLabel(p_code)
+        lbl_old.setStyleSheet("color:#E65100;font-weight:bold;")
+        form.addRow("Numune Kodu:", lbl_old)
+        new_code_edit = QLineEdit()
+        new_code_edit.setPlaceholderText("Yeni ürün kodu (ör. BK-1234)")
+        form.addRow("Yeni Ürün Kodu *:", new_code_edit)
+        lay.addLayout(form)
+        btns = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        btns.button(QDialogButtonBox.StandardButton.Ok).setText("✅ Aktife Dönüştür")
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        lay.addWidget(btns)
+        if not dlg.exec():
+            return
+        new_code = new_code_edit.text().strip().upper()
+        if not new_code:
+            QMessageBox.warning(self, "Eksik Alan", "Yeni ürün kodu boş olamaz.")
+            return
+        try:
+            db.convert_numune_to_aktif(pid, new_code)
+            self._load(self.search.text())
+            QMessageBox.information(self, "Dönüştürüldü",
+                f"Numune ürün aktife dönüştürüldü:\n{p_code}  →  {new_code}")
+        except Exception as e:
+            QMessageBox.critical(self, "Hata", f"Dönüşüm başarısız:\n{e}")
 
     def _import_excel(self):
         path, _ = QFileDialog.getOpenFileName(self,"Ürün Excel Dosyası","","Excel (*.xlsx *.xls)")
