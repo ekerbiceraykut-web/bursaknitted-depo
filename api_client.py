@@ -212,9 +212,11 @@ def import_suppliers_bulk(records):
 
 # ── Ürün Kataloğu ────────────────────────────────────────────────
 
-def get_all_products(search="", active_only=True):
-    return _get("/api/products", {"search": search,
-                                  "active_only": "1" if active_only else "0"}) or []
+def get_all_products(search="", active_only=True, status_filter=""):
+    params = {"search": search, "active_only": "1" if active_only else "0"}
+    if status_filter:
+        params["status_filter"] = status_filter
+    return _get("/api/products", params) or []
 
 def get_product(pid):
     return _get(f"/api/products/{pid}")

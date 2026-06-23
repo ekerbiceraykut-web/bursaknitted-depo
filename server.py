@@ -143,7 +143,8 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/products":
                 rows = db.get_all_products(
                     search=qs.get("search",[""])[0],
-                    active_only=qs.get("active_only",["1"])[0] == "1")
+                    active_only=qs.get("active_only",["1"])[0] == "1",
+                    status_filter=qs.get("status_filter",[""])[0])
                 self._send(_ok([dict(r) for r in rows]))
 
             elif path.startswith("/api/products/"):
