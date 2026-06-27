@@ -324,6 +324,70 @@ def init_db():
         );
     """)
 
+    # ── CRM modülü (Excel: müşteri listesi / ziyaret / fiili satış / sipariş) ──
+    c.executescript("""
+        CREATE TABLE IF NOT EXISTS crm_customers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            musteri_turu TEXT DEFAULT '',
+            pazarlamaci TEXT DEFAULT '',
+            firma TEXT DEFAULT '',
+            notlar TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS crm_visits (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            durum TEXT DEFAULT 'GERÇEKLEŞEN',
+            tarih TEXT DEFAULT '',
+            pazarlamaci TEXT DEFAULT '',
+            musteri TEXT DEFAULT '',
+            musteri_tipi TEXT DEFAULT '',
+            notlar TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS crm_sales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            musteri TEXT DEFAULT '',
+            metre REAL DEFAULT 0,
+            tutar REAL DEFAULT 0,
+            doviz TEXT DEFAULT 'USD',
+            usd_tutar REAL DEFAULT 0,
+            ay TEXT DEFAULT '',
+            pazarlamaci TEXT DEFAULT '',
+            musteri_tipi TEXT DEFAULT '',
+            is_iade INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE TABLE IF NOT EXISTS crm_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            musteri TEXT DEFAULT '',
+            pazarlamaci TEXT DEFAULT '',
+            musteri_tipi TEXT DEFAULT '',
+            tarih TEXT DEFAULT '',
+            kod TEXT DEFAULT '',
+            renk TEXT DEFAULT '',
+            miktar REAL DEFAULT 0,
+            maliyet_fiyati REAL DEFAULT 0,
+            satis_fiyati REAL DEFAULT 0,
+            kar_orani REAL DEFAULT 0,
+            teorik_kar_usd REAL DEFAULT 0,
+            kar_tl REAL DEFAULT 0,
+            vade TEXT DEFAULT '',
+            ciro REAL DEFAULT 0,
+            ciro_usd REAL DEFAULT 0,
+            usd_kuru REAL DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_crm_cust_paz ON crm_customers(pazarlamaci);
+        CREATE INDEX IF NOT EXISTS idx_crm_visits_paz ON crm_visits(pazarlamaci);
+        CREATE INDEX IF NOT EXISTS idx_crm_sales_paz ON crm_sales(pazarlamaci);
+        CREATE INDEX IF NOT EXISTS idx_crm_orders_paz ON crm_orders(pazarlamaci);
+    """)
+
     # Migrations — mevcut DB'ye yeni sütunlar
     migrations = [
         "ALTER TABLE fabrics ADD COLUMN birim_fiyat REAL DEFAULT 0",
@@ -512,6 +576,327 @@ def import_customers_bulk(records):
             (name, r.get("code",""), r.get("phone",""), r.get("address",""), r.get("tax_no",""))
         )
     conn.commit(); conn.close()
+
+
+# ══ CRM modülü ══════════════════════════════════════════════════
+# Pazarlamacı listesi (özet kolonları için sabit sıra; veride başkaları da olabilir)
+CRM_PAZARLAMACILAR = ["AYKUT EKERBİÇER", "AHMET AYAT", "SEYHAN ZÜNBÜL", "İNAN ACAR", "SERTAÇ İŞLER"]
+CRM_MUSTERI_TURLERI = ["MEVCUT MÜŞTERİ", "HEDEF MÜŞTERİ", "POTANSİYEL MÜŞTERİ"]
+CRM_MUSTERI_TIPLERI = ["MEVCUT", "POTANSİYEL", "HEDEF"]
+CRM_DOVIZLER = ["USD", "EUR", "TL", "GBP"]
+
+
+# ── CRM: Müşteri Listesi ────────────────────────────────────────
+def get_crm_customers(search="", pazarlamaci="", musteri_turu="", active_only=False):
+    conn = get_connection()
+    q = "SELECT * FROM crm_customers WHERE 1=1"
+    p = []
+    if active_only:
+        q += " AND active=1"
+    if pazarlamaci:
+        q += " AND pazarlamaci=?"; p.append(pazarlamaci)
+    if musteri_turu:
+        q += " AND musteri_turu=?"; p.append(musteri_turu)
+    if search:
+        q += " AND (firma LIKE ? OR pazarlamaci LIKE ?)"
+        s = f"%{search}%"; p.extend([s, s])
+    q += " ORDER BY pazarlamaci, firma"
+    rows = conn.execute(q, p).fetchall()
+    conn.close()
+    return rows
+
+def add_crm_customer(musteri_turu="", pazarlamaci="", firma="", notlar=""):
+    conn = get_connection()
+    c = conn.execute(
+        "INSERT INTO crm_customers (musteri_turu, pazarlamaci, firma, notlar) VALUES (?,?,?,?)",
+        (musteri_turu.strip(), pazarlamaci.strip(), firma.strip(), notlar.strip()))
+    conn.commit(); cid = c.lastrowid; conn.close()
+    return cid
+
+def update_crm_customer(cid, musteri_turu="", pazarlamaci="", firma="", notlar="", active=1):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE crm_customers SET musteri_turu=?, pazarlamaci=?, firma=?, notlar=?, active=? WHERE id=?",
+        (musteri_turu.strip(), pazarlamaci.strip(), firma.strip(), notlar.strip(), int(active), cid))
+    conn.commit(); conn.close()
+
+def delete_crm_customer(cid):
+    conn = get_connection()
+    conn.execute("DELETE FROM crm_customers WHERE id=?", (cid,))
+    conn.commit(); conn.close()
+
+
+# ── CRM: Ziyaretler (gerçekleşen / planlanan) ───────────────────
+def get_crm_visits(search="", durum="", pazarlamaci=""):
+    conn = get_connection()
+    q = "SELECT * FROM crm_visits WHERE 1=1"
+    p = []
+    if durum:
+        q += " AND durum=?"; p.append(durum)
+    if pazarlamaci:
+        q += " AND pazarlamaci=?"; p.append(pazarlamaci)
+    if search:
+        q += " AND (musteri LIKE ? OR pazarlamaci LIKE ? OR notlar LIKE ?)"
+        s = f"%{search}%"; p.extend([s, s, s])
+    q += " ORDER BY tarih DESC, id DESC"
+    rows = conn.execute(q, p).fetchall()
+    conn.close()
+    return rows
+
+def add_crm_visit(durum="GERÇEKLEŞEN", tarih="", pazarlamaci="", musteri="", musteri_tipi="", notlar=""):
+    conn = get_connection()
+    c = conn.execute(
+        "INSERT INTO crm_visits (durum, tarih, pazarlamaci, musteri, musteri_tipi, notlar) "
+        "VALUES (?,?,?,?,?,?)",
+        (durum, tarih.strip(), pazarlamaci.strip(), musteri.strip(), musteri_tipi.strip(), notlar.strip()))
+    conn.commit(); vid = c.lastrowid; conn.close()
+    return vid
+
+def update_crm_visit(vid, durum="GERÇEKLEŞEN", tarih="", pazarlamaci="", musteri="", musteri_tipi="", notlar=""):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE crm_visits SET durum=?, tarih=?, pazarlamaci=?, musteri=?, musteri_tipi=?, notlar=? WHERE id=?",
+        (durum, tarih.strip(), pazarlamaci.strip(), musteri.strip(), musteri_tipi.strip(), notlar.strip(), vid))
+    conn.commit(); conn.close()
+
+def delete_crm_visit(vid):
+    conn = get_connection()
+    conn.execute("DELETE FROM crm_visits WHERE id=?", (vid,))
+    conn.commit(); conn.close()
+
+
+# ── CRM: Fiili Satışlar ─────────────────────────────────────────
+def get_crm_sales(search="", pazarlamaci="", year=""):
+    conn = get_connection()
+    q = "SELECT * FROM crm_sales WHERE 1=1"
+    p = []
+    if pazarlamaci:
+        q += " AND pazarlamaci=?"; p.append(pazarlamaci)
+    if year:
+        q += " AND substr(ay,1,4)=?"; p.append(str(year))
+    if search:
+        q += " AND (musteri LIKE ? OR pazarlamaci LIKE ?)"
+        s = f"%{search}%"; p.extend([s, s])
+    q += " ORDER BY ay DESC, id DESC"
+    rows = conn.execute(q, p).fetchall()
+    conn.close()
+    return rows
+
+def add_crm_sale(musteri="", metre=0, tutar=0, doviz="USD", usd_tutar=0, ay="",
+                 pazarlamaci="", musteri_tipi="", is_iade=0):
+    conn = get_connection()
+    c = conn.execute(
+        "INSERT INTO crm_sales (musteri, metre, tutar, doviz, usd_tutar, ay, pazarlamaci, "
+        "musteri_tipi, is_iade) VALUES (?,?,?,?,?,?,?,?,?)",
+        (musteri.strip(), _to_float(metre), _to_float(tutar), doviz, _to_float(usd_tutar),
+         ay.strip(), pazarlamaci.strip(), musteri_tipi.strip(), int(is_iade)))
+    conn.commit(); sid = c.lastrowid; conn.close()
+    return sid
+
+def update_crm_sale(sid, musteri="", metre=0, tutar=0, doviz="USD", usd_tutar=0, ay="",
+                    pazarlamaci="", musteri_tipi="", is_iade=0):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE crm_sales SET musteri=?, metre=?, tutar=?, doviz=?, usd_tutar=?, ay=?, "
+        "pazarlamaci=?, musteri_tipi=?, is_iade=? WHERE id=?",
+        (musteri.strip(), _to_float(metre), _to_float(tutar), doviz, _to_float(usd_tutar),
+         ay.strip(), pazarlamaci.strip(), musteri_tipi.strip(), int(is_iade), sid))
+    conn.commit(); conn.close()
+
+def delete_crm_sale(sid):
+    conn = get_connection()
+    conn.execute("DELETE FROM crm_sales WHERE id=?", (sid,))
+    conn.commit(); conn.close()
+
+
+# ── CRM: Siparişler (kâr analizli) ──────────────────────────────
+def get_crm_orders(search="", pazarlamaci="", year=""):
+    conn = get_connection()
+    q = "SELECT * FROM crm_orders WHERE 1=1"
+    p = []
+    if pazarlamaci:
+        q += " AND pazarlamaci=?"; p.append(pazarlamaci)
+    if year:
+        q += " AND substr(tarih,1,4)=?"; p.append(str(year))
+    if search:
+        q += " AND (musteri LIKE ? OR pazarlamaci LIKE ? OR kod LIKE ?)"
+        s = f"%{search}%"; p.extend([s, s, s])
+    q += " ORDER BY tarih DESC, id DESC"
+    rows = conn.execute(q, p).fetchall()
+    conn.close()
+    return rows
+
+def add_crm_order(musteri="", pazarlamaci="", musteri_tipi="", tarih="", kod="", renk="",
+                  miktar=0, maliyet_fiyati=0, satis_fiyati=0, kar_orani=0, teorik_kar_usd=0,
+                  kar_tl=0, vade="", ciro=0, ciro_usd=0, usd_kuru=0):
+    conn = get_connection()
+    c = conn.execute(
+        "INSERT INTO crm_orders (musteri, pazarlamaci, musteri_tipi, tarih, kod, renk, miktar, "
+        "maliyet_fiyati, satis_fiyati, kar_orani, teorik_kar_usd, kar_tl, vade, ciro, ciro_usd, "
+        "usd_kuru) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (musteri.strip(), pazarlamaci.strip(), musteri_tipi.strip(), tarih.strip(), kod.strip(),
+         renk.strip(), _to_float(miktar), _to_float(maliyet_fiyati), _to_float(satis_fiyati),
+         _to_float(kar_orani), _to_float(teorik_kar_usd), _to_float(kar_tl), vade.strip(),
+         _to_float(ciro), _to_float(ciro_usd), _to_float(usd_kuru)))
+    conn.commit(); oid = c.lastrowid; conn.close()
+    return oid
+
+def update_crm_order(oid, musteri="", pazarlamaci="", musteri_tipi="", tarih="", kod="", renk="",
+                     miktar=0, maliyet_fiyati=0, satis_fiyati=0, kar_orani=0, teorik_kar_usd=0,
+                     kar_tl=0, vade="", ciro=0, ciro_usd=0, usd_kuru=0):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE crm_orders SET musteri=?, pazarlamaci=?, musteri_tipi=?, tarih=?, kod=?, renk=?, "
+        "miktar=?, maliyet_fiyati=?, satis_fiyati=?, kar_orani=?, teorik_kar_usd=?, kar_tl=?, "
+        "vade=?, ciro=?, ciro_usd=?, usd_kuru=? WHERE id=?",
+        (musteri.strip(), pazarlamaci.strip(), musteri_tipi.strip(), tarih.strip(), kod.strip(),
+         renk.strip(), _to_float(miktar), _to_float(maliyet_fiyati), _to_float(satis_fiyati),
+         _to_float(kar_orani), _to_float(teorik_kar_usd), _to_float(kar_tl), vade.strip(),
+         _to_float(ciro), _to_float(ciro_usd), _to_float(usd_kuru), oid))
+    conn.commit(); conn.close()
+
+def delete_crm_order(oid):
+    conn = get_connection()
+    conn.execute("DELETE FROM crm_orders WHERE id=?", (oid,))
+    conn.commit(); conn.close()
+
+
+# ── CRM: Toplu içe aktarma (Excel) ──────────────────────────────
+def crm_import_bulk(customers=None, visits=None, sales=None, orders=None, replace=False):
+    """Excel'den okunan kayıtları toplu ekler. replace=True ise ilgili tabloları önce temizler."""
+    conn = get_connection()
+    c = conn.cursor()
+    counts = {"customers": 0, "visits": 0, "sales": 0, "orders": 0}
+    if replace and (customers is not None): c.execute("DELETE FROM crm_customers")
+    if replace and (visits is not None):    c.execute("DELETE FROM crm_visits")
+    if replace and (sales is not None):     c.execute("DELETE FROM crm_sales")
+    if replace and (orders is not None):    c.execute("DELETE FROM crm_orders")
+    for r in (customers or []):
+        c.execute("INSERT INTO crm_customers (musteri_turu, pazarlamaci, firma, notlar) VALUES (?,?,?,?)",
+                  (r.get("musteri_turu",""), r.get("pazarlamaci",""), r.get("firma",""), r.get("notlar","")))
+        counts["customers"] += 1
+    for r in (visits or []):
+        c.execute("INSERT INTO crm_visits (durum, tarih, pazarlamaci, musteri, musteri_tipi, notlar) "
+                  "VALUES (?,?,?,?,?,?)",
+                  (r.get("durum","GERÇEKLEŞEN"), r.get("tarih",""), r.get("pazarlamaci",""),
+                   r.get("musteri",""), r.get("musteri_tipi",""), r.get("notlar","")))
+        counts["visits"] += 1
+    for r in (sales or []):
+        c.execute("INSERT INTO crm_sales (musteri, metre, tutar, doviz, usd_tutar, ay, pazarlamaci, "
+                  "musteri_tipi, is_iade) VALUES (?,?,?,?,?,?,?,?,?)",
+                  (r.get("musteri",""), _to_float(r.get("metre",0)), _to_float(r.get("tutar",0)),
+                   r.get("doviz","USD"), _to_float(r.get("usd_tutar",0)), r.get("ay",""),
+                   r.get("pazarlamaci",""), r.get("musteri_tipi",""), int(r.get("is_iade",0))))
+        counts["sales"] += 1
+    for r in (orders or []):
+        c.execute("INSERT INTO crm_orders (musteri, pazarlamaci, musteri_tipi, tarih, kod, renk, miktar, "
+                  "maliyet_fiyati, satis_fiyati, kar_orani, teorik_kar_usd, kar_tl, vade, ciro, ciro_usd, "
+                  "usd_kuru) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (r.get("musteri",""), r.get("pazarlamaci",""), r.get("musteri_tipi",""), r.get("tarih",""),
+                   r.get("kod",""), r.get("renk",""), _to_float(r.get("miktar",0)),
+                   _to_float(r.get("maliyet_fiyati",0)), _to_float(r.get("satis_fiyati",0)),
+                   _to_float(r.get("kar_orani",0)), _to_float(r.get("teorik_kar_usd",0)),
+                   _to_float(r.get("kar_tl",0)), r.get("vade",""), _to_float(r.get("ciro",0)),
+                   _to_float(r.get("ciro_usd",0)), _to_float(r.get("usd_kuru",0))))
+        counts["orders"] += 1
+    conn.commit(); conn.close()
+    return counts
+
+
+# ── CRM: Analiz (5 Ways — Pazarlamacı × Ay) ─────────────────────
+def get_crm_years():
+    conn = get_connection()
+    years = set()
+    for tbl, col in (("crm_sales", "ay"), ("crm_orders", "tarih"), ("crm_visits", "tarih")):
+        for row in conn.execute(f"SELECT DISTINCT substr({col},1,4) y FROM {tbl} WHERE {col}!=''"):
+            if row["y"]:
+                years.add(row["y"])
+    conn.close()
+    return sorted(years, reverse=True)
+
+def get_crm_analysis(year=""):
+    """Pazarlamacı bazında aylık (1-12) ve yıllık KPI'ları döner.
+    Dönüş: {pazarlamaci: {"months": {ay: {metrikler}}, "yearly": {metrikler}}}"""
+    conn = get_connection()
+    yflt = str(year) if year else None
+
+    def _empty():
+        return {"visit_yeni": 0, "visit_mevcut": 0, "yeni_sip_adet": 0, "yeni_sip_metre": 0.0,
+                "fiili_metre": 0.0, "fiili_usd": 0.0, "sip_adet": 0, "sip_metre": 0.0,
+                "sip_ciro_usd": 0.0, "teorik_kar_usd": 0.0, "kar_orani_top": 0.0}
+
+    data = {}
+    def _paz(name):
+        name = name or "—"
+        if name not in data:
+            data[name] = {"months": {m: _empty() for m in range(1, 13)}, "yearly": _empty()}
+        return data[name]
+
+    def _ym(s):
+        # 'YYYY-MM-DD' veya 'YYYY-MM...' -> (year, month)
+        if not s or len(s) < 7:
+            return None, None
+        return s[0:4], int(s[5:7]) if s[5:7].isdigit() else None
+
+    # 1) Ziyaretler — gerçekleşen, distinct müşteri (yeni=POTANSİYEL/HEDEF, mevcut=MEVCUT)
+    visit_sets = {}  # (paz, m, tip_grup) -> set(musteri)
+    for r in conn.execute("SELECT pazarlamaci, tarih, musteri, musteri_tipi FROM crm_visits "
+                          "WHERE durum='GERÇEKLEŞEN' AND tarih!=''"):
+        y, m = _ym(r["tarih"])
+        if not m or (yflt and y != yflt):
+            continue
+        grup = "mevcut" if (r["musteri_tipi"] or "").upper().startswith("MEVCUT") else "yeni"
+        visit_sets.setdefault((r["pazarlamaci"], m, grup), set()).add((r["musteri"] or "").strip().upper())
+    for (paz, m, grup), musteriler in visit_sets.items():
+        d = _paz(paz)
+        key = "visit_mevcut" if grup == "mevcut" else "visit_yeni"
+        d["months"][m][key] += len(musteriler)
+        d["yearly"][key] += len(musteriler)
+
+    # 2) Fiili satışlar — net (iade her zaman düşülür; veride iade işareti karışık olabilir)
+    for r in conn.execute("SELECT pazarlamaci, ay, metre, usd_tutar, is_iade FROM crm_sales WHERE ay!=''"):
+        y, m = _ym(r["ay"])
+        if not m or (yflt and y != yflt):
+            continue
+        d = _paz(r["pazarlamaci"])
+        metre = r["metre"] or 0
+        usd = r["usd_tutar"] or 0
+        if r["is_iade"]:
+            metre = -abs(metre); usd = -abs(usd)
+        for scope in (d["months"][m], d["yearly"]):
+            scope["fiili_metre"] += metre
+            scope["fiili_usd"]   += usd
+
+    # 3) Siparişler — adet/metre/ciro/kâr
+    order_rows = {}  # (paz,m) -> list of (ciro_usd, kar_orani)
+    for r in conn.execute("SELECT pazarlamaci, tarih, musteri_tipi, miktar, ciro_usd, "
+                          "teorik_kar_usd, kar_orani FROM crm_orders WHERE tarih!=''"):
+        y, m = _ym(r["tarih"])
+        if not m or (yflt and y != yflt):
+            continue
+        d = _paz(r["pazarlamaci"])
+        for scope in (d["months"][m], d["yearly"]):
+            scope["sip_adet"] += 1
+            scope["sip_metre"] += (r["miktar"] or 0)
+            scope["sip_ciro_usd"] += (r["ciro_usd"] or 0)
+            scope["teorik_kar_usd"] += (r["teorik_kar_usd"] or 0)
+            scope["kar_orani_top"] += (r["kar_orani"] or 0)
+        tip = (r["musteri_tipi"] or "").upper()
+        if tip and not tip.startswith("MEVCUT"):
+            for scope in (d["months"][m], d["yearly"]):
+                scope["yeni_sip_adet"] += 1
+                scope["yeni_sip_metre"] += (r["miktar"] or 0)
+    conn.close()
+
+    # Ortalama alanları türet: ort sipariş tutarı = ciro/adet,
+    # ort kâr oranı = ağırlıklı (toplam teorik kâr / toplam ciro)
+    for paz, d in data.items():
+        for scope in list(d["months"].values()) + [d["yearly"]]:
+            adet = scope["sip_adet"]
+            ciro = scope["sip_ciro_usd"]
+            scope["ort_ciro_usd"] = (ciro / adet) if adet else 0.0
+            scope["ort_kar_orani"] = (scope["teorik_kar_usd"] / ciro) if ciro else 0.0
+    return data
 
 
 # ── Tedarikçiler ────────────────────────────────────────────────

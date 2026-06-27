@@ -127,6 +127,37 @@ class APIHandler(BaseHTTPRequestHandler):
                 r = db.get_customer(cid)
                 self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
 
+            # ── CRM (GET) ─────────────────────────────────────────
+            elif path == "/api/crm/customers":
+                rows = db.get_crm_customers(
+                    search=qs.get("search",[""])[0],
+                    pazarlamaci=qs.get("pazarlamaci",[""])[0],
+                    musteri_turu=qs.get("musteri_turu",[""])[0],
+                    active_only=qs.get("active_only",["0"])[0] == "1")
+                self._send(_ok([dict(r) for r in rows]))
+            elif path == "/api/crm/visits":
+                rows = db.get_crm_visits(
+                    search=qs.get("search",[""])[0],
+                    durum=qs.get("durum",[""])[0],
+                    pazarlamaci=qs.get("pazarlamaci",[""])[0])
+                self._send(_ok([dict(r) for r in rows]))
+            elif path == "/api/crm/sales":
+                rows = db.get_crm_sales(
+                    search=qs.get("search",[""])[0],
+                    pazarlamaci=qs.get("pazarlamaci",[""])[0],
+                    year=qs.get("year",[""])[0])
+                self._send(_ok([dict(r) for r in rows]))
+            elif path == "/api/crm/orders":
+                rows = db.get_crm_orders(
+                    search=qs.get("search",[""])[0],
+                    pazarlamaci=qs.get("pazarlamaci",[""])[0],
+                    year=qs.get("year",[""])[0])
+                self._send(_ok([dict(r) for r in rows]))
+            elif path == "/api/crm/years":
+                self._send(_ok(db.get_crm_years()))
+            elif path == "/api/crm/analysis":
+                self._send(_ok(db.get_crm_analysis(year=qs.get("year",[""])[0])))
+
             # ── Tedarikçiler ─────────────────────────────────────
             elif path == "/api/suppliers":
                 rows = db.get_all_suppliers(
@@ -368,6 +399,37 @@ class APIHandler(BaseHTTPRequestHandler):
                 n = db.import_customers_bulk(body.get("records", []))
                 self._send(_ok({"count": n}))
 
+            # ── CRM ekleme (POST) ─────────────────────────────────
+            elif path == "/api/crm/customers":
+                cid = db.add_crm_customer(body.get("musteri_turu",""), body.get("pazarlamaci",""),
+                                          body.get("firma",""), body.get("notlar",""))
+                self._send(_ok({"id": cid}))
+            elif path == "/api/crm/visits":
+                vid = db.add_crm_visit(body.get("durum","GERÇEKLEŞEN"), body.get("tarih",""),
+                                       body.get("pazarlamaci",""), body.get("musteri",""),
+                                       body.get("musteri_tipi",""), body.get("notlar",""))
+                self._send(_ok({"id": vid}))
+            elif path == "/api/crm/sales":
+                sid = db.add_crm_sale(body.get("musteri",""), body.get("metre",0), body.get("tutar",0),
+                                      body.get("doviz","USD"), body.get("usd_tutar",0), body.get("ay",""),
+                                      body.get("pazarlamaci",""), body.get("musteri_tipi",""),
+                                      body.get("is_iade",0))
+                self._send(_ok({"id": sid}))
+            elif path == "/api/crm/orders":
+                oid = db.add_crm_order(body.get("musteri",""), body.get("pazarlamaci",""),
+                                       body.get("musteri_tipi",""), body.get("tarih",""), body.get("kod",""),
+                                       body.get("renk",""), body.get("miktar",0), body.get("maliyet_fiyati",0),
+                                       body.get("satis_fiyati",0), body.get("kar_orani",0),
+                                       body.get("teorik_kar_usd",0), body.get("kar_tl",0), body.get("vade",""),
+                                       body.get("ciro",0), body.get("ciro_usd",0), body.get("usd_kuru",0))
+                self._send(_ok({"id": oid}))
+            elif path == "/api/crm/import":
+                counts = db.crm_import_bulk(
+                    customers=body.get("customers"), visits=body.get("visits"),
+                    sales=body.get("sales"), orders=body.get("orders"),
+                    replace=body.get("replace", False))
+                self._send(_ok(counts))
+
             # ── Tedarikçi ekle / toplu aktar ───────────────────────
             elif path == "/api/suppliers":
                 sid = db.add_supplier(body.get("name",""), body.get("code",""),
@@ -496,6 +558,35 @@ class APIHandler(BaseHTTPRequestHandler):
                                    body.get("phone",""), body.get("address",""),
                                    body.get("tax_no",""), body.get("active",1))
                 self._send(_ok())
+
+            # ── CRM güncelleme (PUT) ──────────────────────────────
+            elif path.startswith("/api/crm/customers/"):
+                db.update_crm_customer(int(path.split("/")[-1]), body.get("musteri_turu",""),
+                                       body.get("pazarlamaci",""), body.get("firma",""),
+                                       body.get("notlar",""), body.get("active",1))
+                self._send(_ok())
+            elif path.startswith("/api/crm/visits/"):
+                db.update_crm_visit(int(path.split("/")[-1]), body.get("durum","GERÇEKLEŞEN"),
+                                    body.get("tarih",""), body.get("pazarlamaci",""),
+                                    body.get("musteri",""), body.get("musteri_tipi",""),
+                                    body.get("notlar",""))
+                self._send(_ok())
+            elif path.startswith("/api/crm/sales/"):
+                db.update_crm_sale(int(path.split("/")[-1]), body.get("musteri",""), body.get("metre",0),
+                                   body.get("tutar",0), body.get("doviz","USD"), body.get("usd_tutar",0),
+                                   body.get("ay",""), body.get("pazarlamaci",""),
+                                   body.get("musteri_tipi",""), body.get("is_iade",0))
+                self._send(_ok())
+            elif path.startswith("/api/crm/orders/"):
+                db.update_crm_order(int(path.split("/")[-1]), body.get("musteri",""),
+                                    body.get("pazarlamaci",""), body.get("musteri_tipi",""),
+                                    body.get("tarih",""), body.get("kod",""), body.get("renk",""),
+                                    body.get("miktar",0), body.get("maliyet_fiyati",0),
+                                    body.get("satis_fiyati",0), body.get("kar_orani",0),
+                                    body.get("teorik_kar_usd",0), body.get("kar_tl",0), body.get("vade",""),
+                                    body.get("ciro",0), body.get("ciro_usd",0), body.get("usd_kuru",0))
+                self._send(_ok())
+
             elif path.startswith("/api/suppliers/"):
                 sid = int(path.split("/")[-1])
                 db.update_supplier(sid, body.get("name",""), body.get("code",""),
@@ -620,6 +711,14 @@ class APIHandler(BaseHTTPRequestHandler):
                 cid = int(path.split("/")[-1])
                 db.delete_customer(cid)
                 self._send(_ok())
+            elif path.startswith("/api/crm/customers/"):
+                db.delete_crm_customer(int(path.split("/")[-1])); self._send(_ok())
+            elif path.startswith("/api/crm/visits/"):
+                db.delete_crm_visit(int(path.split("/")[-1])); self._send(_ok())
+            elif path.startswith("/api/crm/sales/"):
+                db.delete_crm_sale(int(path.split("/")[-1])); self._send(_ok())
+            elif path.startswith("/api/crm/orders/"):
+                db.delete_crm_order(int(path.split("/")[-1])); self._send(_ok())
             elif path.startswith("/api/suppliers/"):
                 sid = int(path.split("/")[-1])
                 db.delete_supplier(sid)

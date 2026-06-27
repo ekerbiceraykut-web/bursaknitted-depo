@@ -46,6 +46,8 @@ _LIST_FUNCS = {
     "get_pending_approval_orders", "get_shippable_orders",
     "get_order_shipments", "get_po_receipts", "get_boyahane_queue",
     "get_po_items_for_order", "get_all_armur_desenleri",
+    "get_crm_customers", "get_crm_visits", "get_crm_sales", "get_crm_orders",
+    "get_crm_years",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -2088,6 +2090,719 @@ class ExcelColumnMapDialog(QDialog):
                 records.append(rec)
         self.records = records
         self.accept()
+
+
+# ══ CRM modülü (Excel tablolarına göre) ═════════════════════════
+CRM_PAZARLAMACILAR = ["AYKUT EKERBİÇER", "AHMET AYAT", "SEYHAN ZÜNBÜL", "İNAN ACAR", "SERTAÇ İŞLER"]
+CRM_MUSTERI_TURLERI = ["MEVCUT MÜŞTERİ", "HEDEF MÜŞTERİ", "POTANSİYEL MÜŞTERİ"]
+CRM_MUSTERI_TIPLERI = ["MEVCUT", "POTANSİYEL", "HEDEF"]
+CRM_DOVIZLER = ["USD", "EUR", "TL", "GBP"]
+# 5 Ways hedefleri (aylık) — referans için
+CRM_HEDEFLER = {
+    "ziyaret": "Haftada 3 / Ayda 12 (yeni + mevcut)",
+    "sip_tutar_usd": "150.000 USD / ay",
+    "sip_adet": "15 / ay",
+    "sip_metre": "45.000 MT / ay",
+    "ort_sip_usd": "10.000 USD",
+    "kar_orani": "% 30",
+}
+
+
+def _crm_money(v):
+    """Para/sayı metnini (₺, $, £, '1.266,53' vb.) float'a çevirir."""
+    if v is None:
+        return 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    import re as _re
+    s = _re.sub(r"[^\d,.\-]", "", str(v).strip())
+    if not s or s in ("-", ".", ","):
+        return 0.0
+    if "." in s and "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    elif "," in s:
+        s = s.replace(",", ".")
+    try:
+        return float(s)
+    except Exception:
+        return 0.0
+
+
+def _crm_iso(v):
+    import datetime as _dt
+    if isinstance(v, (_dt.datetime, _dt.date)):
+        return v.strftime("%Y-%m-%d")
+    if v is None:
+        return ""
+    return str(v).strip()
+
+
+def crm_parse_excel(path):
+    """CRM Excel dosyasını (6 sayfa) okuyup toplu import için sözlük döndürür."""
+    import re as _re
+    import openpyxl
+    wb = openpyxl.load_workbook(path, data_only=True)
+    out = {"customers": [], "visits": [], "sales": [], "orders": []}
+
+    def _s(v):
+        return str(v).strip() if v is not None else ""
+
+    if "müşteri listesi" in wb.sheetnames:
+        for row in wb["müşteri listesi"].iter_rows(min_row=2, values_only=True):
+            if not row or len(row) < 3 or not row[2]:
+                continue
+            out["customers"].append({"musteri_turu": _s(row[0]), "pazarlamaci": _s(row[1]),
+                                     "firma": _s(row[2])})
+
+    for sheet, durum in [("gerçekleşen ziyaret", "GERÇEKLEŞEN"), ("planlanan ziyaret", "PLANLANAN")]:
+        if sheet not in wb.sheetnames:
+            continue
+        for row in wb[sheet].iter_rows(min_row=2, values_only=True):
+            if not row or not any(row) or len(row) < 4:
+                continue
+            if not (row[1] or row[2]):
+                continue
+            out["visits"].append({"durum": durum, "tarih": _crm_iso(row[0]), "pazarlamaci": _s(row[1]),
+                                  "musteri": _s(row[2]), "musteri_tipi": _s(row[3]),
+                                  "notlar": _s(row[4]) if len(row) > 4 else ""})
+
+    if "FİİLİ SATIŞLAR" in wb.sheetnames:
+        for row in wb["FİİLİ SATIŞLAR"].iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            paz = _s(row[6]) if len(row) > 6 else ""
+            is_iade = 0
+            up = paz.upper()
+            if up.endswith("İADE") or up.endswith("IADE"):
+                is_iade = 1
+                paz = _re.sub(r"\s*[İI]ADE$", "", paz).strip()
+            out["sales"].append({"musteri": _s(row[0]), "metre": _crm_money(row[1]),
+                                 "tutar": _crm_money(row[2]), "doviz": _s(row[3]) or "USD",
+                                 "usd_tutar": _crm_money(row[4]), "ay": _crm_iso(row[5]),
+                                 "pazarlamaci": paz,
+                                 "musteri_tipi": _s(row[7]) if len(row) > 7 else "", "is_iade": is_iade})
+
+    if "SİPARİŞLER" in wb.sheetnames:
+        for row in wb["SİPARİŞLER"].iter_rows(min_row=2, values_only=True):
+            if not row or not row[0]:
+                continue
+            g = lambda i: row[i] if len(row) > i else None
+            out["orders"].append({"musteri": _s(g(0)), "pazarlamaci": _s(g(1)),
+                                  "musteri_tipi": _s(g(2)), "tarih": _crm_iso(g(3)), "kod": _s(g(4)),
+                                  "renk": _s(g(5)), "miktar": _crm_money(g(6)),
+                                  "maliyet_fiyati": _crm_money(g(7)), "satis_fiyati": _crm_money(g(8)),
+                                  "kar_orani": _crm_money(g(9)), "teorik_kar_usd": _crm_money(g(10)),
+                                  "kar_tl": _crm_money(g(11)), "vade": _s(g(12)),
+                                  "ciro": _crm_money(g(13)), "ciro_usd": _crm_money(g(14)),
+                                  "usd_kuru": _crm_money(g(15))})
+    return out
+
+
+class _SortItem(QTableWidgetItem):
+    """Sayısal sıralama için UserRole'daki değere göre karşılaştırır."""
+    def __lt__(self, other):
+        a = self.data(Qt.ItemDataRole.UserRole)
+        b = other.data(Qt.ItemDataRole.UserRole)
+        if a is not None and b is not None:
+            try:
+                return float(a) < float(b)
+            except Exception:
+                pass
+        return super().__lt__(other)
+
+
+class CRMView(QWidget):
+    """CRM — Müşteri Listesi, Ziyaretler, Fiili Satışlar, Siparişler, Analiz (5 Ways)."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._build_ui()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(6, 6, 6, 6)
+
+        # Üst araç çubuğu — Excel içe aktarma
+        top = QHBoxLayout()
+        title = QLabel("👥 CRM — Müşteri İlişkileri Yönetimi")
+        title.setStyleSheet("font-size:15px; font-weight:bold;")
+        top.addWidget(title)
+        top.addStretch()
+        btn_imp = QPushButton("📥 Excel'den İçe Aktar")
+        btn_imp.setStyleSheet("background:#2E7D32;color:white;font-weight:bold;border-radius:4px;padding:6px 14px;")
+        btn_imp.clicked.connect(self._import_excel)
+        top.addWidget(btn_imp)
+        lay.addLayout(top)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_customers_tab(), "🏢 Müşteri Listesi")
+        self.tabs.addTab(self._build_visits_tab(), "📍 Ziyaretler")
+        self.tabs.addTab(self._build_sales_tab(), "💵 Fiili Satışlar")
+        self.tabs.addTab(self._build_orders_tab(), "🧾 Siparişler")
+        self.tabs.addTab(self._build_analysis_tab(), "📊 Analiz (5 Ways)")
+        self.tabs.currentChanged.connect(lambda i: self.refresh())
+        lay.addWidget(self.tabs)
+
+    def refresh(self):
+        idx = self.tabs.currentIndex()
+        try:
+            [self._load_customers, self._load_visits, self._load_sales,
+             self._load_orders, self._load_analysis][idx]()
+        except Exception:
+            pass
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        self.refresh()
+
+    # ── ortak yardımcılar ─────────────────────────────────────────
+    def _mk_table(self, headers):
+        t = QTableWidget()
+        t.setColumnCount(len(headers))
+        t.setHorizontalHeaderLabels(headers)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.verticalHeader().setVisible(False)
+        t.setSortingEnabled(True)
+        t.horizontalHeader().setSectionsMovable(True)
+        return t
+
+    def _paz_combo(self, current="", with_all=False):
+        cb = QComboBox()
+        cb.setEditable(True)
+        if with_all:
+            cb.addItem("— Tümü —", "")
+        for p in CRM_PAZARLAMACILAR:
+            cb.addItem(p, p)
+        if current and cb.findData(current) < 0:
+            cb.addItem(current, current)
+        if current:
+            cb.setCurrentText(current)
+        elif not with_all:
+            cb.setCurrentIndex(-1)
+        return cb
+
+    # ── Sekme 1: Müşteri Listesi ──────────────────────────────────
+    def _build_customers_tab(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        self.cu_search = QLineEdit(); self.cu_search.setPlaceholderText("Firma / pazarlamacı ara...")
+        self.cu_search.textChanged.connect(self._load_customers)
+        self.cu_paz = self._paz_combo(with_all=True)
+        self.cu_paz.setEditable(False)
+        self.cu_paz.currentIndexChanged.connect(self._load_customers)
+        b_add = QPushButton("+ Yeni"); b_add.clicked.connect(self._add_customer)
+        b_edit = QPushButton("✎ Düzenle"); b_edit.clicked.connect(self._edit_customer)
+        b_del = QPushButton("✕ Sil"); b_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 12px;")
+        b_del.clicked.connect(self._delete_customer)
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.cu_search)
+        top.addWidget(QLabel("Pazarlamacı:")); top.addWidget(self.cu_paz); top.addStretch()
+        for b in (b_add, b_edit, b_del): top.addWidget(b)
+        v.addLayout(top)
+        self.cu_table = self._mk_table(["Müşteri Türü", "Pazarlamacı", "Firma"])
+        self.cu_table.horizontalHeader().setStretchLastSection(True)
+        self.cu_table.doubleClicked.connect(self._edit_customer)
+        v.addWidget(self.cu_table)
+        self.cu_count = QLabel(); v.addWidget(self.cu_count)
+        return w
+
+    def _load_customers(self):
+        rows = db.get_crm_customers(search=self.cu_search.text().strip(),
+                                    pazarlamaci=self.cu_paz.currentData() or "") or []
+        t = self.cu_table; t.setSortingEnabled(False); t.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            it = QTableWidgetItem(r["musteri_turu"] or "")
+            it.setData(Qt.ItemDataRole.UserRole, r["id"])
+            t.setItem(i, 0, it)
+            t.setItem(i, 1, QTableWidgetItem(r["pazarlamaci"] or ""))
+            t.setItem(i, 2, QTableWidgetItem(r["firma"] or ""))
+        t.setSortingEnabled(True)
+        self.cu_count.setText(f"{len(rows)} müşteri")
+
+    def _customer_dialog(self, c=None):
+        dlg = QDialog(self); dlg.setWindowTitle("Müşteri" + (" Düzenle" if c else " Ekle"))
+        dlg.setMinimumWidth(380); lay = QVBoxLayout(dlg); form = QFormLayout()
+        dlg.turu = QComboBox(); dlg.turu.addItems(CRM_MUSTERI_TURLERI)
+        if c: dlg.turu.setCurrentText(c["musteri_turu"] or CRM_MUSTERI_TURLERI[0])
+        dlg.paz = self._paz_combo(c["pazarlamaci"] if c else "")
+        dlg.firma = QLineEdit(c["firma"] if c else "")
+        form.addRow("Müşteri Türü:", dlg.turu)
+        form.addRow("Pazarlamacı:", dlg.paz)
+        form.addRow("Firma *:", dlg.firma)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject); lay.addWidget(bb)
+        return dlg
+
+    def _add_customer(self):
+        d = self._customer_dialog()
+        if d.exec():
+            if not d.firma.text().strip():
+                return QMessageBox.warning(self, "Hata", "Firma zorunlu!")
+            db.add_crm_customer(d.turu.currentText(), d.paz.currentText().strip(), d.firma.text())
+            self._load_customers()
+
+    def _edit_customer(self):
+        cid = self._row_id(self.cu_table)
+        if not cid: return
+        c = self._find(db.get_crm_customers(), cid)
+        if not c: return
+        d = self._customer_dialog(c)
+        if d.exec():
+            db.update_crm_customer(cid, d.turu.currentText(), d.paz.currentText().strip(), d.firma.text())
+            self._load_customers()
+
+    def _delete_customer(self):
+        cid = self._row_id(self.cu_table)
+        if not cid: return
+        if self._confirm_del():
+            db.delete_crm_customer(cid); self._load_customers()
+
+    # ── Sekme 2: Ziyaretler ───────────────────────────────────────
+    def _build_visits_tab(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        self.vi_search = QLineEdit(); self.vi_search.setPlaceholderText("Müşteri / pazarlamacı ara...")
+        self.vi_search.textChanged.connect(self._load_visits)
+        self.vi_durum = QComboBox()
+        self.vi_durum.addItem("— Tümü —", ""); self.vi_durum.addItem("Gerçekleşen", "GERÇEKLEŞEN")
+        self.vi_durum.addItem("Planlanan", "PLANLANAN")
+        self.vi_durum.currentIndexChanged.connect(self._load_visits)
+        b_add = QPushButton("+ Yeni"); b_add.clicked.connect(self._add_visit)
+        b_edit = QPushButton("✎ Düzenle"); b_edit.clicked.connect(self._edit_visit)
+        b_del = QPushButton("✕ Sil"); b_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 12px;")
+        b_del.clicked.connect(self._delete_visit)
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.vi_search)
+        top.addWidget(QLabel("Durum:")); top.addWidget(self.vi_durum); top.addStretch()
+        for b in (b_add, b_edit, b_del): top.addWidget(b)
+        v.addLayout(top)
+        self.vi_table = self._mk_table(["Durum", "Tarih", "Pazarlamacı", "Müşteri", "Müşteri Tipi", "Notlar"])
+        self.vi_table.horizontalHeader().setStretchLastSection(True)
+        self.vi_table.doubleClicked.connect(self._edit_visit)
+        v.addWidget(self.vi_table)
+        self.vi_count = QLabel(); v.addWidget(self.vi_count)
+        return w
+
+    def _load_visits(self):
+        rows = db.get_crm_visits(search=self.vi_search.text().strip(),
+                                 durum=self.vi_durum.currentData() or "") or []
+        t = self.vi_table; t.setSortingEnabled(False); t.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            d_item = QTableWidgetItem("📍 Gerçekleşen" if r["durum"] == "GERÇEKLEŞEN" else "🗓 Planlanan")
+            d_item.setData(Qt.ItemDataRole.UserRole, r["id"])
+            d_item.setForeground(QBrush(QColor("#2E7D32" if r["durum"] == "GERÇEKLEŞEN" else "#1565C0")))
+            t.setItem(i, 0, d_item)
+            t.setItem(i, 1, QTableWidgetItem(r["tarih"] or ""))
+            t.setItem(i, 2, QTableWidgetItem(r["pazarlamaci"] or ""))
+            t.setItem(i, 3, QTableWidgetItem(r["musteri"] or ""))
+            t.setItem(i, 4, QTableWidgetItem(r["musteri_tipi"] or ""))
+            t.setItem(i, 5, QTableWidgetItem(r["notlar"] or ""))
+        t.setSortingEnabled(True)
+        self.vi_count.setText(f"{len(rows)} ziyaret")
+
+    def _visit_dialog(self, vrow=None):
+        dlg = QDialog(self); dlg.setWindowTitle("Ziyaret" + (" Düzenle" if vrow else " Ekle"))
+        dlg.setMinimumWidth(400); lay = QVBoxLayout(dlg); form = QFormLayout()
+        dlg.durum = QComboBox(); dlg.durum.addItem("Gerçekleşen", "GERÇEKLEŞEN"); dlg.durum.addItem("Planlanan", "PLANLANAN")
+        if vrow:
+            idx = dlg.durum.findData(vrow["durum"]); dlg.durum.setCurrentIndex(idx if idx >= 0 else 0)
+        dlg.tarih = QDateEdit(); dlg.tarih.setCalendarPopup(True); dlg.tarih.setDisplayFormat("dd.MM.yyyy")
+        dlg.tarih.setDate(QDate.fromString(vrow["tarih"], "yyyy-MM-dd") if vrow and vrow["tarih"] else QDate.currentDate())
+        dlg.paz = self._paz_combo(vrow["pazarlamaci"] if vrow else "")
+        dlg.musteri = QLineEdit(vrow["musteri"] if vrow else "")
+        dlg.tipi = QComboBox(); dlg.tipi.setEditable(True); dlg.tipi.addItems(CRM_MUSTERI_TIPLERI)
+        if vrow: dlg.tipi.setCurrentText(vrow["musteri_tipi"] or "")
+        else: dlg.tipi.setCurrentIndex(-1)
+        dlg.notlar = QLineEdit(vrow["notlar"] if vrow else "")
+        form.addRow("Durum:", dlg.durum)
+        form.addRow("Tarih:", dlg.tarih)
+        form.addRow("Pazarlamacı:", dlg.paz)
+        form.addRow("Müşteri:", dlg.musteri)
+        form.addRow("Müşteri Tipi:", dlg.tipi)
+        form.addRow("Notlar:", dlg.notlar)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject); lay.addWidget(bb)
+        return dlg
+
+    def _add_visit(self):
+        d = self._visit_dialog()
+        if d.exec():
+            db.add_crm_visit(d.durum.currentData(), d.tarih.date().toString("yyyy-MM-dd"),
+                             d.paz.currentText().strip(), d.musteri.text(), d.tipi.currentText().strip(),
+                             d.notlar.text())
+            self._load_visits()
+
+    def _edit_visit(self):
+        vid = self._row_id(self.vi_table)
+        if not vid: return
+        vrow = self._find(db.get_crm_visits(), vid)
+        if not vrow: return
+        d = self._visit_dialog(vrow)
+        if d.exec():
+            db.update_crm_visit(vid, d.durum.currentData(), d.tarih.date().toString("yyyy-MM-dd"),
+                                d.paz.currentText().strip(), d.musteri.text(),
+                                d.tipi.currentText().strip(), d.notlar.text())
+            self._load_visits()
+
+    def _delete_visit(self):
+        vid = self._row_id(self.vi_table)
+        if not vid: return
+        if self._confirm_del():
+            db.delete_crm_visit(vid); self._load_visits()
+
+    # ── Sekme 3: Fiili Satışlar ───────────────────────────────────
+    def _build_sales_tab(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        self.sa_search = QLineEdit(); self.sa_search.setPlaceholderText("Müşteri / pazarlamacı ara...")
+        self.sa_search.textChanged.connect(self._load_sales)
+        self.sa_year = QComboBox(); self.sa_year.currentIndexChanged.connect(self._load_sales)
+        b_add = QPushButton("+ Yeni"); b_add.clicked.connect(self._add_sale)
+        b_edit = QPushButton("✎ Düzenle"); b_edit.clicked.connect(self._edit_sale)
+        b_del = QPushButton("✕ Sil"); b_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 12px;")
+        b_del.clicked.connect(self._delete_sale)
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.sa_search)
+        top.addWidget(QLabel("Yıl:")); top.addWidget(self.sa_year); top.addStretch()
+        for b in (b_add, b_edit, b_del): top.addWidget(b)
+        v.addLayout(top)
+        self.sa_table = self._mk_table(["Müşteri", "Metre", "Tutar", "Döviz", "USD Tutar", "Ay", "Pazarlamacı", "Müşteri Tipi", "İade"])
+        self.sa_table.doubleClicked.connect(self._edit_sale)
+        v.addWidget(self.sa_table)
+        self.sa_count = QLabel(); v.addWidget(self.sa_count)
+        return w
+
+    def _refresh_year_combo(self, combo):
+        cur = combo.currentData()
+        combo.blockSignals(True); combo.clear()
+        combo.addItem("— Tümü —", "")
+        for y in (db.get_crm_years() or []):
+            combo.addItem(y, y)
+        if cur:
+            i = combo.findData(cur)
+            if i >= 0: combo.setCurrentIndex(i)
+        combo.blockSignals(False)
+
+    def _load_sales(self):
+        if self.sa_year.count() == 0:
+            self._refresh_year_combo(self.sa_year)
+        rows = db.get_crm_sales(search=self.sa_search.text().strip(),
+                                year=self.sa_year.currentData() or "") or []
+        t = self.sa_table; t.setSortingEnabled(False); t.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            it = QTableWidgetItem(r["musteri"] or "")
+            it.setData(Qt.ItemDataRole.UserRole, r["id"])
+            t.setItem(i, 0, it)
+            t.setItem(i, 1, self._num(r["metre"]))
+            t.setItem(i, 2, self._num(r["tutar"]))
+            t.setItem(i, 3, QTableWidgetItem(r["doviz"] or ""))
+            t.setItem(i, 4, self._num(r["usd_tutar"]))
+            t.setItem(i, 5, QTableWidgetItem(r["ay"] or ""))
+            t.setItem(i, 6, QTableWidgetItem(r["pazarlamaci"] or ""))
+            t.setItem(i, 7, QTableWidgetItem(r["musteri_tipi"] or ""))
+            iade = QTableWidgetItem("↩ İade" if r["is_iade"] else "")
+            if r["is_iade"]: iade.setForeground(QBrush(QColor("#C62828")))
+            t.setItem(i, 8, iade)
+        t.setSortingEnabled(True)
+        self.sa_count.setText(f"{len(rows)} satış kaydı")
+
+    def _sale_dialog(self, s=None):
+        dlg = QDialog(self); dlg.setWindowTitle("Fiili Satış" + (" Düzenle" if s else " Ekle"))
+        dlg.setMinimumWidth(400); lay = QVBoxLayout(dlg); form = QFormLayout()
+        dlg.musteri = QLineEdit(s["musteri"] if s else "")
+        dlg.metre = QDoubleSpinBox(); dlg.metre.setRange(-9999999, 9999999); dlg.metre.setDecimals(2)
+        dlg.metre.setValue(float(s["metre"]) if s else 0)
+        dlg.tutar = QDoubleSpinBox(); dlg.tutar.setRange(-99999999, 99999999); dlg.tutar.setDecimals(2)
+        dlg.tutar.setValue(float(s["tutar"]) if s else 0)
+        dlg.doviz = QComboBox(); dlg.doviz.addItems(CRM_DOVIZLER)
+        if s: dlg.doviz.setCurrentText(s["doviz"] or "USD")
+        dlg.usd = QDoubleSpinBox(); dlg.usd.setRange(-99999999, 99999999); dlg.usd.setDecimals(2)
+        dlg.usd.setValue(float(s["usd_tutar"]) if s else 0)
+        dlg.ay = QDateEdit(); dlg.ay.setCalendarPopup(True); dlg.ay.setDisplayFormat("MM.yyyy")
+        dlg.ay.setDate(QDate.fromString(s["ay"], "yyyy-MM-dd") if s and s["ay"] else QDate.currentDate())
+        dlg.paz = self._paz_combo(s["pazarlamaci"] if s else "")
+        dlg.tipi = QComboBox(); dlg.tipi.setEditable(True); dlg.tipi.addItems(CRM_MUSTERI_TIPLERI)
+        if s: dlg.tipi.setCurrentText(s["musteri_tipi"] or "")
+        else: dlg.tipi.setCurrentIndex(-1)
+        dlg.iade = QCheckBox("İade kaydı (analizde düşülür)")
+        if s and s["is_iade"]: dlg.iade.setChecked(True)
+        form.addRow("Müşteri:", dlg.musteri)
+        form.addRow("Metre:", dlg.metre)
+        form.addRow("Tutar:", dlg.tutar)
+        form.addRow("Döviz:", dlg.doviz)
+        form.addRow("USD Tutar:", dlg.usd)
+        form.addRow("Ay:", dlg.ay)
+        form.addRow("Pazarlamacı:", dlg.paz)
+        form.addRow("Müşteri Tipi:", dlg.tipi)
+        form.addRow("", dlg.iade)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject); lay.addWidget(bb)
+        return dlg
+
+    def _add_sale(self):
+        d = self._sale_dialog()
+        if d.exec():
+            db.add_crm_sale(d.musteri.text(), d.metre.value(), d.tutar.value(), d.doviz.currentText(),
+                            d.usd.value(), d.ay.date().toString("yyyy-MM-01"), d.paz.currentText().strip(),
+                            d.tipi.currentText().strip(), 1 if d.iade.isChecked() else 0)
+            self._refresh_year_combo(self.sa_year); self._load_sales()
+
+    def _edit_sale(self):
+        sid = self._row_id(self.sa_table)
+        if not sid: return
+        s = self._find(db.get_crm_sales(), sid)
+        if not s: return
+        d = self._sale_dialog(s)
+        if d.exec():
+            db.update_crm_sale(sid, d.musteri.text(), d.metre.value(), d.tutar.value(), d.doviz.currentText(),
+                               d.usd.value(), d.ay.date().toString("yyyy-MM-01"), d.paz.currentText().strip(),
+                               d.tipi.currentText().strip(), 1 if d.iade.isChecked() else 0)
+            self._load_sales()
+
+    def _delete_sale(self):
+        sid = self._row_id(self.sa_table)
+        if not sid: return
+        if self._confirm_del():
+            db.delete_crm_sale(sid); self._load_sales()
+
+    # ── Sekme 4: Siparişler ───────────────────────────────────────
+    def _build_orders_tab(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        self.or_search = QLineEdit(); self.or_search.setPlaceholderText("Müşteri / kod / pazarlamacı ara...")
+        self.or_search.textChanged.connect(self._load_orders)
+        self.or_year = QComboBox(); self.or_year.currentIndexChanged.connect(self._load_orders)
+        b_add = QPushButton("+ Yeni"); b_add.clicked.connect(self._add_order)
+        b_edit = QPushButton("✎ Düzenle"); b_edit.clicked.connect(self._edit_order)
+        b_del = QPushButton("✕ Sil"); b_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 12px;")
+        b_del.clicked.connect(self._delete_order)
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.or_search)
+        top.addWidget(QLabel("Yıl:")); top.addWidget(self.or_year); top.addStretch()
+        for b in (b_add, b_edit, b_del): top.addWidget(b)
+        v.addLayout(top)
+        self.or_table = self._mk_table(["Müşteri", "Pazarlamacı", "Tarih", "Kod", "Renk", "Miktar",
+                                        "Maliyet", "Satış", "Kâr %", "Teorik Kâr USD", "Vade", "Ciro", "Ciro USD", "Kur"])
+        self.or_table.doubleClicked.connect(self._edit_order)
+        v.addWidget(self.or_table)
+        self.or_count = QLabel(); v.addWidget(self.or_count)
+        return w
+
+    def _load_orders(self):
+        if self.or_year.count() == 0:
+            self._refresh_year_combo(self.or_year)
+        rows = db.get_crm_orders(search=self.or_search.text().strip(),
+                                 year=self.or_year.currentData() or "") or []
+        t = self.or_table; t.setSortingEnabled(False); t.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            it = QTableWidgetItem(r["musteri"] or "")
+            it.setData(Qt.ItemDataRole.UserRole, r["id"])
+            t.setItem(i, 0, it)
+            t.setItem(i, 1, QTableWidgetItem(r["pazarlamaci"] or ""))
+            t.setItem(i, 2, QTableWidgetItem(r["tarih"] or ""))
+            t.setItem(i, 3, QTableWidgetItem(r["kod"] or ""))
+            t.setItem(i, 4, QTableWidgetItem(r["renk"] or ""))
+            t.setItem(i, 5, self._num(r["miktar"]))
+            t.setItem(i, 6, self._num(r["maliyet_fiyati"]))
+            t.setItem(i, 7, self._num(r["satis_fiyati"]))
+            t.setItem(i, 8, self._num((r["kar_orani"] or 0) * 100, suffix="%"))
+            t.setItem(i, 9, self._num(r["teorik_kar_usd"]))
+            t.setItem(i, 10, QTableWidgetItem(r["vade"] or ""))
+            t.setItem(i, 11, self._num(r["ciro"]))
+            t.setItem(i, 12, self._num(r["ciro_usd"]))
+            t.setItem(i, 13, self._num(r["usd_kuru"]))
+        t.setSortingEnabled(True)
+        self.or_count.setText(f"{len(rows)} sipariş")
+
+    def _order_dialog(self, o=None):
+        dlg = QDialog(self); dlg.setWindowTitle("Sipariş" + (" Düzenle" if o else " Ekle"))
+        dlg.setMinimumWidth(440); lay = QVBoxLayout(dlg); form = QFormLayout()
+        def sb(rng, dec, val):
+            s = QDoubleSpinBox(); s.setRange(-rng, rng); s.setDecimals(dec); s.setValue(float(val) if val else 0); return s
+        dlg.musteri = QLineEdit(o["musteri"] if o else "")
+        dlg.paz = self._paz_combo(o["pazarlamaci"] if o else "")
+        dlg.tipi = QComboBox(); dlg.tipi.setEditable(True); dlg.tipi.addItems(CRM_MUSTERI_TIPLERI)
+        if o: dlg.tipi.setCurrentText(o["musteri_tipi"] or "")
+        else: dlg.tipi.setCurrentIndex(-1)
+        dlg.tarih = QDateEdit(); dlg.tarih.setCalendarPopup(True); dlg.tarih.setDisplayFormat("dd.MM.yyyy")
+        dlg.tarih.setDate(QDate.fromString(o["tarih"], "yyyy-MM-dd") if o and o["tarih"] else QDate.currentDate())
+        dlg.kod = QLineEdit(o["kod"] if o else "")
+        dlg.renk = QLineEdit(o["renk"] if o else "")
+        dlg.miktar = sb(99999999, 2, o["miktar"] if o else 0)
+        dlg.maliyet = sb(9999999, 4, o["maliyet_fiyati"] if o else 0)
+        dlg.satis = sb(9999999, 4, o["satis_fiyati"] if o else 0)
+        dlg.kar = sb(100, 4, o["kar_orani"] if o else 0); dlg.kar.setToolTip("Oran (0.30 = %30)")
+        dlg.teorik = sb(99999999, 2, o["teorik_kar_usd"] if o else 0)
+        dlg.kartl = sb(999999999, 2, o["kar_tl"] if o else 0)
+        dlg.vade = QLineEdit(o["vade"] if o else "")
+        dlg.ciro = sb(999999999, 2, o["ciro"] if o else 0)
+        dlg.cirousd = sb(999999999, 2, o["ciro_usd"] if o else 0)
+        dlg.kur = sb(10000, 4, o["usd_kuru"] if o else 0)
+        for lbl, wd in [("Müşteri:", dlg.musteri), ("Pazarlamacı:", dlg.paz), ("Müşteri Tipi:", dlg.tipi),
+                        ("Tarih:", dlg.tarih), ("Kod:", dlg.kod), ("Renk:", dlg.renk), ("Miktar:", dlg.miktar),
+                        ("Maliyet Fiyatı:", dlg.maliyet), ("Satış Fiyatı:", dlg.satis), ("Kâr Oranı (0-1):", dlg.kar),
+                        ("Teorik Kâr USD:", dlg.teorik), ("Kâr TL:", dlg.kartl), ("Vade:", dlg.vade),
+                        ("Ciro:", dlg.ciro), ("Ciro USD:", dlg.cirousd), ("USD Kuru:", dlg.kur)]:
+            form.addRow(lbl, wd)
+        lay.addLayout(form)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.accepted.connect(dlg.accept); bb.rejected.connect(dlg.reject); lay.addWidget(bb)
+        return dlg
+
+    def _order_vals(self, d):
+        return (d.musteri.text(), d.paz.currentText().strip(), d.tipi.currentText().strip(),
+                d.tarih.date().toString("yyyy-MM-dd"), d.kod.text(), d.renk.text(), d.miktar.value(),
+                d.maliyet.value(), d.satis.value(), d.kar.value(), d.teorik.value(), d.kartl.value(),
+                d.vade.text(), d.ciro.value(), d.cirousd.value(), d.kur.value())
+
+    def _add_order(self):
+        d = self._order_dialog()
+        if d.exec():
+            db.add_crm_order(*self._order_vals(d))
+            self._refresh_year_combo(self.or_year); self._load_orders()
+
+    def _edit_order(self):
+        oid = self._row_id(self.or_table)
+        if not oid: return
+        o = self._find(db.get_crm_orders(), oid)
+        if not o: return
+        d = self._order_dialog(o)
+        if d.exec():
+            db.update_crm_order(oid, *self._order_vals(d)); self._load_orders()
+
+    def _delete_order(self):
+        oid = self._row_id(self.or_table)
+        if not oid: return
+        if self._confirm_del():
+            db.delete_crm_order(oid); self._load_orders()
+
+    # ── Sekme 5: Analiz (5 Ways) ──────────────────────────────────
+    def _build_analysis_tab(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Yıl:"))
+        self.an_year = QComboBox(); self.an_year.currentIndexChanged.connect(self._load_analysis)
+        top.addWidget(self.an_year)
+        top.addWidget(QLabel("Dönem:"))
+        self.an_period = QComboBox()
+        self.an_period.addItem("Yıllık Toplam", "yearly")
+        for mi, mn in enumerate(["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz",
+                                  "Ağustos","Eylül","Ekim","Kasım","Aralık"], start=1):
+            self.an_period.addItem(mn, mi)
+        self.an_period.currentIndexChanged.connect(self._load_analysis)
+        top.addWidget(self.an_period); top.addStretch()
+        hedef = QLabel("🎯 Hedefler: Ziyaret " + CRM_HEDEFLER["ziyaret"] +
+                       "  |  Sipariş " + CRM_HEDEFLER["sip_adet"] + ", " + CRM_HEDEFLER["sip_metre"] +
+                       "  |  Tutar " + CRM_HEDEFLER["sip_tutar_usd"] + "  |  Kâr " + CRM_HEDEFLER["kar_orani"])
+        hedef.setStyleSheet("color:#555; font-size:11px;")
+        v.addLayout(top)
+        v.addWidget(hedef)
+        self.an_table = self._mk_table([
+            "Pazarlamacı", "Ziy. Yeni", "Ziy. Mevcut", "Sip. Adedi", "Sip. Metresi",
+            "Fiili Metre (net)", "Fiili USD (net)", "Ort. Sip. USD", "Teorik Kâr USD", "Ort. Kâr %"])
+        self.an_table.setSortingEnabled(False)
+        self.an_table.horizontalHeader().setStretchLastSection(True)
+        v.addWidget(self.an_table)
+        return w
+
+    def _load_analysis(self):
+        if self.an_year.count() == 0:
+            self._refresh_year_combo(self.an_year)
+            if self.an_year.count() > 1:
+                self.an_year.setCurrentIndex(1)   # en güncel yıl
+        data = db.get_crm_analysis(year=self.an_year.currentData() or "") or {}
+        period = self.an_period.currentData()
+        # pazarlamacıları sabit sırada + diğerleri
+        names = [p for p in CRM_PAZARLAMACILAR if p in data] + \
+                [p for p in sorted(data.keys()) if p not in CRM_PAZARLAMACILAR]
+        t = self.an_table
+        t.setRowCount(len(names) + 1)
+        tot = {k: 0.0 for k in ("visit_yeni","visit_mevcut","yeni_sip_adet","sip_adet","sip_metre",
+                                 "fiili_metre","fiili_usd","sip_ciro_usd","teorik_kar_usd")}
+        for i, name in enumerate(names):
+            d = data[name]
+            scope = d["yearly"] if period == "yearly" else d["months"].get(period, {})
+            self._an_row(t, i, name, scope, bold=False)
+            for k in tot:
+                tot[k] += scope.get(k, 0) or 0
+        # TOPLAM satırı
+        tot["ort_ciro_usd"] = tot["sip_ciro_usd"]/tot["sip_adet"] if tot["sip_adet"] else 0
+        tot["ort_kar_orani"] = tot["teorik_kar_usd"]/tot["sip_ciro_usd"] if tot["sip_ciro_usd"] else 0
+        self._an_row(t, len(names), "TOPLAM", tot, bold=True)
+        t.resizeColumnsToContents()
+
+    def _an_row(self, t, i, name, s, bold=False):
+        vals = [name,
+                f"{int(s.get('visit_yeni',0))}", f"{int(s.get('visit_mevcut',0))}",
+                f"{int(s.get('sip_adet',0))}", f"{s.get('sip_metre',0):,.0f}",
+                f"{s.get('fiili_metre',0):,.0f}", f"{s.get('fiili_usd',0):,.0f}",
+                f"{s.get('ort_ciro_usd',0):,.0f}", f"{s.get('teorik_kar_usd',0):,.0f}",
+                f"{s.get('ort_kar_orani',0)*100:,.1f}%"]
+        f = QFont(); f.setBold(bold)
+        for c, val in enumerate(vals):
+            it = QTableWidgetItem(val)
+            it.setFont(f)
+            if c > 0:
+                it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            if bold:
+                it.setBackground(QBrush(QColor("#ECEFF1")))
+            t.setItem(i, c, it)
+
+    # ── ortak küçük yardımcılar ───────────────────────────────────
+    def _num(self, val, suffix=""):
+        val = val or 0
+        it = _SortItem(f"{val:,.2f}{suffix}" if not float(val).is_integer() else f"{val:,.0f}{suffix}")
+        it.setData(Qt.ItemDataRole.UserRole, float(val))
+        it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        return it
+
+    def _row_id(self, table):
+        r = table.currentRow()
+        if r < 0:
+            QMessageBox.information(self, "Bilgi", "Önce bir satır seçin.")
+            return None
+        it = table.item(r, 0)
+        return it.data(Qt.ItemDataRole.UserRole) if it else None
+
+    def _find(self, rows, rid):
+        for r in (rows or []):
+            if r["id"] == rid:
+                return dict(r)
+        return None
+
+    def _confirm_del(self):
+        return QMessageBox.question(self, "Sil", "Kayıt silinsin mi?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes
+
+    def _import_excel(self):
+        path, _ = QFileDialog.getOpenFileName(self, "CRM Excel Dosyası", "", "Excel (*.xlsx *.xls)")
+        if not path:
+            return
+        try:
+            data = crm_parse_excel(path)
+        except Exception as e:
+            return QMessageBox.critical(self, "Hata", f"Excel okunamadı:\n{e}")
+        n = {k: len(v) for k, v in data.items()}
+        msg = (f"Okunan kayıtlar:\n• Müşteri: {n['customers']}\n• Ziyaret: {n['visits']}\n"
+               f"• Fiili Satış: {n['sales']}\n• Sipariş: {n['orders']}\n\n"
+               "Mevcut CRM verisinin ÜZERİNE yazılsın mı?\n"
+               "(Evet = önce mevcut CRM verisi silinir, sonra bunlar eklenir)")
+        ret = QMessageBox.question(self, "İçe Aktar", msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel)
+        if ret == QMessageBox.StandardButton.Cancel:
+            return
+        replace = (ret == QMessageBox.StandardButton.Yes)
+        try:
+            counts = db.crm_import_bulk(customers=data["customers"], visits=data["visits"],
+                                        sales=data["sales"], orders=data["orders"], replace=replace)
+        except Exception as e:
+            return QMessageBox.critical(self, "Hata", f"İçe aktarma başarısız:\n{e}")
+        self._refresh_year_combo(self.sa_year); self._refresh_year_combo(self.or_year)
+        self._refresh_year_combo(self.an_year)
+        self.refresh()
+        QMessageBox.information(self, "Tamam",
+            f"İçe aktarıldı:\n• Müşteri: {counts.get('customers',0)}\n• Ziyaret: {counts.get('visits',0)}\n"
+            f"• Fiili Satış: {counts.get('sales',0)}\n• Sipariş: {counts.get('orders',0)}")
 
 
 class CustomerManagementDialog(QDialog):
@@ -8830,6 +9545,7 @@ class MainWindow(QMainWindow):
         self.planning_view = PlanningView(self)
         self.boyahane_view = BoyahanePlanningView(self)
         self.sevkiyat_view = SevkiyatView(self)
+        self.crm_view = CRMView(self)
 
         self._rebuild_tabs()
         self.tabs.currentChanged.connect(self._on_tab_change)
@@ -8956,6 +9672,8 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(self.fire_view, "🔥 Boyahane Fire Oranları")
         if role in ("admin", "satışçı", "kullanici") or role in _yeni_roller:
             self.tabs.addTab(self.orders_view, "📋 Siparişler")
+        if role in ("admin", "satışçı"):
+            self.tabs.addTab(self.crm_view, "👥 CRM")
         if role in ("admin", "planlama", "kullanici") or role in _yeni_roller:
             self.tabs.addTab(self.planning_view, "📌 Planlama")
             self.tabs.addTab(self.boyahane_view, "🧶 Boyahane Planlama")

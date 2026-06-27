@@ -182,6 +182,105 @@ def import_customers_bulk(records):
     return (r or {}).get("count", 0)
 
 
+# ── CRM: Müşteri Listesi ─────────────────────────────────────────
+def get_crm_customers(search="", pazarlamaci="", musteri_turu="", active_only=False):
+    return _get("/api/crm/customers", {"search": search, "pazarlamaci": pazarlamaci,
+                "musteri_turu": musteri_turu, "active_only": "1" if active_only else "0"}) or []
+
+def add_crm_customer(musteri_turu="", pazarlamaci="", firma="", notlar=""):
+    r = _post("/api/crm/customers", {"musteri_turu": musteri_turu, "pazarlamaci": pazarlamaci,
+              "firma": firma, "notlar": notlar})
+    return (r or {}).get("id")
+
+def update_crm_customer(cid, musteri_turu="", pazarlamaci="", firma="", notlar="", active=1):
+    _put(f"/api/crm/customers/{cid}", {"musteri_turu": musteri_turu, "pazarlamaci": pazarlamaci,
+         "firma": firma, "notlar": notlar, "active": active})
+
+def delete_crm_customer(cid):
+    _delete(f"/api/crm/customers/{cid}")
+
+
+# ── CRM: Ziyaretler ──────────────────────────────────────────────
+def get_crm_visits(search="", durum="", pazarlamaci=""):
+    return _get("/api/crm/visits", {"search": search, "durum": durum,
+                "pazarlamaci": pazarlamaci}) or []
+
+def add_crm_visit(durum="GERÇEKLEŞEN", tarih="", pazarlamaci="", musteri="", musteri_tipi="", notlar=""):
+    r = _post("/api/crm/visits", {"durum": durum, "tarih": tarih, "pazarlamaci": pazarlamaci,
+              "musteri": musteri, "musteri_tipi": musteri_tipi, "notlar": notlar})
+    return (r or {}).get("id")
+
+def update_crm_visit(vid, durum="GERÇEKLEŞEN", tarih="", pazarlamaci="", musteri="", musteri_tipi="", notlar=""):
+    _put(f"/api/crm/visits/{vid}", {"durum": durum, "tarih": tarih, "pazarlamaci": pazarlamaci,
+         "musteri": musteri, "musteri_tipi": musteri_tipi, "notlar": notlar})
+
+def delete_crm_visit(vid):
+    _delete(f"/api/crm/visits/{vid}")
+
+
+# ── CRM: Fiili Satışlar ──────────────────────────────────────────
+def get_crm_sales(search="", pazarlamaci="", year=""):
+    return _get("/api/crm/sales", {"search": search, "pazarlamaci": pazarlamaci,
+                "year": year}) or []
+
+def add_crm_sale(musteri="", metre=0, tutar=0, doviz="USD", usd_tutar=0, ay="",
+                 pazarlamaci="", musteri_tipi="", is_iade=0):
+    r = _post("/api/crm/sales", {"musteri": musteri, "metre": metre, "tutar": tutar,
+              "doviz": doviz, "usd_tutar": usd_tutar, "ay": ay, "pazarlamaci": pazarlamaci,
+              "musteri_tipi": musteri_tipi, "is_iade": is_iade})
+    return (r or {}).get("id")
+
+def update_crm_sale(sid, musteri="", metre=0, tutar=0, doviz="USD", usd_tutar=0, ay="",
+                    pazarlamaci="", musteri_tipi="", is_iade=0):
+    _put(f"/api/crm/sales/{sid}", {"musteri": musteri, "metre": metre, "tutar": tutar,
+         "doviz": doviz, "usd_tutar": usd_tutar, "ay": ay, "pazarlamaci": pazarlamaci,
+         "musteri_tipi": musteri_tipi, "is_iade": is_iade})
+
+def delete_crm_sale(sid):
+    _delete(f"/api/crm/sales/{sid}")
+
+
+# ── CRM: Siparişler ──────────────────────────────────────────────
+def get_crm_orders(search="", pazarlamaci="", year=""):
+    return _get("/api/crm/orders", {"search": search, "pazarlamaci": pazarlamaci,
+                "year": year}) or []
+
+def add_crm_order(musteri="", pazarlamaci="", musteri_tipi="", tarih="", kod="", renk="",
+                  miktar=0, maliyet_fiyati=0, satis_fiyati=0, kar_orani=0, teorik_kar_usd=0,
+                  kar_tl=0, vade="", ciro=0, ciro_usd=0, usd_kuru=0):
+    r = _post("/api/crm/orders", {"musteri": musteri, "pazarlamaci": pazarlamaci,
+              "musteri_tipi": musteri_tipi, "tarih": tarih, "kod": kod, "renk": renk,
+              "miktar": miktar, "maliyet_fiyati": maliyet_fiyati, "satis_fiyati": satis_fiyati,
+              "kar_orani": kar_orani, "teorik_kar_usd": teorik_kar_usd, "kar_tl": kar_tl,
+              "vade": vade, "ciro": ciro, "ciro_usd": ciro_usd, "usd_kuru": usd_kuru})
+    return (r or {}).get("id")
+
+def update_crm_order(oid, musteri="", pazarlamaci="", musteri_tipi="", tarih="", kod="", renk="",
+                     miktar=0, maliyet_fiyati=0, satis_fiyati=0, kar_orani=0, teorik_kar_usd=0,
+                     kar_tl=0, vade="", ciro=0, ciro_usd=0, usd_kuru=0):
+    _put(f"/api/crm/orders/{oid}", {"musteri": musteri, "pazarlamaci": pazarlamaci,
+         "musteri_tipi": musteri_tipi, "tarih": tarih, "kod": kod, "renk": renk,
+         "miktar": miktar, "maliyet_fiyati": maliyet_fiyati, "satis_fiyati": satis_fiyati,
+         "kar_orani": kar_orani, "teorik_kar_usd": teorik_kar_usd, "kar_tl": kar_tl,
+         "vade": vade, "ciro": ciro, "ciro_usd": ciro_usd, "usd_kuru": usd_kuru})
+
+def delete_crm_order(oid):
+    _delete(f"/api/crm/orders/{oid}")
+
+
+# ── CRM: Toplu içe aktarma + Analiz ──────────────────────────────
+def crm_import_bulk(customers=None, visits=None, sales=None, orders=None, replace=False):
+    r = _post("/api/crm/import", {"customers": customers or [], "visits": visits or [],
+              "sales": sales or [], "orders": orders or [], "replace": replace})
+    return (r or {})
+
+def get_crm_years():
+    return _get("/api/crm/years") or []
+
+def get_crm_analysis(year=""):
+    return _get("/api/crm/analysis", {"year": year}) or {}
+
+
 # ── Tedarikçiler ─────────────────────────────────────────────────
 
 def get_all_suppliers(search="", active_only=True):
