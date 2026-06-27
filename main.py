@@ -2368,15 +2368,28 @@ class CRMView(QWidget):
         self.vi_durum.addItem("— Tümü —", ""); self.vi_durum.addItem("Gerçekleşen", "GERÇEKLEŞEN")
         self.vi_durum.addItem("Planlanan", "PLANLANAN")
         self.vi_durum.currentIndexChanged.connect(self._load_visits)
+        self.vi_paz = QComboBox(); self.vi_paz.addItem("— Tümü —", "")
+        for p in CRM_PAZARLAMACILAR: self.vi_paz.addItem(p, p)
+        self.vi_paz.currentIndexChanged.connect(self._load_visits)
+        self.vi_group = QComboBox()
+        self.vi_group.addItem("Detay (gruplama yok)", "")
+        self.vi_group.addItem("Aya göre", "ay")
+        self.vi_group.addItem("Pazarlamacıya göre", "pazarlamaci")
+        self.vi_group.addItem("Müşteriye göre", "musteri")
+        self.vi_group.addItem("Müşteri Tipine göre", "musteri_tipi")
+        self.vi_group.currentIndexChanged.connect(self._load_visits)
         b_add = QPushButton("+ Yeni"); b_add.clicked.connect(self._add_visit)
         b_edit = QPushButton("✎ Düzenle"); b_edit.clicked.connect(self._edit_visit)
         b_del = QPushButton("✕ Sil"); b_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 12px;")
         b_del.clicked.connect(self._delete_visit)
         top.addWidget(QLabel("Ara:")); top.addWidget(self.vi_search)
-        top.addWidget(QLabel("Durum:")); top.addWidget(self.vi_durum); top.addStretch()
+        top.addWidget(QLabel("Durum:")); top.addWidget(self.vi_durum)
+        top.addWidget(QLabel("Pazarlamacı:")); top.addWidget(self.vi_paz)
+        top.addWidget(QLabel("Grupla:")); top.addWidget(self.vi_group); top.addStretch()
         for b in (b_add, b_edit, b_del): top.addWidget(b)
         v.addLayout(top)
         self.vi_table = self._mk_table(["Durum", "Tarih", "Pazarlamacı", "Müşteri", "Müşteri Tipi", "Notlar"])
+        self.vi_table.setSortingEnabled(False)   # alt toplam satırı sabit kalsın
         self.vi_table.horizontalHeader().setStretchLastSection(True)
         self.vi_table.doubleClicked.connect(self._edit_visit)
         v.addWidget(self.vi_table)
@@ -2385,9 +2398,20 @@ class CRMView(QWidget):
 
     def _load_visits(self):
         rows = db.get_crm_visits(search=self.vi_search.text().strip(),
-                                 durum=self.vi_durum.currentData() or "") or []
-        t = self.vi_table; t.setSortingEnabled(False); t.setRowCount(len(rows))
+                                 durum=self.vi_durum.currentData() or "",
+                                 pazarlamaci=self.vi_paz.currentData() or "") or []
+        group = self.vi_group.currentData() or ""
+        if group:
+            self._load_visits_grouped(rows, group)
+            return
+        # ── Detay görünüm + alt toplam ────────────────────────────
+        t = self.vi_table
+        t.setColumnCount(6)
+        t.setHorizontalHeaderLabels(["Durum", "Tarih", "Pazarlamacı", "Müşteri", "Müşteri Tipi", "Notlar"])
+        t.setRowCount(len(rows) + (1 if rows else 0))
+        musteriler = set()
         for i, r in enumerate(rows):
+            musteriler.add((r["musteri"] or "").strip().upper())
             d_item = QTableWidgetItem("📍 Gerçekleşen" if r["durum"] == "GERÇEKLEŞEN" else "🗓 Planlanan")
             d_item.setData(Qt.ItemDataRole.UserRole, r["id"])
             d_item.setForeground(QBrush(QColor("#2E7D32" if r["durum"] == "GERÇEKLEŞEN" else "#1565C0")))
@@ -2397,8 +2421,40 @@ class CRMView(QWidget):
             t.setItem(i, 3, QTableWidgetItem(r["musteri"] or ""))
             t.setItem(i, 4, QTableWidgetItem(r["musteri_tipi"] or ""))
             t.setItem(i, 5, QTableWidgetItem(r["notlar"] or ""))
-        t.setSortingEnabled(True)
+        if rows:
+            self._put_total_row(t, len(rows),
+                [f"TOPLAM ({len(rows)} ziyaret)", "", "", f"{len(musteriler)} tekil müşteri", "", ""])
         self.vi_count.setText(f"{len(rows)} ziyaret")
+
+    def _load_visits_grouped(self, rows, group):
+        labels = {"ay": "Ay", "pazarlamaci": "Pazarlamacı", "musteri": "Müşteri",
+                  "musteri_tipi": "Müşteri Tipi"}
+        t = self.vi_table
+        t.setColumnCount(4)
+        t.setHorizontalHeaderLabels([labels[group], "Ziyaret Adedi", "Tekil Müşteri", "Gerçekleşen / Planlanan"])
+        groups = {}
+        for r in rows:
+            key = (r["tarih"] or "")[:7] if group == "ay" else (r[group] or "—")
+            g = groups.setdefault(key, {"adet": 0, "musteriler": set(), "gerc": 0, "plan": 0})
+            g["adet"] += 1
+            g["musteriler"].add((r["musteri"] or "").strip().upper())
+            if r["durum"] == "GERÇEKLEŞEN": g["gerc"] += 1
+            else: g["plan"] += 1
+        keys = sorted(groups.keys())
+        tot_adet = 0; tot_m = set(); tot_g = 0; tot_p = 0
+        t.setRowCount(len(keys) + (1 if keys else 0))
+        for i, key in enumerate(keys):
+            g = groups[key]
+            tot_adet += g["adet"]; tot_m |= g["musteriler"]; tot_g += g["gerc"]; tot_p += g["plan"]
+            t.setItem(i, 0, QTableWidgetItem(key or "—"))
+            t.setItem(i, 1, self._num(g["adet"]))
+            t.setItem(i, 2, self._num(len(g["musteriler"])))
+            t.setItem(i, 3, QTableWidgetItem(f"{g['gerc']} / {g['plan']}"))
+        if keys:
+            self._put_total_row(t, len(keys),
+                ["TOPLAM", self._num(tot_adet), self._num(len(tot_m)), f"{tot_g} / {tot_p}"])
+        t.resizeColumnsToContents()
+        self.vi_count.setText(f"{len(keys)} grup • {len(rows)} ziyaret")
 
     def _visit_dialog(self, vrow=None):
         dlg = QDialog(self); dlg.setWindowTitle("Ziyaret" + (" Düzenle" if vrow else " Ekle"))
@@ -2458,15 +2514,28 @@ class CRMView(QWidget):
         self.sa_search = QLineEdit(); self.sa_search.setPlaceholderText("Müşteri / pazarlamacı ara...")
         self.sa_search.textChanged.connect(self._load_sales)
         self.sa_year = QComboBox(); self.sa_year.currentIndexChanged.connect(self._load_sales)
+        self.sa_paz = QComboBox(); self.sa_paz.addItem("— Tümü —", "")
+        for p in CRM_PAZARLAMACILAR: self.sa_paz.addItem(p, p)
+        self.sa_paz.currentIndexChanged.connect(self._load_sales)
+        self.sa_group = QComboBox()
+        self.sa_group.addItem("Detay (gruplama yok)", "")
+        self.sa_group.addItem("Aya göre", "ay")
+        self.sa_group.addItem("Yıla göre", "yil")
+        self.sa_group.addItem("Pazarlamacıya göre", "pazarlamaci")
+        self.sa_group.addItem("Müşteriye göre", "musteri")
+        self.sa_group.currentIndexChanged.connect(self._load_sales)
         b_add = QPushButton("+ Yeni"); b_add.clicked.connect(self._add_sale)
         b_edit = QPushButton("✎ Düzenle"); b_edit.clicked.connect(self._edit_sale)
         b_del = QPushButton("✕ Sil"); b_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 12px;")
         b_del.clicked.connect(self._delete_sale)
         top.addWidget(QLabel("Ara:")); top.addWidget(self.sa_search)
-        top.addWidget(QLabel("Yıl:")); top.addWidget(self.sa_year); top.addStretch()
+        top.addWidget(QLabel("Yıl:")); top.addWidget(self.sa_year)
+        top.addWidget(QLabel("Pazarlamacı:")); top.addWidget(self.sa_paz)
+        top.addWidget(QLabel("Grupla:")); top.addWidget(self.sa_group); top.addStretch()
         for b in (b_add, b_edit, b_del): top.addWidget(b)
         v.addLayout(top)
         self.sa_table = self._mk_table(["Müşteri", "Metre", "Tutar", "Döviz", "USD Tutar", "Ay", "Pazarlamacı", "Müşteri Tipi", "İade"])
+        self.sa_table.setSortingEnabled(False)   # alt toplam satırı sabit kalsın
         self.sa_table.doubleClicked.connect(self._edit_sale)
         v.addWidget(self.sa_table)
         self.sa_count = QLabel(); v.addWidget(self.sa_count)
@@ -2483,13 +2552,34 @@ class CRMView(QWidget):
             if i >= 0: combo.setCurrentIndex(i)
         combo.blockSignals(False)
 
+    @staticmethod
+    def _sale_net(r):
+        """İade ise metre/tutar/usd net olarak (negatif) döner."""
+        metre, tutar, usd = r["metre"] or 0, r["tutar"] or 0, r["usd_tutar"] or 0
+        if r["is_iade"]:
+            return -abs(metre), -abs(tutar), -abs(usd)
+        return metre, tutar, usd
+
     def _load_sales(self):
         if self.sa_year.count() == 0:
             self._refresh_year_combo(self.sa_year)
         rows = db.get_crm_sales(search=self.sa_search.text().strip(),
+                                pazarlamaci=self.sa_paz.currentData() or "",
                                 year=self.sa_year.currentData() or "") or []
-        t = self.sa_table; t.setSortingEnabled(False); t.setRowCount(len(rows))
+        group = self.sa_group.currentData() or ""
+        if group:
+            self._load_sales_grouped(rows, group)
+            return
+        # ── Detay görünüm + net alt toplam ────────────────────────
+        t = self.sa_table
+        t.setColumnCount(9)
+        t.setHorizontalHeaderLabels(["Müşteri", "Metre", "Tutar", "Döviz", "USD Tutar", "Ay",
+                                     "Pazarlamacı", "Müşteri Tipi", "İade"])
+        sum_metre = sum_usd = 0.0
+        t.setRowCount(len(rows) + (1 if rows else 0))
         for i, r in enumerate(rows):
+            mn, tn, un = self._sale_net(r)
+            sum_metre += mn; sum_usd += un
             it = QTableWidgetItem(r["musteri"] or "")
             it.setData(Qt.ItemDataRole.UserRole, r["id"])
             t.setItem(i, 0, it)
@@ -2503,8 +2593,43 @@ class CRMView(QWidget):
             iade = QTableWidgetItem("↩ İade" if r["is_iade"] else "")
             if r["is_iade"]: iade.setForeground(QBrush(QColor("#C62828")))
             t.setItem(i, 8, iade)
-        t.setSortingEnabled(True)
+        if rows:
+            cells = [f"TOPLAM ({len(rows)} kayıt, net)", self._num(sum_metre), "", "",
+                     self._num(sum_usd), "", "", "", ""]
+            self._put_total_row(t, len(rows), cells)
         self.sa_count.setText(f"{len(rows)} satış kaydı")
+
+    def _load_sales_grouped(self, rows, group):
+        labels = {"ay": "Ay", "yil": "Yıl", "pazarlamaci": "Pazarlamacı", "musteri": "Müşteri"}
+        t = self.sa_table
+        t.setColumnCount(4)
+        t.setHorizontalHeaderLabels([labels[group], "Kayıt Adedi", "Metre (net)", "USD Tutar (net)"])
+        groups = {}
+        for r in rows:
+            if group == "ay":
+                key = (r["ay"] or "")[:7]
+            elif group == "yil":
+                key = (r["ay"] or "")[:4]
+            else:
+                key = (r[group] or "—")
+            g = groups.setdefault(key, {"adet": 0, "metre": 0.0, "usd": 0.0})
+            mn, tn, un = self._sale_net(r)
+            g["adet"] += 1; g["metre"] += mn; g["usd"] += un
+        keys = sorted(groups.keys())
+        tot = {"adet": 0, "metre": 0.0, "usd": 0.0}
+        t.setRowCount(len(keys) + (1 if keys else 0))
+        for i, key in enumerate(keys):
+            g = groups[key]
+            for k in tot: tot[k] += g[k]
+            t.setItem(i, 0, QTableWidgetItem(key or "—"))
+            t.setItem(i, 1, self._num(g["adet"]))
+            t.setItem(i, 2, self._num(g["metre"]))
+            t.setItem(i, 3, self._num(g["usd"]))
+        if keys:
+            self._put_total_row(t, len(keys),
+                ["TOPLAM", self._num(tot["adet"]), self._num(tot["metre"]), self._num(tot["usd"])])
+        t.resizeColumnsToContents()
+        self.sa_count.setText(f"{len(keys)} grup • {len(rows)} satış kaydı")
 
     def _sale_dialog(self, s=None):
         dlg = QDialog(self); dlg.setWindowTitle("Fiili Satış" + (" Düzenle" if s else " Ekle"))
@@ -2599,7 +2724,7 @@ class CRMView(QWidget):
     @staticmethod
     def _order_agg_init():
         return {"adet": 0, "miktar": 0.0, "mal_x_q": 0.0, "sat_x_q": 0.0,
-                "teorik": 0.0, "ciro": 0.0, "ciro_usd": 0.0}
+                "teorik": 0.0, "kar_tl": 0.0, "ciro": 0.0, "ciro_usd": 0.0}
 
     @staticmethod
     def _order_agg_add(a, r):
@@ -2609,6 +2734,7 @@ class CRMView(QWidget):
         a["mal_x_q"] += (r["maliyet_fiyati"] or 0) * q
         a["sat_x_q"] += (r["satis_fiyati"] or 0) * q
         a["teorik"] += r["teorik_kar_usd"] or 0
+        a["kar_tl"] += r["kar_tl"] or 0
         a["ciro"] += r["ciro"] or 0
         a["ciro_usd"] += r["ciro_usd"] or 0
 
@@ -2633,9 +2759,10 @@ class CRMView(QWidget):
             return
         # ── Detay görünüm + alt toplam ────────────────────────────
         t = self.or_table
-        t.setColumnCount(14)
+        t.setColumnCount(15)
         t.setHorizontalHeaderLabels(["Müşteri", "Pazarlamacı", "Tarih", "Kod", "Renk", "Miktar",
-                                     "Maliyet", "Satış", "Kâr %", "Teorik Kâr USD", "Vade", "Ciro", "Ciro USD", "Kur"])
+                                     "Maliyet", "Satış", "Kâr %", "Teorik Kâr USD", "Kâr TL",
+                                     "Vade", "Ciro", "Ciro USD", "Kur"])
         agg = self._order_agg_init()
         t.setRowCount(len(rows) + (1 if rows else 0))
         for i, r in enumerate(rows):
@@ -2652,15 +2779,17 @@ class CRMView(QWidget):
             t.setItem(i, 7, self._num(r["satis_fiyati"]))
             t.setItem(i, 8, self._num((r["kar_orani"] or 0) * 100, suffix="%"))
             t.setItem(i, 9, self._num(r["teorik_kar_usd"]))
-            t.setItem(i, 10, QTableWidgetItem(r["vade"] or ""))
-            t.setItem(i, 11, self._num(r["ciro"]))
-            t.setItem(i, 12, self._num(r["ciro_usd"]))
-            t.setItem(i, 13, self._num(r["usd_kuru"]))
+            t.setItem(i, 10, self._num(r["kar_tl"]))
+            t.setItem(i, 11, QTableWidgetItem(r["vade"] or ""))
+            t.setItem(i, 12, self._num(r["ciro"]))
+            t.setItem(i, 13, self._num(r["ciro_usd"]))
+            t.setItem(i, 14, self._num(r["usd_kuru"]))
         if rows:
             d = self._order_agg_derive(agg)
             cells = ["TOPLAM ({} sipariş)".format(agg["adet"]), "", "", "", "",
                      self._num(agg["miktar"]), self._num(d["maliyet"]), self._num(d["satis"]),
-                     self._num(d["kar_orani"] * 100, suffix="%"), self._num(agg["teorik"]), "",
+                     self._num(d["kar_orani"] * 100, suffix="%"), self._num(agg["teorik"]),
+                     self._num(agg["kar_tl"]), "",
                      self._num(agg["ciro"]), self._num(agg["ciro_usd"]), ""]
             self._put_total_row(t, len(rows), cells)
         self.or_count.setText(f"{len(rows)} sipariş")
@@ -2668,9 +2797,9 @@ class CRMView(QWidget):
     def _load_orders_grouped(self, rows, group):
         labels = {"ay": "Ay", "musteri": "Müşteri", "pazarlamaci": "Pazarlamacı"}
         t = self.or_table
-        t.setColumnCount(8)
+        t.setColumnCount(9)
         t.setHorizontalHeaderLabels([labels[group], "Sipariş Adedi", "Miktar", "Ağ. Maliyet",
-                                     "Ağ. Satış", "Ağ. Kâr %", "Teorik Kâr USD", "Ciro USD"])
+                                     "Ağ. Satış", "Ağ. Kâr %", "Teorik Kâr USD", "Kâr TL", "Ciro USD"])
         groups = {}
         for r in rows:
             if group == "ay":
@@ -2692,13 +2821,14 @@ class CRMView(QWidget):
             t.setItem(i, 4, self._num(d["satis"]))
             t.setItem(i, 5, self._num(d["kar_orani"] * 100, suffix="%"))
             t.setItem(i, 6, self._num(a["teorik"]))
-            t.setItem(i, 7, self._num(a["ciro_usd"]))
+            t.setItem(i, 7, self._num(a["kar_tl"]))
+            t.setItem(i, 8, self._num(a["ciro_usd"]))
         if keys:
             gd = self._order_agg_derive(grand)
             cells = ["TOPLAM", self._num(grand["adet"]), self._num(grand["miktar"]),
                      self._num(gd["maliyet"]), self._num(gd["satis"]),
                      self._num(gd["kar_orani"] * 100, suffix="%"), self._num(grand["teorik"]),
-                     self._num(grand["ciro_usd"])]
+                     self._num(grand["kar_tl"]), self._num(grand["ciro_usd"])]
             self._put_total_row(t, len(keys), cells)
         t.resizeColumnsToContents()
         self.or_count.setText(f"{len(keys)} grup • {len(rows)} sipariş")
@@ -2731,18 +2861,53 @@ class CRMView(QWidget):
         dlg.miktar = sb(99999999, 2, o["miktar"] if o else 0)
         dlg.maliyet = sb(9999999, 4, o["maliyet_fiyati"] if o else 0)
         dlg.satis = sb(9999999, 4, o["satis_fiyati"] if o else 0)
-        dlg.kar = sb(100, 4, o["kar_orani"] if o else 0); dlg.kar.setToolTip("Oran (0.30 = %30)")
+        dlg.kar = sb(100, 4, o["kar_orani"] if o else 0); dlg.kar.setToolTip("Otomatik: (satış − maliyet) / maliyet")
         dlg.teorik = sb(99999999, 2, o["teorik_kar_usd"] if o else 0)
         dlg.kartl = sb(999999999, 2, o["kar_tl"] if o else 0)
         dlg.vade = QLineEdit(o["vade"] if o else "")
         dlg.ciro = sb(999999999, 2, o["ciro"] if o else 0)
         dlg.cirousd = sb(999999999, 2, o["ciro_usd"] if o else 0)
         dlg.kur = sb(10000, 4, o["usd_kuru"] if o else 0)
+
+        # Otomatik hesaplanan alanlar — salt okunur + soluk zemin
+        auto_style = "background:#F1F3F4; color:#37474F;"
+        for wd, tip in [(dlg.kar, "Otomatik: (satış − maliyet) / maliyet"),
+                        (dlg.teorik, "Otomatik: birim kâr × miktar × (ciro USD / ciro)"),
+                        (dlg.kartl, "Otomatik: teorik kâr USD × kur"),
+                        (dlg.ciro, "Otomatik: satış × miktar")]:
+            wd.setReadOnly(True); wd.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
+            wd.setStyleSheet(auto_style); wd.setToolTip(tip)
+        dlg.cirousd.setToolTip("Otomatik = satış × miktar (USD). Döviz farklıysa elle düzeltebilirsiniz.")
+
+        dlg._busy = False
+        def _recalc(full=True):
+            if dlg._busy:
+                return
+            dlg._busy = True
+            try:
+                mal, sat, q, kur = dlg.maliyet.value(), dlg.satis.value(), dlg.miktar.value(), dlg.kur.value()
+                birim = sat - mal
+                dlg.kar.setValue((birim / mal) if mal else 0)
+                dlg.ciro.setValue(sat * q)
+                if full:                       # maliyet/satış/miktar değişti → ciro USD'yi USD varsayımıyla tazele
+                    dlg.cirousd.setValue(sat * q)
+                c, cu = dlg.ciro.value(), dlg.cirousd.value()
+                ratio = (cu / c) if c else 1.0
+                dlg.teorik.setValue(birim * q * ratio)
+                dlg.kartl.setValue(dlg.teorik.value() * kur)
+            finally:
+                dlg._busy = False
+        dlg._recalc = _recalc
+        for wd in (dlg.maliyet, dlg.satis, dlg.miktar):
+            wd.valueChanged.connect(lambda _=None: _recalc(True))
+        dlg.kur.valueChanged.connect(lambda _=None: _recalc(False))
+        dlg.cirousd.valueChanged.connect(lambda _=None: _recalc(False))
+
         for lbl, wd in [("Müşteri:", dlg.musteri), ("Pazarlamacı:", dlg.paz), ("Müşteri Tipi:", dlg.tipi),
                         ("Tarih:", dlg.tarih), ("Kod:", dlg.kod), ("Renk:", dlg.renk), ("Miktar:", dlg.miktar),
-                        ("Maliyet Fiyatı:", dlg.maliyet), ("Satış Fiyatı:", dlg.satis), ("Kâr Oranı (0-1):", dlg.kar),
-                        ("Teorik Kâr USD:", dlg.teorik), ("Kâr TL:", dlg.kartl), ("Vade:", dlg.vade),
-                        ("Ciro:", dlg.ciro), ("Ciro USD:", dlg.cirousd), ("USD Kuru:", dlg.kur)]:
+                        ("Maliyet Fiyatı:", dlg.maliyet), ("Satış Fiyatı:", dlg.satis), ("Kâr Oranı (oto):", dlg.kar),
+                        ("Teorik Kâr USD (oto):", dlg.teorik), ("Kâr TL (oto):", dlg.kartl), ("Vade:", dlg.vade),
+                        ("Ciro (oto):", dlg.ciro), ("Ciro USD:", dlg.cirousd), ("USD Kuru:", dlg.kur)]:
             form.addRow(lbl, wd)
         lay.addLayout(form)
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
@@ -2776,34 +2941,99 @@ class CRMView(QWidget):
         if self._confirm_del():
             db.delete_crm_order(oid); self._load_orders()
 
-    # ── Sekme 5: Analiz (5 Ways) ──────────────────────────────────
+    # ── Sekme 5: Analiz (Aylık × Pazarlamacı) ─────────────────────
+    _AY_ADLARI = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz",
+                  "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
+    # (anahtar, etiket, tip)  tip: money|int|pct
+    _AN_METRIKLER = [
+        ("fiili_usd",      "Fiili Satış USD (net)", "money"),
+        ("fiili_metre",    "Fiili Satış Metre (net)", "money"),
+        ("sip_ciro_usd",   "Sipariş Tutarı USD",    "money"),
+        ("sip_metre",      "Sipariş Metresi",       "money"),
+        ("sip_adet",       "Sipariş Adedi",         "int"),
+        ("teorik_kar_usd", "Teorik Kâr USD",        "money"),
+        ("visit_total",    "Ziyaret Adedi",         "int"),
+        ("ort_kar_orani",  "Ort. Kâr Oranı %",      "pct"),
+    ]
+
     def _build_analysis_tab(self):
         w = QWidget(); v = QVBoxLayout(w)
         top = QHBoxLayout()
         top.addWidget(QLabel("Yıl:"))
         self.an_year = QComboBox(); self.an_year.currentIndexChanged.connect(self._load_analysis)
         top.addWidget(self.an_year)
-        top.addWidget(QLabel("Dönem:"))
-        self.an_period = QComboBox()
-        self.an_period.addItem("Yıllık Toplam", "yearly")
-        for mi, mn in enumerate(["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz",
-                                  "Ağustos","Eylül","Ekim","Kasım","Aralık"], start=1):
-            self.an_period.addItem(mn, mi)
-        self.an_period.currentIndexChanged.connect(self._load_analysis)
-        top.addWidget(self.an_period); top.addStretch()
-        hedef = QLabel("🎯 Hedefler: Ziyaret " + CRM_HEDEFLER["ziyaret"] +
-                       "  |  Sipariş " + CRM_HEDEFLER["sip_adet"] + ", " + CRM_HEDEFLER["sip_metre"] +
-                       "  |  Tutar " + CRM_HEDEFLER["sip_tutar_usd"] + "  |  Kâr " + CRM_HEDEFLER["kar_orani"])
-        hedef.setStyleSheet("color:#555; font-size:11px;")
+        top.addWidget(QLabel("Metrik:"))
+        self.an_metric = QComboBox()
+        for key, lbl, kind in self._AN_METRIKLER:
+            self.an_metric.addItem(lbl, key)
+        self.an_metric.currentIndexChanged.connect(self._load_analysis)
+        top.addWidget(self.an_metric)
+        top.addStretch()
         v.addLayout(top)
-        v.addWidget(hedef)
-        self.an_table = self._mk_table([
-            "Pazarlamacı", "Ziy. Yeni", "Ziy. Mevcut", "Sip. Adedi", "Sip. Metresi",
-            "Fiili Metre (net)", "Fiili USD (net)", "Ort. Sip. USD", "Teorik Kâr USD", "Ort. Kâr %"])
+        info = QLabel("Her hücrede üstte değer, altta bir önceki aya göre değişim (▲ artış / ▼ azalış).")
+        info.setStyleSheet("color:#555; font-size:11px;")
+        v.addWidget(info)
+        self.an_table = self._mk_table(["Pazarlamacı"] + self._AY_ADLARI + ["Yıllık"])
         self.an_table.setSortingEnabled(False)
-        self.an_table.horizontalHeader().setStretchLastSection(True)
+        self.an_table.verticalHeader().setDefaultSectionSize(40)
+        self.an_table.setWordWrap(True)
         v.addWidget(self.an_table)
         return w
+
+    @staticmethod
+    def _an_combine(scopes):
+        keys = ("visit_yeni", "visit_mevcut", "yeni_sip_adet", "sip_adet", "sip_metre",
+                "fiili_metre", "fiili_usd", "sip_ciro_usd", "teorik_kar_usd")
+        tot = {k: 0.0 for k in keys}
+        for s in scopes:
+            for k in keys:
+                tot[k] += s.get(k, 0) or 0
+        tot["ort_ciro_usd"] = tot["sip_ciro_usd"] / tot["sip_adet"] if tot["sip_adet"] else 0
+        tot["ort_kar_orani"] = tot["teorik_kar_usd"] / tot["sip_ciro_usd"] if tot["sip_ciro_usd"] else 0
+        return tot
+
+    @staticmethod
+    def _an_extract(scope, key):
+        if key == "visit_total":
+            return (scope.get("visit_yeni", 0) or 0) + (scope.get("visit_mevcut", 0) or 0)
+        if key == "ort_kar_orani":
+            return (scope.get("ort_kar_orani", 0) or 0) * 100
+        return scope.get(key, 0) or 0
+
+    @staticmethod
+    def _an_fmt(val, kind):
+        if kind == "pct":
+            return f"{val:,.1f}%"
+        return f"{val:,.0f}"
+
+    def _an_cell(self, val, prev, kind, bold=False, with_delta=True):
+        """Değer + (varsa) önceki aya göre % fark içeren hücre üretir."""
+        txt = self._an_fmt(val, kind)
+        color = None
+        if with_delta and prev is not None:
+            if kind == "pct":
+                d = val - prev
+                if abs(d) >= 0.05:
+                    txt += f"\n{'▲' if d > 0 else '▼'} {d:+.1f}p"
+                    color = "#2E7D32" if d > 0 else "#C62828"
+                else:
+                    txt += "\n—"
+            else:
+                if prev == 0:
+                    txt += "\n—" if val == 0 else "\n▲ yeni"
+                    color = None if val == 0 else "#2E7D32"
+                else:
+                    d = (val - prev) / prev * 100
+                    txt += f"\n{'▲' if d > 0 else ('▼' if d < 0 else '•')} {d:+.0f}%"
+                    color = "#2E7D32" if d > 0 else ("#C62828" if d < 0 else None)
+        it = QTableWidgetItem(txt)
+        it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        f = QFont(); f.setBold(bold); it.setFont(f)
+        if color:
+            it.setForeground(QBrush(QColor(color)))
+        if bold:
+            it.setBackground(QBrush(QColor("#ECEFF1")))
+        return it
 
     def _load_analysis(self):
         if self.an_year.count() == 0:
@@ -2811,42 +3041,33 @@ class CRMView(QWidget):
             if self.an_year.count() > 1:
                 self.an_year.setCurrentIndex(1)   # en güncel yıl
         data = db.get_crm_analysis(year=self.an_year.currentData() or "") or {}
-        period = self.an_period.currentData()
-        # pazarlamacıları sabit sırada + diğerleri
+        key = self.an_metric.currentData() or "fiili_usd"
+        kind = next((k for mk, lbl, k in self._AN_METRIKLER if mk == key), "money")
         names = [p for p in CRM_PAZARLAMACILAR if p in data] + \
                 [p for p in sorted(data.keys()) if p not in CRM_PAZARLAMACILAR]
         t = self.an_table
         t.setRowCount(len(names) + 1)
-        tot = {k: 0.0 for k in ("visit_yeni","visit_mevcut","yeni_sip_adet","sip_adet","sip_metre",
-                                 "fiili_metre","fiili_usd","sip_ciro_usd","teorik_kar_usd")}
+
+        def _row(ri, name, month_scopes, year_scope, bold):
+            it = QTableWidgetItem(name); f = QFont(); f.setBold(bold); it.setFont(f)
+            if bold: it.setBackground(QBrush(QColor("#ECEFF1")))
+            t.setItem(ri, 0, it)
+            vals = [self._an_extract(month_scopes.get(m, {}), key) for m in range(1, 13)]
+            for mi in range(12):
+                prev = vals[mi - 1] if mi > 0 else None
+                t.setItem(ri, mi + 1, self._an_cell(vals[mi], prev, kind, bold=bold))
+            yv = self._an_extract(year_scope, key)
+            t.setItem(ri, 13, self._an_cell(yv, None, kind, bold=bold, with_delta=False))
+
         for i, name in enumerate(names):
             d = data[name]
-            scope = d["yearly"] if period == "yearly" else d["months"].get(period, {})
-            self._an_row(t, i, name, scope, bold=False)
-            for k in tot:
-                tot[k] += scope.get(k, 0) or 0
-        # TOPLAM satırı
-        tot["ort_ciro_usd"] = tot["sip_ciro_usd"]/tot["sip_adet"] if tot["sip_adet"] else 0
-        tot["ort_kar_orani"] = tot["teorik_kar_usd"]/tot["sip_ciro_usd"] if tot["sip_ciro_usd"] else 0
-        self._an_row(t, len(names), "TOPLAM", tot, bold=True)
+            _row(i, name, d["months"], d["yearly"], bold=False)
+        # TOPLAM satırı — her ay için pazarlamacılar birleştirilir
+        month_tot = {m: self._an_combine([data[n]["months"].get(m, {}) for n in names])
+                     for m in range(1, 13)}
+        year_tot = self._an_combine([data[n]["yearly"] for n in names])
+        _row(len(names), "TOPLAM", month_tot, year_tot, bold=True)
         t.resizeColumnsToContents()
-
-    def _an_row(self, t, i, name, s, bold=False):
-        vals = [name,
-                f"{int(s.get('visit_yeni',0))}", f"{int(s.get('visit_mevcut',0))}",
-                f"{int(s.get('sip_adet',0))}", f"{s.get('sip_metre',0):,.0f}",
-                f"{s.get('fiili_metre',0):,.0f}", f"{s.get('fiili_usd',0):,.0f}",
-                f"{s.get('ort_ciro_usd',0):,.0f}", f"{s.get('teorik_kar_usd',0):,.0f}",
-                f"{s.get('ort_kar_orani',0)*100:,.1f}%"]
-        f = QFont(); f.setBold(bold)
-        for c, val in enumerate(vals):
-            it = QTableWidgetItem(val)
-            it.setFont(f)
-            if c > 0:
-                it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            if bold:
-                it.setBackground(QBrush(QColor("#ECEFF1")))
-            t.setItem(i, c, it)
 
     # ── ortak küçük yardımcılar ───────────────────────────────────
     def _num(self, val, suffix=""):
