@@ -2573,28 +2573,73 @@ class CRMView(QWidget):
         self.or_search = QLineEdit(); self.or_search.setPlaceholderText("Müşteri / kod / pazarlamacı ara...")
         self.or_search.textChanged.connect(self._load_orders)
         self.or_year = QComboBox(); self.or_year.currentIndexChanged.connect(self._load_orders)
+        self.or_group = QComboBox()
+        self.or_group.addItem("Detay (gruplama yok)", "")
+        self.or_group.addItem("Aya göre", "ay")
+        self.or_group.addItem("Müşteriye göre", "musteri")
+        self.or_group.addItem("Pazarlamacıya göre", "pazarlamaci")
+        self.or_group.currentIndexChanged.connect(self._load_orders)
         b_add = QPushButton("+ Yeni"); b_add.clicked.connect(self._add_order)
         b_edit = QPushButton("✎ Düzenle"); b_edit.clicked.connect(self._edit_order)
         b_del = QPushButton("✕ Sil"); b_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 12px;")
         b_del.clicked.connect(self._delete_order)
         top.addWidget(QLabel("Ara:")); top.addWidget(self.or_search)
-        top.addWidget(QLabel("Yıl:")); top.addWidget(self.or_year); top.addStretch()
+        top.addWidget(QLabel("Yıl:")); top.addWidget(self.or_year)
+        top.addWidget(QLabel("Grupla:")); top.addWidget(self.or_group); top.addStretch()
         for b in (b_add, b_edit, b_del): top.addWidget(b)
         v.addLayout(top)
         self.or_table = self._mk_table(["Müşteri", "Pazarlamacı", "Tarih", "Kod", "Renk", "Miktar",
                                         "Maliyet", "Satış", "Kâr %", "Teorik Kâr USD", "Vade", "Ciro", "Ciro USD", "Kur"])
+        self.or_table.setSortingEnabled(False)   # alt toplam satırı sabit kalsın
         self.or_table.doubleClicked.connect(self._edit_order)
         v.addWidget(self.or_table)
         self.or_count = QLabel(); v.addWidget(self.or_count)
         return w
+
+    @staticmethod
+    def _order_agg_init():
+        return {"adet": 0, "miktar": 0.0, "mal_x_q": 0.0, "sat_x_q": 0.0,
+                "teorik": 0.0, "ciro": 0.0, "ciro_usd": 0.0}
+
+    @staticmethod
+    def _order_agg_add(a, r):
+        q = r["miktar"] or 0
+        a["adet"] += 1
+        a["miktar"] += q
+        a["mal_x_q"] += (r["maliyet_fiyati"] or 0) * q
+        a["sat_x_q"] += (r["satis_fiyati"] or 0) * q
+        a["teorik"] += r["teorik_kar_usd"] or 0
+        a["ciro"] += r["ciro"] or 0
+        a["ciro_usd"] += r["ciro_usd"] or 0
+
+    @staticmethod
+    def _order_agg_derive(a):
+        q = a["miktar"] or 0
+        cu = a["ciro_usd"] or 0
+        return {
+            "maliyet": (a["mal_x_q"] / q) if q else 0.0,      # miktar ağırlıklı
+            "satis": (a["sat_x_q"] / q) if q else 0.0,        # miktar ağırlıklı
+            "kar_orani": (a["teorik"] / cu) if cu else 0.0,   # ciro (USD) ağırlıklı
+        }
 
     def _load_orders(self):
         if self.or_year.count() == 0:
             self._refresh_year_combo(self.or_year)
         rows = db.get_crm_orders(search=self.or_search.text().strip(),
                                  year=self.or_year.currentData() or "") or []
-        t = self.or_table; t.setSortingEnabled(False); t.setRowCount(len(rows))
+        group = self.or_group.currentData() or ""
+        if group:
+            self._load_orders_grouped(rows, group)
+            return
+        # ── Detay görünüm + alt toplam ────────────────────────────
+        t = self.or_table
+        t.setColumnCount(14)
+        t.setHorizontalHeaderLabels(["Müşteri", "Pazarlamacı", "Tarih", "Kod", "Renk", "Miktar",
+                                     "Maliyet", "Satış", "Kâr %", "Teorik Kâr USD", "Vade", "Ciro", "Ciro USD", "Kur"])
+        agg = self._order_agg_init()
+        t.setRowCount(len(rows) + (1 if rows else 0))
         for i, r in enumerate(rows):
+            self._order_agg_add(agg, r)
             it = QTableWidgetItem(r["musteri"] or "")
             it.setData(Qt.ItemDataRole.UserRole, r["id"])
             t.setItem(i, 0, it)
@@ -2611,8 +2656,63 @@ class CRMView(QWidget):
             t.setItem(i, 11, self._num(r["ciro"]))
             t.setItem(i, 12, self._num(r["ciro_usd"]))
             t.setItem(i, 13, self._num(r["usd_kuru"]))
-        t.setSortingEnabled(True)
+        if rows:
+            d = self._order_agg_derive(agg)
+            cells = ["TOPLAM ({} sipariş)".format(agg["adet"]), "", "", "", "",
+                     self._num(agg["miktar"]), self._num(d["maliyet"]), self._num(d["satis"]),
+                     self._num(d["kar_orani"] * 100, suffix="%"), self._num(agg["teorik"]), "",
+                     self._num(agg["ciro"]), self._num(agg["ciro_usd"]), ""]
+            self._put_total_row(t, len(rows), cells)
         self.or_count.setText(f"{len(rows)} sipariş")
+
+    def _load_orders_grouped(self, rows, group):
+        labels = {"ay": "Ay", "musteri": "Müşteri", "pazarlamaci": "Pazarlamacı"}
+        t = self.or_table
+        t.setColumnCount(8)
+        t.setHorizontalHeaderLabels([labels[group], "Sipariş Adedi", "Miktar", "Ağ. Maliyet",
+                                     "Ağ. Satış", "Ağ. Kâr %", "Teorik Kâr USD", "Ciro USD"])
+        groups = {}
+        for r in rows:
+            if group == "ay":
+                key = (r["tarih"] or "")[:7]      # YYYY-MM
+            else:
+                key = (r[group] or "—")
+            groups.setdefault(key, self._order_agg_init())
+            self._order_agg_add(groups[key], r)
+        keys = sorted(groups.keys())
+        grand = self._order_agg_init()
+        t.setRowCount(len(keys) + (1 if keys else 0))
+        for i, key in enumerate(keys):
+            a = groups[key]; d = self._order_agg_derive(a)
+            for k in grand: grand[k] += a[k]
+            t.setItem(i, 0, QTableWidgetItem(key or "—"))
+            t.setItem(i, 1, self._num(a["adet"]))
+            t.setItem(i, 2, self._num(a["miktar"]))
+            t.setItem(i, 3, self._num(d["maliyet"]))
+            t.setItem(i, 4, self._num(d["satis"]))
+            t.setItem(i, 5, self._num(d["kar_orani"] * 100, suffix="%"))
+            t.setItem(i, 6, self._num(a["teorik"]))
+            t.setItem(i, 7, self._num(a["ciro_usd"]))
+        if keys:
+            gd = self._order_agg_derive(grand)
+            cells = ["TOPLAM", self._num(grand["adet"]), self._num(grand["miktar"]),
+                     self._num(gd["maliyet"]), self._num(gd["satis"]),
+                     self._num(gd["kar_orani"] * 100, suffix="%"), self._num(grand["teorik"]),
+                     self._num(grand["ciro_usd"])]
+            self._put_total_row(t, len(keys), cells)
+        t.resizeColumnsToContents()
+        self.or_count.setText(f"{len(keys)} grup • {len(rows)} sipariş")
+
+    def _put_total_row(self, t, row, cells):
+        """Alt toplam satırını koyu + gri zeminle yazar. cells: str veya QTableWidgetItem."""
+        f = QFont(); f.setBold(True)
+        for c, val in enumerate(cells):
+            it = val if isinstance(val, QTableWidgetItem) else QTableWidgetItem(str(val))
+            it.setFont(f)
+            it.setBackground(QBrush(QColor("#ECEFF1")))
+            if c == 0:
+                it.setForeground(QBrush(QColor("#1A237E")))
+            t.setItem(row, c, it)
 
     def _order_dialog(self, o=None):
         dlg = QDialog(self); dlg.setWindowTitle("Sipariş" + (" Düzenle" if o else " Ekle"))
