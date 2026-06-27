@@ -78,6 +78,9 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
 
             # ── Movements ────────────────────────────────────────
+            elif path == "/api/movements/destinations":
+                self._send(_ok(db.get_movement_destinations()))
+
             elif path == "/api/movements":
                 fid = qs.get("fabric_id",[""])[0]
                 if fid:

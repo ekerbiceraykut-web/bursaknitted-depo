@@ -448,6 +448,9 @@ def get_movements_by_range(start_date, end_date):
     rows = _get("/api/movements", {"limit": "5000"}) or []
     return [m for m in rows if start_date <= str(m.get("movement_date", ""))[:10] <= end_date]
 
+def get_movement_destinations():
+    return _get("/api/movements/destinations") or []
+
 
 # ── Locations ────────────────────────────────────────────────────
 

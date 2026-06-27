@@ -1685,6 +1685,17 @@ def get_movements_by_range(start_date, end_date):
     return rows
 
 
+def get_movement_destinations():
+    """Hareketlerde geçen tüm benzersiz hedef lokasyonları (müşteri/dış depo) döndürür."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT DISTINCT destination FROM movements "
+        "WHERE IFNULL(destination,'') != '' ORDER BY destination"
+    ).fetchall()
+    conn.close()
+    return [r["destination"] for r in rows]
+
+
 # ── Boyahane Fire Kayıtları ─────────────────────────────────────
 
 def add_fire_record(fabric_id, movement_id, product_code, color, lot, boyahane,

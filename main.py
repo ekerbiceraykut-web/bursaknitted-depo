@@ -47,7 +47,7 @@ _LIST_FUNCS = {
     "get_order_shipments", "get_po_receipts", "get_boyahane_queue",
     "get_po_items_for_order", "get_all_armur_desenleri",
     "get_crm_customers", "get_crm_visits", "get_crm_sales", "get_crm_orders",
-    "get_crm_years", "get_stock_snapshots",
+    "get_crm_years", "get_stock_snapshots", "get_movement_destinations",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -6314,10 +6314,23 @@ class DailyMovementsDialog(QDialog):
         filt.addWidget(QLabel("Lokasyon:"))
         self.loc_filter = QComboBox()
         self.loc_filter.addItem("Tümü", "")
+        # DEPO'ya bağlı alt depolar tek "DEPO" altında toplanır; dış lokasyonlar ayrı
+        _seen = set()
         for l in db.get_active_locations():
-            self.loc_filter.addItem(l["name"], l["name"])
+            g = DashboardWidget._loc_group(l["name"])
+            if g not in _seen:
+                _seen.add(g)
+                self.loc_filter.addItem(g, g)
         self.loc_filter.currentIndexChanged.connect(self._load)
         filt.addWidget(self.loc_filter)
+
+        filt.addWidget(QLabel("Hedef Lokasyon:"))
+        self.hedef_filter = QComboBox()
+        self.hedef_filter.addItem("Tümü", "")
+        for d in (db.get_movement_destinations() or []):
+            self.hedef_filter.addItem(d, d)
+        self.hedef_filter.currentIndexChanged.connect(self._load)
+        filt.addWidget(self.hedef_filter)
 
         filt.addWidget(QLabel("Tip:"))
         self.tip_filter = QComboBox()
@@ -6390,6 +6403,7 @@ class DailyMovementsDialog(QDialog):
         # Filtreler
         q   = self.search_box.text().strip().lower()
         loc = self.loc_filter.currentData() or ""
+        hedef = self.hedef_filter.currentData() or ""
         tip = self.tip_filter.currentData() or ""
         tur = self.tur_filter.currentData() or ""
         movements = []
@@ -6397,7 +6411,11 @@ class DailyMovementsDialog(QDialog):
             md = dict(m)
             if tur and md["movement_type"] != tur:
                 continue
-            if loc and (md.get("location") or md.get("fabric_location") or "") != loc:
+            if loc:
+                mloc = md.get("location") or md.get("fabric_location") or ""
+                if DashboardWidget._loc_group(mloc) != loc:
+                    continue
+            if hedef and (md.get("destination") or "") != hedef:
                 continue
             if tip and (md.get("fabric_type") or "") != tip:
                 continue
@@ -9944,7 +9962,7 @@ class DashboardWidget(QWidget):
         self.trend_table.setColumnCount(7)
         self.trend_table.setHorizontalHeaderLabels(
             ["Hafta", "Stok Miktarı (mt)", "Δ%", "Stok Değeri ($)", "Δ%",
-             "Haftalık Çıkış (mt)", "Devir Oranı"])
+             "Haftalık Çıkış (mt)", "Devir Oranı (%)"])
         self.trend_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.trend_table.verticalHeader().setVisible(False)
         thdr = self.trend_table.horizontalHeader()
@@ -10107,7 +10125,7 @@ class DashboardWidget(QWidget):
             t.setItem(i, 3, _cell(f"{val:,.0f}"))
             t.setItem(i, 4, _cell(dv_txt, dv_col))
             t.setItem(i, 5, _cell(f"{cikis:,.0f}"))
-            t.setItem(i, 6, _cell(f"{devir:.2f}"))
+            t.setItem(i, 6, _cell(f"%{devir*100:,.0f}"))
 
 
 class MainWindow(QMainWindow):
