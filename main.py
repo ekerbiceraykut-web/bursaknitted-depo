@@ -47,7 +47,7 @@ _LIST_FUNCS = {
     "get_order_shipments", "get_po_receipts", "get_boyahane_queue",
     "get_po_items_for_order", "get_all_armur_desenleri",
     "get_crm_customers", "get_crm_visits", "get_crm_sales", "get_crm_orders",
-    "get_crm_years",
+    "get_crm_years", "get_stock_snapshots",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -2211,6 +2211,119 @@ class _SortItem(QTableWidgetItem):
         return super().__lt__(other)
 
 
+class _LineChart(QWidget):
+    """Bağımlılıksız çizgi grafiği — her seri (pazarlamacı) renkli bir çizgi."""
+    _PALET = ["#1565C0", "#E65100", "#2E7D32", "#6A1B9A", "#00838F", "#C62828", "#5D4037"]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.series = []      # [(ad, [değerler], renk)]
+        self.xlabels = []
+        self.title = ""
+        self.kind = "money"
+        self.setMinimumHeight(380)
+
+    def set_data(self, series, xlabels, kind="money", title=""):
+        out = []
+        for i, (ad, vals) in enumerate(series):
+            out.append((ad, vals, self._PALET[i % len(self._PALET)]))
+        self.series = out
+        self.xlabels = xlabels
+        self.kind = kind
+        self.title = title
+        self.update()
+
+    def _fmt(self, v):
+        if self.kind == "pct":
+            return f"{v:.0f}%"
+        if abs(v) >= 1_000_000:
+            return f"{v/1_000_000:.1f}M"
+        if abs(v) >= 1_000:
+            return f"{v/1_000:.0f}K"
+        return f"{v:.0f}"
+
+    def paintEvent(self, ev):
+        from PyQt6.QtGui import QPainter, QPen, QPolygonF
+        from PyQt6.QtCore import QPointF
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        W, H = self.width(), self.height()
+        p.fillRect(0, 0, W, H, QColor("#FFFFFF"))
+        L, R, T, B = 64, 24, 36, 70          # kenar boşlukları
+        pw, ph = W - L - R, H - T - B
+        if not self.series or not self.xlabels or pw <= 10 or ph <= 10:
+            p.setPen(QColor("#999")); p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                                                  "Veri yok"); return
+        n = len(self.xlabels)
+        vmax = 0.0
+        for _, vals, _c in self.series:
+            for v in vals:
+                if v is not None and v > vmax:
+                    vmax = v
+        if vmax <= 0:
+            vmax = 1.0
+        # üst sınırı yuvarla
+        import math
+        mag = 10 ** int(math.floor(math.log10(vmax)))
+        vmax = math.ceil(vmax / mag) * mag
+
+        # başlık
+        if self.title:
+            f = p.font(); f.setBold(True); f.setPointSize(11); p.setFont(f)
+            p.setPen(QColor("#222")); p.drawText(L, 6, pw, 22,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.title)
+            f.setBold(False); f.setPointSize(9); p.setFont(f)
+
+        # ızgara + y ekseni
+        p.setPen(QColor("#888"))
+        steps = 4
+        for s in range(steps + 1):
+            yv = vmax * s / steps
+            y = T + ph - (yv / vmax) * ph
+            p.setPen(QPen(QColor("#ECECEC"), 1)); p.drawLine(int(L), int(y), int(L + pw), int(y))
+            p.setPen(QColor("#777")); p.drawText(0, int(y) - 8, L - 6, 16,
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, self._fmt(yv))
+
+        # x ekseni etiketleri
+        xs = [L + (pw * i / (n - 1) if n > 1 else pw / 2) for i in range(n)]
+        p.setPen(QColor("#555"))
+        for i, lbl in enumerate(self.xlabels):
+            p.drawText(int(xs[i]) - 24, T + ph + 6, 48, 16,
+                       Qt.AlignmentFlag.AlignCenter, lbl)
+
+        # seriler
+        for ad, vals, col in self.series:
+            pen = QPen(QColor(col)); pen.setWidth(2); p.setPen(pen)
+            poly = QPolygonF()
+            for i, v in enumerate(vals):
+                if v is None:
+                    continue
+                y = T + ph - (v / vmax) * ph
+                poly.append(QPointF(xs[i], y))
+            if poly.count() > 1:
+                p.drawPolyline(poly)
+            p.setBrush(QBrush(QColor(col)))
+            for i, v in enumerate(vals):
+                if v is None:
+                    continue
+                y = T + ph - (v / vmax) * ph
+                p.drawEllipse(QPointF(xs[i], y), 3, 3)
+
+        # gösterge (legend)
+        lx, ly = L, T + ph + 28
+        f = p.font(); f.setPointSize(9); p.setFont(f)
+        for ad, vals, col in self.series:
+            p.setBrush(QBrush(QColor(col))); p.setPen(QColor(col))
+            p.drawEllipse(QPointF(lx + 6, ly + 7), 4, 4)
+            p.setPen(QColor("#333"))
+            tw = p.fontMetrics().horizontalAdvance(ad) + 22
+            p.drawText(lx + 16, ly, tw, 16, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, ad)
+            lx += 16 + tw + 8
+            if lx > L + pw - 80:
+                lx = L; ly += 18
+        p.end()
+
+
 class CRMView(QWidget):
     """CRM — Müşteri Listesi, Ziyaretler, Fiili Satışlar, Siparişler, Analiz (5 Ways)."""
 
@@ -2240,6 +2353,7 @@ class CRMView(QWidget):
         self.tabs.addTab(self._build_sales_tab(), "💵 Fiili Satışlar")
         self.tabs.addTab(self._build_orders_tab(), "🧾 Siparişler")
         self.tabs.addTab(self._build_analysis_tab(), "📊 Analiz (5 Ways)")
+        self.tabs.addTab(self._build_chart_tab(), "📈 Grafik")
         self.tabs.currentChanged.connect(lambda i: self.refresh())
         lay.addWidget(self.tabs)
 
@@ -2247,7 +2361,7 @@ class CRMView(QWidget):
         idx = self.tabs.currentIndex()
         try:
             [self._load_customers, self._load_visits, self._load_sales,
-             self._load_orders, self._load_analysis][idx]()
+             self._load_orders, self._load_analysis, self._load_chart][idx]()
         except Exception:
             pass
 
@@ -2965,18 +3079,26 @@ class CRMView(QWidget):
     def _build_analysis_tab(self):
         w = QWidget(); v = QVBoxLayout(w)
         top = QHBoxLayout()
-        top.addWidget(QLabel("Yıl:"))
+        top.addWidget(QLabel("Pazarlamacı:"))
+        self.an_paz = QComboBox()
+        self.an_paz.addItem("📊 Toplam (Tümü)", "")
+        for p in CRM_PAZARLAMACILAR:
+            self.an_paz.addItem(p, p)
+        self.an_paz.currentIndexChanged.connect(self._load_analysis)
+        top.addWidget(self.an_paz)
+        top.addWidget(QLabel("   Yıl:"))
         self.an_year = QComboBox(); self.an_year.currentIndexChanged.connect(self._load_analysis)
         top.addWidget(self.an_year); top.addStretch()
         v.addLayout(top)
+        info = QLabel("Her hücrede üstte değer, altta bir önceki aya göre değişim (▲ artış / ▼ azalış).")
+        info.setStyleSheet("color:#555; font-size:11px;")
+        v.addWidget(info)
         self.an_table = QTableWidget()
         self.an_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.an_table.setSortingEnabled(False)
         self.an_table.setWordWrap(False)
         self.an_table.verticalHeader().setVisible(False)
-        hdr = self.an_table.horizontalHeader()
-        hdr.setSectionsMovable(True)
-        hdr.setMinimumHeight(40)        # iki satırlı "Ay/Pazarlamacı" başlıkları görünsün
+        self.an_table.setAlternatingRowColors(True)
         v.addWidget(self.an_table)
         return w
 
@@ -3004,33 +3126,51 @@ class CRMView(QWidget):
             return f"{val:,.0f}%"
         return f"{val:,.0f}"
 
+    @staticmethod
+    def _an_delta(curr, prev, kind):
+        """Bir önceki aya göre değişim metni + renk. pct için puan, diğerleri için %."""
+        if kind == "pct":
+            d = curr - prev
+            if abs(d) < 0.5:
+                return ("◦ 0", "#9E9E9E")
+            return (f"{'▲' if d > 0 else '▼'} {abs(d):.0f}p", "#2E7D32" if d > 0 else "#C62828")
+        if prev == 0:
+            return ("▲ yeni", "#2E7D32") if curr else ("", None)
+        d = (curr - prev) / prev * 100.0
+        if abs(d) < 0.5:
+            return ("◦ %0", "#9E9E9E")
+        return (f"{'▲' if d > 0 else '▼'} %{abs(d):.0f}", "#2E7D32" if d > 0 else "#C62828")
+
     def _load_analysis(self):
         if self.an_year.count() == 0:
             self._refresh_year_combo(self.an_year)
             if self.an_year.count() > 1:
                 self.an_year.setCurrentIndex(1)   # en güncel yıl
         data = db.get_crm_analysis(year=self.an_year.currentData() or "") or {}
+        # Uzak modda JSON, ay anahtarlarını (1,2,…) metne ("1","2",…) çevirir; int'e normalize et
+        for p in list(data.keys()):
+            mo = data[p].get("months") or {}
+            data[p]["months"] = {int(k): v for k, v in mo.items()}
         reps = [p for p in CRM_PAZARLAMACILAR if p in data] or sorted(data.keys())
-        short = lambda p: (p.split()[0] if p else "—")
+
+        # Seçili pazarlamacı (veya Toplam) için ay-kapsam ve yıl-kapsam fonksiyonları
+        sel = self.an_paz.currentData() or ""
+        if sel:   # tek pazarlamacı
+            d = data.get(sel) or {"months": {}, "yearly": {}}
+            month_scope = lambda m: d["months"].get(m, {})
+            year_scope = d.get("yearly", {})
+        else:     # Toplam (tüm pazarlamacılar birleşik)
+            month_scope = lambda m: self._an_combine([data[p]["months"].get(m, {}) for p in reps])
+            year_scope = self._an_combine([data[p]["yearly"] for p in reps])
 
         # Veri olan ayları bul
-        def _mcomb(m):
-            return self._an_combine([data[p]["months"].get(m, {}) for p in reps])
         nz = ("visit_yeni", "visit_mevcut", "yeni_sip_adet", "sip_adet", "sip_metre",
               "fiili_metre", "fiili_usd", "teorik_kar_usd")
-        months = [m for m in range(1, 13) if any(_mcomb(m).get(k, 0) for k in nz)]
+        months = [m for m in range(1, 13) if any(month_scope(m).get(k, 0) for k in nz)]
         if not months:
-            months = list(range(1, 13))   # hiç veri yoksa yine tüm aylar görünsün
+            months = list(range(1, 13))
 
-        # Sütun başlıkları
-        headers = ["5W", "TANIMLAR", "HEDEFLER"]
-        colmeta = []   # (ay|None, pazarlamacı)
-        for m in months:
-            for p in reps:
-                headers.append(f"{self._AY_ADLARI[m-1]}\n{short(p)}"); colmeta.append((m, p))
-        for p in reps:
-            headers.append(f"TOPLAM\n{short(p)}"); colmeta.append((None, p))
-
+        headers = ["5W", "TANIMLAR", "HEDEFLER"] + [self._AY_ADLARI[m - 1] for m in months] + ["YILLIK"]
         t = self.an_table
         t.setColumnCount(len(headers))
         t.setHorizontalHeaderLabels(headers)
@@ -3045,22 +3185,90 @@ class CRMView(QWidget):
             t.setItem(ri, 0, wi)
             ti = QTableWidgetItem(tanim); ti.setFont(bold)
             t.setItem(ri, 1, ti)
-            hi = QTableWidgetItem(hedef); hi.setForeground(QBrush(QColor("#555")))
+            hi = QTableWidgetItem(hedef); hi.setForeground(QBrush(QColor("#1565C0")))
             t.setItem(ri, 2, hi)
-            for ci, (m, p) in enumerate(colmeta, start=3):
-                scope = data[p]["yearly"] if m is None else data[p]["months"].get(m, {})
-                it = QTableWidgetItem(self._an_fmt(self._an_val(scope, key), kind))
+            # aylık değerler + bir önceki aya göre % değişim
+            month_vals = [self._an_val(month_scope(m), key) for m in months]
+            for mi, m in enumerate(months):
+                val = month_vals[mi]
+                txt = self._an_fmt(val, kind)
+                color = None
+                if mi > 0:
+                    dtxt, color = self._an_delta(val, month_vals[mi - 1], kind)
+                    if dtxt:
+                        txt += "\n" + dtxt
+                it = QTableWidgetItem(txt)
                 it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                if m is None:
-                    it.setBackground(gray); it.setFont(bold)
-                else:
-                    it.setBackground(QBrush(QColor(self._AN_AY_RENK[(m - 1) % 12])))
-                t.setItem(ri, ci, it)
+                if color:
+                    it.setForeground(QBrush(QColor(color)))
+                t.setItem(ri, 3 + mi, it)
+            # YILLIK
+            yi = QTableWidgetItem(self._an_fmt(self._an_val(year_scope, key), kind))
+            yi.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            yi.setBackground(gray); yi.setFont(bold)
+            t.setItem(ri, 3 + len(months), yi)
 
         t.resizeColumnsToContents()
         t.setColumnWidth(1, 300)
-        t.setColumnWidth(2, 130)
+        t.setColumnWidth(2, 120)
+        t.resizeRowsToContents()
         t.verticalHeader().setVisible(False)
+
+    # ── Sekme 6: Grafik (trend) ───────────────────────────────────
+    def _build_chart_tab(self):
+        w = QWidget(); v = QVBoxLayout(w)
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Yıl:"))
+        self.ch_year = QComboBox(); self.ch_year.currentIndexChanged.connect(self._load_chart)
+        top.addWidget(self.ch_year)
+        top.addWidget(QLabel("   Metrik:"))
+        self.ch_metric = QComboBox()
+        for ways, tanim, hedef, key, kind in self._AN_SATIRLAR:
+            self.ch_metric.addItem(tanim, key)
+        di = self.ch_metric.findData("fiili_usd")
+        if di >= 0:
+            self.ch_metric.setCurrentIndex(di)   # varsayılan: Aylık Toplam Sip. Tutarı
+        self.ch_metric.currentIndexChanged.connect(self._load_chart)
+        top.addWidget(self.ch_metric)
+        self.ch_toplam = QCheckBox("Toplam çizgisi"); self.ch_toplam.setChecked(True)
+        self.ch_toplam.toggled.connect(self._load_chart)
+        top.addWidget(self.ch_toplam)
+        top.addStretch()
+        v.addLayout(top)
+        self.ch_chart = _LineChart()
+        v.addWidget(self.ch_chart, 1)
+        return w
+
+    def _load_chart(self):
+        if self.ch_year.count() == 0:
+            self._refresh_year_combo(self.ch_year)
+            if self.ch_year.count() > 1:
+                self.ch_year.setCurrentIndex(1)
+        data = db.get_crm_analysis(year=self.ch_year.currentData() or "") or {}
+        for p in list(data.keys()):
+            mo = data[p].get("months") or {}
+            data[p]["months"] = {int(k): v for k, v in mo.items()}
+        reps = [p for p in CRM_PAZARLAMACILAR if p in data] or sorted(data.keys())
+        key = self.ch_metric.currentData() or "fiili_usd"
+        kind = next((k for wy, tn, hd, mk, k in self._AN_SATIRLAR if mk == key), "money")
+
+        # veri olan aylar
+        nz = ("visit_yeni", "visit_mevcut", "yeni_sip_adet", "sip_adet", "sip_metre",
+              "fiili_metre", "fiili_usd", "teorik_kar_usd")
+        def mcomb(m):
+            return self._an_combine([data[p]["months"].get(m, {}) for p in reps])
+        months = [m for m in range(1, 13) if any(mcomb(m).get(k, 0) for k in nz)] or list(range(1, 13))
+        xlabels = [self._AY_ADLARI[m - 1][:3] for m in months]
+
+        series = []
+        for p in reps:
+            vals = [self._an_val(data[p]["months"].get(m, {}), key) for m in months]
+            series.append((p.split()[0], vals))
+        if self.ch_toplam.isChecked():
+            tvals = [self._an_val(mcomb(m), key) for m in months]
+            series.append(("TOPLAM", tvals))
+        title = self.ch_metric.currentText() + " — " + (self.ch_year.currentData() or "Tüm yıllar")
+        self.ch_chart.set_data(series, xlabels, kind, title)
 
     # ── ortak küçük yardımcılar ───────────────────────────────────
     def _num(self, val, suffix=""):
@@ -9729,6 +9937,24 @@ class DashboardWidget(QWidget):
         loc_layout.addWidget(self.loc_table)
         layout.addWidget(loc_group)
 
+        # ── Haftalık Stok Trendi ─────────────────────────────────
+        trend_group = QGroupBox("📈 Haftalık Stok Trendi (devir oranı, miktar, tutar)")
+        tl = QVBoxLayout(trend_group)
+        self.trend_table = QTableWidget()
+        self.trend_table.setColumnCount(7)
+        self.trend_table.setHorizontalHeaderLabels(
+            ["Hafta", "Stok Miktarı (mt)", "Δ%", "Stok Değeri ($)", "Δ%",
+             "Haftalık Çıkış (mt)", "Devir Oranı"])
+        self.trend_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.trend_table.verticalHeader().setVisible(False)
+        thdr = self.trend_table.horizontalHeader()
+        thdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        for i in range(1, 7):
+            thdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        self.trend_table.setMinimumHeight(180)
+        tl.addWidget(self.trend_table)
+        layout.addWidget(trend_group)
+
     def _open_user_mgmt(self):
         if CURRENT_USER.get("role") != "admin":
             QMessageBox.warning(self, "Yetki", "Bu işlem için yönetici yetkisi gereklidir.")
@@ -9827,6 +10053,61 @@ class DashboardWidget(QWidget):
                 item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter |
                     (Qt.AlignmentFlag.AlignRight if j >= 1 else Qt.AlignmentFlag.AlignLeft))
                 self.loc_table.setItem(i, j, item)
+
+        self._refresh_trend()
+
+    def _refresh_trend(self):
+        """Haftalık stok trendini doldurur; içinde bulunulan haftayı kaydeder."""
+        try:
+            db.capture_stock_snapshot()
+            snaps = db.get_stock_snapshots(limit=12) or []
+        except Exception:
+            snaps = []
+        t = self.trend_table
+        t.setRowCount(len(snaps))
+
+        def _pct(cur, prev):
+            if prev is None or prev == 0:
+                return ("", None)
+            d = (cur - prev) / prev * 100
+            if abs(d) < 0.5:
+                return ("◦ %0", "#9E9E9E")
+            return (f"{'▲' if d>0 else '▼'} %{abs(d):.0f}", "#2E7D32" if d > 0 else "#C62828")
+
+        def _cell(text, color=None, align_right=True):
+            it = QTableWidgetItem(text)
+            it.setTextAlignment(Qt.AlignmentFlag.AlignVCenter |
+                (Qt.AlignmentFlag.AlignRight if align_right else Qt.AlignmentFlag.AlignLeft))
+            if color:
+                it.setForeground(QBrush(QColor(color)))
+            return it
+
+        for i, s in enumerate(snaps):
+            prev = snaps[i - 1] if i > 0 else None
+            ws = s["week_start"] or ""
+            try:
+                wk = ".".join(reversed(ws.split("-")))   # 2026-06-22 -> 22.06.2026
+            except Exception:
+                wk = ws
+            meter = s["total_meter"] or 0
+            val = s["total_value"] or 0
+            cikis = s["hafta_cikis_mt"] or 0
+            # devir oranı = haftalık çıkış / ortalama stok (önceki+bu)/2
+            if prev is not None and ((prev["total_meter"] or 0) + meter) > 0:
+                ort = ((prev["total_meter"] or 0) + meter) / 2
+            else:
+                ort = meter
+            devir = (cikis / ort) if ort else 0
+
+            dm_txt, dm_col = _pct(meter, prev["total_meter"] if prev else None)
+            dv_txt, dv_col = _pct(val, prev["total_value"] if prev else None)
+            t.setItem(i, 0, _cell(f"{wk}", align_right=False))
+            t.setItem(i, 1, _cell(f"{meter:,.0f}"))
+            t.setItem(i, 2, _cell(dm_txt, dm_col))
+            t.setItem(i, 3, _cell(f"{val:,.0f}"))
+            t.setItem(i, 4, _cell(dv_txt, dv_col))
+            t.setItem(i, 5, _cell(f"{cikis:,.0f}"))
+            t.setItem(i, 6, _cell(f"{devir:.2f}"))
 
 
 class MainWindow(QMainWindow):

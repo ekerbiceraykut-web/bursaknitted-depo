@@ -482,6 +482,13 @@ def delete_location(loc_id):
 def get_summary():
     return _get("/api/summary") or {}
 
+def capture_stock_snapshot():
+    r = _post("/api/stock/snapshot", {})
+    return (r or {}).get("week_start")
+
+def get_stock_snapshots(limit=12):
+    return _get("/api/stock/snapshots", {"limit": str(limit)}) or []
+
 
 # ── Users ────────────────────────────────────────────────────────
 

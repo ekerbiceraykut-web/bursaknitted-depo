@@ -386,6 +386,17 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_crm_visits_paz ON crm_visits(pazarlamaci);
         CREATE INDEX IF NOT EXISTS idx_crm_sales_paz ON crm_sales(pazarlamaci);
         CREATE INDEX IF NOT EXISTS idx_crm_orders_paz ON crm_orders(pazarlamaci);
+
+        CREATE TABLE IF NOT EXISTS stock_snapshots (
+            week_start TEXT PRIMARY KEY,
+            captured_at TEXT DEFAULT (datetime('now','localtime')),
+            total_items INTEGER DEFAULT 0,
+            total_meter REAL DEFAULT 0,
+            total_kg REAL DEFAULT 0,
+            total_value REAL DEFAULT 0,
+            hafta_giris_mt REAL DEFAULT 0,
+            hafta_cikis_mt REAL DEFAULT 0
+        );
     """)
 
     # Migrations — mevcut DB'ye yeni sütunlar
@@ -1821,6 +1832,52 @@ def get_summary():
     """).fetchone()
     conn.close()
     return row
+
+
+# ── Haftalık stok anlık görüntüleri (dashboard trend) ───────────
+def _week_start(d=None):
+    """Verilen tarihin (yoksa bugünün) ait olduğu haftanın Pazartesi'sini ISO döndürür."""
+    import datetime as _dt
+    d = d or _dt.date.today()
+    return (d - _dt.timedelta(days=d.weekday())).isoformat()
+
+def capture_stock_snapshot():
+    """İçinde bulunulan haftanın stok anlık görüntüsünü kaydeder/günceller (idempotent)."""
+    conn = get_connection()
+    ws = _week_start()
+    s = conn.execute("""
+        SELECT COUNT(*) items, IFNULL(SUM(meter),0) mt, IFNULL(SUM(kg),0) kg,
+               IFNULL(SUM(CASE WHEN birim_fiyat>0 AND meter>0 THEN meter*birim_fiyat
+                               WHEN birim_fiyat>0 AND kg>0    THEN kg*birim_fiyat
+                               ELSE 0 END),0) val
+        FROM fabrics WHERE deleted_at IS NULL
+    """).fetchone()
+    flow = conn.execute("""
+        SELECT IFNULL(SUM(CASE WHEN movement_type LIKE '%GİRİŞ%' THEN meter ELSE 0 END),0) giris,
+               IFNULL(SUM(CASE WHEN movement_type LIKE '%ÇIKIŞ%' OR movement_type LIKE '%SEVK%'
+                               THEN meter ELSE 0 END),0) cikis
+        FROM movements WHERE date(movement_date) >= ?
+    """, (ws,)).fetchone()
+    conn.execute("""
+        INSERT INTO stock_snapshots (week_start, captured_at, total_items, total_meter, total_kg,
+                                     total_value, hafta_giris_mt, hafta_cikis_mt)
+        VALUES (?, datetime('now','localtime'), ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(week_start) DO UPDATE SET
+            captured_at=datetime('now','localtime'), total_items=excluded.total_items,
+            total_meter=excluded.total_meter, total_kg=excluded.total_kg,
+            total_value=excluded.total_value, hafta_giris_mt=excluded.hafta_giris_mt,
+            hafta_cikis_mt=excluded.hafta_cikis_mt
+    """, (ws, s["items"], s["mt"], s["kg"], s["val"], flow["giris"], flow["cikis"]))
+    conn.commit(); conn.close()
+    return ws
+
+def get_stock_snapshots(limit=12):
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT * FROM stock_snapshots ORDER BY week_start DESC LIMIT ?", (limit,)
+    ).fetchall()
+    conn.close()
+    return list(reversed(rows))   # eskiden yeniye
 
 
 def import_fabrics_bulk(records):

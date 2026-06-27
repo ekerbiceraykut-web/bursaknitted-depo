@@ -205,6 +205,10 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/summary":
                 self._send(_ok(dict(db.get_summary())))
 
+            elif path == "/api/stock/snapshots":
+                lim = int(qs.get("limit", ["12"])[0])
+                self._send(_ok([dict(r) for r in db.get_stock_snapshots(limit=lim)]))
+
             # ── Users (sadece admin) ─────────────────────────────
             elif path == "/api/users":
                 if user.get("role") != "admin":
@@ -429,6 +433,10 @@ class APIHandler(BaseHTTPRequestHandler):
                     sales=body.get("sales"), orders=body.get("orders"),
                     replace=body.get("replace", False))
                 self._send(_ok(counts))
+
+            elif path == "/api/stock/snapshot":
+                ws = db.capture_stock_snapshot()
+                self._send(_ok({"week_start": ws}))
 
             # ── Tedarikçi ekle / toplu aktar ───────────────────────
             elif path == "/api/suppliers":
