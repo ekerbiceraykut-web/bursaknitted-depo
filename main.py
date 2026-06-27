@@ -2944,46 +2944,46 @@ class CRMView(QWidget):
     # ── Sekme 5: Analiz (Aylık × Pazarlamacı) ─────────────────────
     _AY_ADLARI = ["Ocak", "Şubat", "Mart", "Nisan", "Mayıs", "Haziran", "Temmuz",
                   "Ağustos", "Eylül", "Ekim", "Kasım", "Aralık"]
-    # (anahtar, etiket, tip)  tip: money|int|pct
-    _AN_METRIKLER = [
-        ("fiili_usd",      "Fiili Satış USD (net)", "money"),
-        ("fiili_metre",    "Fiili Satış Metre (net)", "money"),
-        ("sip_ciro_usd",   "Sipariş Tutarı USD",    "money"),
-        ("sip_metre",      "Sipariş Metresi",       "money"),
-        ("sip_adet",       "Sipariş Adedi",         "int"),
-        ("teorik_kar_usd", "Teorik Kâr USD",        "money"),
-        ("visit_total",    "Ziyaret Adedi",         "int"),
-        ("ort_kar_orani",  "Ort. Kâr Oranı %",      "pct"),
+    # (ways, tanım, hedef, anahtar, tip)  tip: int|money|pct
+    _AN_SATIRLAR = [
+        ("1", "AYLIK ZİYARET EDİLEN YENİ MÜŞTERİ SAYISI",   "Haftada 3 / Ayda 12", "visit_yeni",     "int"),
+        ("",  "AYLIK ZİYARET EDİLEN MEVCUT MÜŞTERİ SAYISI", "Haftada 3 / Ayda 12", "visit_mevcut",   "int"),
+        ("2", "YENİ MÜŞTERİ SİPARİŞ ADEDİ",                 "",                    "yeni_sip_adet",  "int"),
+        ("",  "YENİ MÜŞTERİ SİPARİŞ METRESİ",               "% 10 (4500 MT)",      "yeni_sip_metre", "money"),
+        ("",  "AYLIK TOPLAM SİPARİŞ METRESİ - GERÇEKLEŞEN", "",                    "fiili_metre",    "money"),
+        ("",  "AYLIK TOPLAM SİP TUTARI (USD)",              "150.000 USD",         "fiili_usd",      "money"),
+        ("3", "AYLIK ALINAN SİPARİŞ ADEDİ",                 "15",                  "sip_adet",       "int"),
+        ("",  "AYLIK ALINAN SİPARİŞ METRESİ",               "45.000 MT/AY",        "sip_metre",      "money"),
+        ("4", "AYLIK ALINAN ORT SİP TUTARI (USD)",          "10.000 USD",          "ort_ciro_usd",   "money"),
+        ("",  "AYLIK ALINAN SİPARİŞİN TEORİK KAR TUTARI (USD)", "",                "teorik_kar_usd", "money"),
+        ("5", "AYLIK ALINAN SİPARİŞİN TEORİK ORT KAR ORANI (%)", "% 30",           "ort_kar_orani",  "pct"),
     ]
+    # ay arka plan renkleri (Ocak yeşil, Şubat turuncu, Mart sarı …)
+    _AN_AY_RENK = ["#E8F5E9", "#FFF3E0", "#FFFDE7", "#E3F2FD", "#F3E5F5", "#FCE4EC",
+                   "#E0F7FA", "#F1F8E9", "#FFF8E1", "#EDE7F6", "#E1F5FE", "#FBE9E7"]
 
     def _build_analysis_tab(self):
         w = QWidget(); v = QVBoxLayout(w)
         top = QHBoxLayout()
         top.addWidget(QLabel("Yıl:"))
         self.an_year = QComboBox(); self.an_year.currentIndexChanged.connect(self._load_analysis)
-        top.addWidget(self.an_year)
-        top.addWidget(QLabel("Metrik:"))
-        self.an_metric = QComboBox()
-        for key, lbl, kind in self._AN_METRIKLER:
-            self.an_metric.addItem(lbl, key)
-        self.an_metric.currentIndexChanged.connect(self._load_analysis)
-        top.addWidget(self.an_metric)
-        top.addStretch()
+        top.addWidget(self.an_year); top.addStretch()
         v.addLayout(top)
-        info = QLabel("Her hücrede üstte değer, altta bir önceki aya göre değişim (▲ artış / ▼ azalış).")
-        info.setStyleSheet("color:#555; font-size:11px;")
-        v.addWidget(info)
-        self.an_table = self._mk_table(["Pazarlamacı"] + self._AY_ADLARI + ["Yıllık"])
+        self.an_table = QTableWidget()
+        self.an_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.an_table.setSortingEnabled(False)
-        self.an_table.verticalHeader().setDefaultSectionSize(40)
-        self.an_table.setWordWrap(True)
+        self.an_table.setWordWrap(False)
+        self.an_table.verticalHeader().setVisible(False)
+        hdr = self.an_table.horizontalHeader()
+        hdr.setSectionsMovable(True)
+        hdr.setMinimumHeight(40)        # iki satırlı "Ay/Pazarlamacı" başlıkları görünsün
         v.addWidget(self.an_table)
         return w
 
     @staticmethod
     def _an_combine(scopes):
-        keys = ("visit_yeni", "visit_mevcut", "yeni_sip_adet", "sip_adet", "sip_metre",
-                "fiili_metre", "fiili_usd", "sip_ciro_usd", "teorik_kar_usd")
+        keys = ("visit_yeni", "visit_mevcut", "yeni_sip_adet", "yeni_sip_metre", "sip_adet",
+                "sip_metre", "fiili_metre", "fiili_usd", "sip_ciro_usd", "teorik_kar_usd")
         tot = {k: 0.0 for k in keys}
         for s in scopes:
             for k in keys:
@@ -2993,9 +2993,7 @@ class CRMView(QWidget):
         return tot
 
     @staticmethod
-    def _an_extract(scope, key):
-        if key == "visit_total":
-            return (scope.get("visit_yeni", 0) or 0) + (scope.get("visit_mevcut", 0) or 0)
+    def _an_val(scope, key):
         if key == "ort_kar_orani":
             return (scope.get("ort_kar_orani", 0) or 0) * 100
         return scope.get(key, 0) or 0
@@ -3003,37 +3001,8 @@ class CRMView(QWidget):
     @staticmethod
     def _an_fmt(val, kind):
         if kind == "pct":
-            return f"{val:,.1f}%"
+            return f"{val:,.0f}%"
         return f"{val:,.0f}"
-
-    def _an_cell(self, val, prev, kind, bold=False, with_delta=True):
-        """Değer + (varsa) önceki aya göre % fark içeren hücre üretir."""
-        txt = self._an_fmt(val, kind)
-        color = None
-        if with_delta and prev is not None:
-            if kind == "pct":
-                d = val - prev
-                if abs(d) >= 0.05:
-                    txt += f"\n{'▲' if d > 0 else '▼'} {d:+.1f}p"
-                    color = "#2E7D32" if d > 0 else "#C62828"
-                else:
-                    txt += "\n—"
-            else:
-                if prev == 0:
-                    txt += "\n—" if val == 0 else "\n▲ yeni"
-                    color = None if val == 0 else "#2E7D32"
-                else:
-                    d = (val - prev) / prev * 100
-                    txt += f"\n{'▲' if d > 0 else ('▼' if d < 0 else '•')} {d:+.0f}%"
-                    color = "#2E7D32" if d > 0 else ("#C62828" if d < 0 else None)
-        it = QTableWidgetItem(txt)
-        it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        f = QFont(); f.setBold(bold); it.setFont(f)
-        if color:
-            it.setForeground(QBrush(QColor(color)))
-        if bold:
-            it.setBackground(QBrush(QColor("#ECEFF1")))
-        return it
 
     def _load_analysis(self):
         if self.an_year.count() == 0:
@@ -3041,33 +3010,57 @@ class CRMView(QWidget):
             if self.an_year.count() > 1:
                 self.an_year.setCurrentIndex(1)   # en güncel yıl
         data = db.get_crm_analysis(year=self.an_year.currentData() or "") or {}
-        key = self.an_metric.currentData() or "fiili_usd"
-        kind = next((k for mk, lbl, k in self._AN_METRIKLER if mk == key), "money")
-        names = [p for p in CRM_PAZARLAMACILAR if p in data] + \
-                [p for p in sorted(data.keys()) if p not in CRM_PAZARLAMACILAR]
+        reps = [p for p in CRM_PAZARLAMACILAR if p in data] or sorted(data.keys())
+        short = lambda p: (p.split()[0] if p else "—")
+
+        # Veri olan ayları bul
+        def _mcomb(m):
+            return self._an_combine([data[p]["months"].get(m, {}) for p in reps])
+        nz = ("visit_yeni", "visit_mevcut", "yeni_sip_adet", "sip_adet", "sip_metre",
+              "fiili_metre", "fiili_usd", "teorik_kar_usd")
+        months = [m for m in range(1, 13) if any(_mcomb(m).get(k, 0) for k in nz)]
+        if not months:
+            months = list(range(1, 13))   # hiç veri yoksa yine tüm aylar görünsün
+
+        # Sütun başlıkları
+        headers = ["5W", "TANIMLAR", "HEDEFLER"]
+        colmeta = []   # (ay|None, pazarlamacı)
+        for m in months:
+            for p in reps:
+                headers.append(f"{self._AY_ADLARI[m-1]}\n{short(p)}"); colmeta.append((m, p))
+        for p in reps:
+            headers.append(f"TOPLAM\n{short(p)}"); colmeta.append((None, p))
+
         t = self.an_table
-        t.setRowCount(len(names) + 1)
+        t.setColumnCount(len(headers))
+        t.setHorizontalHeaderLabels(headers)
+        t.setRowCount(len(self._AN_SATIRLAR))
+        bold = QFont(); bold.setBold(True)
+        gray = QBrush(QColor("#ECEFF1"))
 
-        def _row(ri, name, month_scopes, year_scope, bold):
-            it = QTableWidgetItem(name); f = QFont(); f.setBold(bold); it.setFont(f)
-            if bold: it.setBackground(QBrush(QColor("#ECEFF1")))
-            t.setItem(ri, 0, it)
-            vals = [self._an_extract(month_scopes.get(m, {}), key) for m in range(1, 13)]
-            for mi in range(12):
-                prev = vals[mi - 1] if mi > 0 else None
-                t.setItem(ri, mi + 1, self._an_cell(vals[mi], prev, kind, bold=bold))
-            yv = self._an_extract(year_scope, key)
-            t.setItem(ri, 13, self._an_cell(yv, None, kind, bold=bold, with_delta=False))
+        for ri, (ways, tanim, hedef, key, kind) in enumerate(self._AN_SATIRLAR):
+            wi = QTableWidgetItem(ways); wi.setFont(bold)
+            wi.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            if ways: wi.setBackground(QBrush(QColor("#C8E6C9")))
+            t.setItem(ri, 0, wi)
+            ti = QTableWidgetItem(tanim); ti.setFont(bold)
+            t.setItem(ri, 1, ti)
+            hi = QTableWidgetItem(hedef); hi.setForeground(QBrush(QColor("#555")))
+            t.setItem(ri, 2, hi)
+            for ci, (m, p) in enumerate(colmeta, start=3):
+                scope = data[p]["yearly"] if m is None else data[p]["months"].get(m, {})
+                it = QTableWidgetItem(self._an_fmt(self._an_val(scope, key), kind))
+                it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if m is None:
+                    it.setBackground(gray); it.setFont(bold)
+                else:
+                    it.setBackground(QBrush(QColor(self._AN_AY_RENK[(m - 1) % 12])))
+                t.setItem(ri, ci, it)
 
-        for i, name in enumerate(names):
-            d = data[name]
-            _row(i, name, d["months"], d["yearly"], bold=False)
-        # TOPLAM satırı — her ay için pazarlamacılar birleştirilir
-        month_tot = {m: self._an_combine([data[n]["months"].get(m, {}) for n in names])
-                     for m in range(1, 13)}
-        year_tot = self._an_combine([data[n]["yearly"] for n in names])
-        _row(len(names), "TOPLAM", month_tot, year_tot, bold=True)
         t.resizeColumnsToContents()
+        t.setColumnWidth(1, 300)
+        t.setColumnWidth(2, 130)
+        t.verticalHeader().setVisible(False)
 
     # ── ortak küçük yardımcılar ───────────────────────────────────
     def _num(self, val, suffix=""):
