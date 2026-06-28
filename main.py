@@ -3477,8 +3477,13 @@ class SupplierManagementDialog(QDialog):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         hdr = self.table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        for i in (1,2,3,4,5,6): hdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)   # sütunlar elle genişletilebilir
+        hdr.setStretchLastSection(False)
+        hdr.setSectionsMovable(True)                                   # sütunlar sürüklenip taşınabilir
+        def _supplier_default_widths():
+            for i, wdt in enumerate([220, 90, 110, 240, 110, 180, 80]):
+                self.table.setColumnWidth(i, wdt)
+        _wire_header_persistence(self.table, "suppliers_header", _supplier_default_widths)
         lay.addWidget(self.table)
 
         btn_row = QHBoxLayout()
@@ -6314,21 +6319,22 @@ class DailyMovementsDialog(QDialog):
         filt.addWidget(QLabel("Lokasyon:"))
         self.loc_filter = QComboBox()
         self.loc_filter.addItem("Tümü", "")
-        # DEPO'ya bağlı alt depolar tek "DEPO" altında toplanır; dış lokasyonlar ayrı
-        _seen = set()
+        # Lokasyonun grup adına göre: DEPO grubundaki alt depolar tek "DEPO"da toplanır,
+        # dış (DEPO olmayan) lokasyonlar tek tek listelenir.
+        self._loc_to_group = {l["name"]: (l["group_name"] or "DEPO")
+                              for l in (db.get_all_locations() or [])}
+        self.loc_filter.addItem("DEPO", "DEPO")
         for l in db.get_active_locations():
-            g = DashboardWidget._loc_group(l["name"])
-            if g not in _seen:
-                _seen.add(g)
-                self.loc_filter.addItem(g, g)
+            if self._loc_to_group.get(l["name"], "DEPO") != "DEPO":
+                self.loc_filter.addItem(l["name"], l["name"])
         self.loc_filter.currentIndexChanged.connect(self._load)
         filt.addWidget(self.loc_filter)
 
-        filt.addWidget(QLabel("Hedef Lokasyon:"))
+        filt.addWidget(QLabel("Hedef:"))
         self.hedef_filter = QComboBox()
-        self.hedef_filter.addItem("Tümü", "")
-        for d in (db.get_movement_destinations() or []):
-            self.hedef_filter.addItem(d, d)
+        for lbl, val in [("Tümü", ""), ("Müşteri", "Müşteri"),
+                         ("Depo", "Depo"), ("Dış Depo", "Dış Depo")]:
+            self.hedef_filter.addItem(lbl, val)
         self.hedef_filter.currentIndexChanged.connect(self._load)
         filt.addWidget(self.hedef_filter)
 
@@ -6375,8 +6381,27 @@ class DailyMovementsDialog(QDialog):
         self.table = QTableWidget()
         layout.addWidget(self.table)
 
+        # ── Alt toplam çubuğu ─────────────────────────────────────
+        self.totals_lbl = QLabel()
+        self.totals_lbl.setStyleSheet(
+            "background:#37474F; color:white; font-weight:bold; font-size:12px;"
+            "border-radius:4px; padding:8px 12px;")
+        layout.addWidget(self.totals_lbl)
+
         btn = QPushButton("Kapat"); btn.clicked.connect(self.accept)
         layout.addWidget(btn)
+
+    def _hedef_kategori(self, md):
+        """Hareketin hedefini Müşteri / Depo / Dış Depo olarak sınıflandırır."""
+        dt = (md.get("destination_type") or "").strip()
+        dest = (md.get("destination") or "").strip()
+        if dt == "Müşteri":
+            return "Müşteri"
+        if dt == "Lokasyon" or (dest and dest in self._loc_to_group):
+            return "Depo" if self._loc_to_group.get(dest, "DEPO") == "DEPO" else "Dış Depo"
+        if dest:
+            return "Müşteri"      # tip belirsiz ama hedef varsa müşteri sevkiyatı say
+        return ""
 
     def _set_preset(self, days):
         from PyQt6.QtCore import QDate
@@ -6413,9 +6438,12 @@ class DailyMovementsDialog(QDialog):
                 continue
             if loc:
                 mloc = md.get("location") or md.get("fabric_location") or ""
-                if DashboardWidget._loc_group(mloc) != loc:
+                if loc == "DEPO":
+                    if self._loc_to_group.get(mloc, "DEPO") != "DEPO":
+                        continue
+                elif mloc != loc:
                     continue
-            if hedef and (md.get("destination") or "") != hedef:
+            if hedef and self._hedef_kategori(md) != hedef:
                 continue
             if tip and (md.get("fabric_type") or "") != tip:
                 continue
@@ -6430,15 +6458,31 @@ class DailyMovementsDialog(QDialog):
 
         _fill_movement_table(self.table, movements, show_product=True)
         if movements:
-            in_m = sum(m["meter"] or 0 for m in movements
-                       if m["movement_type"] in ("GİRİŞ", "SATINALMA GİRİŞİ"))
-            out_m = sum(m["meter"] or 0 for m in movements if m["movement_type"] == "ÇIKIŞ")
+            def _is_giris(m): return m["movement_type"] in ("GİRİŞ", "SATINALMA GİRİŞİ")
+            def _is_cikis(m): return m["movement_type"] == "ÇIKIŞ"
+            in_m  = sum(m["meter"] or 0 for m in movements if _is_giris(m))
+            in_k  = sum(m["kg"] or 0    for m in movements if _is_giris(m))
+            out_m = sum(m["meter"] or 0 for m in movements if _is_cikis(m))
+            out_k = sum(m["kg"] or 0    for m in movements if _is_cikis(m))
+            # hedef kategorisine göre çıkış metresi alt toplamı
+            kat = {"Müşteri": 0.0, "Depo": 0.0, "Dış Depo": 0.0}
+            for m in movements:
+                if _is_cikis(m):
+                    k = self._hedef_kategori(dict(m))
+                    if k in kat:
+                        kat[k] += m["meter"] or 0
             suffix = f" / toplam {len(all_mv)}" if len(movements) != len(all_mv) else ""
-            self.count_lbl.setText(
-                f"{len(movements)} hareket{suffix} — Giriş: {in_m:,.0f} mt, Çıkış: {out_m:,.0f} mt"
+            self.count_lbl.setText(f"{len(movements)} hareket{suffix}")
+            self.totals_lbl.setText(
+                f"📥 Giriş: {in_m:,.0f} mt / {in_k:,.0f} kg     "
+                f"📤 Çıkış: {out_m:,.0f} mt / {out_k:,.0f} kg     "
+                f"⚖️ Net: {in_m - out_m:,.0f} mt / {in_k - out_k:,.0f} kg          "
+                f"Çıkış dağılımı →  👤 Müşteri: {kat['Müşteri']:,.0f} mt   "
+                f"🏭 Depo: {kat['Depo']:,.0f} mt   🚚 Dış Depo: {kat['Dış Depo']:,.0f} mt"
             )
         else:
             self.count_lbl.setText("Bu kriterlere uyan hareket yok")
+            self.totals_lbl.setText("Toplam: 0")
 
 
 COLS = ["#", "Ürün Kodu", "Ürün Açıklaması", "Açıklama", "Renk", "Lokasyon", "Tip", "Lot", "Metre", "Kilo", "Top/Adet", "Birim Fiyat $", "Toplam Değer $", "Son Güncelleme", "Satın Alma Lok.", "Lab No", "Baskı Tipi", "Zemin Rengi", "Baskı Desen No", "Numune Kodu"]
