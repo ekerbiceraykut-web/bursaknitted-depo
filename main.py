@@ -6210,21 +6210,6 @@ class MultiCikisDialog(QDialog):
         self.tbl.resizeColumnsToContents()
         lay.addWidget(self.tbl)
 
-        # Parçalı çıkış: istenen toplam metreyi lotlara sırayla dağıt
-        drow = QHBoxLayout()
-        drow.addWidget(QLabel("İstenen toplam metre:"))
-        self.dagit_mt = QDoubleSpinBox(); self.dagit_mt.setRange(0, 9999999); self.dagit_mt.setDecimals(2)
-        toplam_mt = sum(f.get("meter") or 0 for f in self.fabrics)
-        self.dagit_mt.setValue(0)
-        self.dagit_mt.setToolTip(f"Seçili lotlarda toplam {toplam_mt:,.0f} mt var")
-        drow.addWidget(self.dagit_mt)
-        b_dagit = QPushButton("↧ Lotlara Dağıt"); b_dagit.clicked.connect(self._distribute)
-        b_dagit.setStyleSheet("background:#1565C0;color:white;font-weight:bold;border-radius:4px;padding:5px 12px;")
-        drow.addWidget(b_dagit)
-        drow.addWidget(QLabel(f"(mevcut toplam: {toplam_mt:,.0f} mt)"))
-        drow.addStretch()
-        lay.addLayout(drow)
-
         row = QHBoxLayout()
         b_full = QPushButton("Tümünü tam çıkış"); b_full.clicked.connect(self._fill_full)
         b_zero = QPushButton("Sıfırla"); b_zero.clicked.connect(self._fill_zero)
@@ -6251,26 +6236,6 @@ class MultiCikisDialog(QDialog):
     def _fill_zero(self):
         for ms, ks in self._spins:
             ms.setValue(0); ks.setValue(0)
-
-    def _distribute(self):
-        """İstenen toplam metreyi lotlara sırayla dağıtır (parçalı çıkış).
-        Her lottan mevcut kadar alır, kalanı sonraki lota geçer; kg oranlı düşülür."""
-        kalan = self.dagit_mt.value()
-        for i, f in enumerate(self.fabrics):
-            av_m = f.get("meter") or 0
-            av_k = f.get("kg") or 0
-            ms, ks = self._spins[i]
-            if kalan <= 0 or av_m <= 0:
-                ms.setValue(0); ks.setValue(0)
-                continue
-            al = min(av_m, kalan)
-            ms.setValue(al)
-            ks.setValue(av_k * (al / av_m) if av_m else 0)   # kg'yi oranlı düş
-            kalan -= al
-        if kalan > 0.01:
-            QMessageBox.information(self, "Bilgi",
-                f"Seçili lotlar yetmedi; {kalan:,.0f} mt dağıtılamadı. "
-                "Daha fazla lot seçmelisin.")
 
     def _dest(self):
         t = self.dest_type.currentText()
@@ -7222,7 +7187,8 @@ class StockTable(QWidget):
         dlg = MovementDialog(self, fabric, "GİRİŞ")
         if dlg.exec():
             d = dlg.get_data()
-            db.add_movement(fid, "GİRİŞ", d["meter"], d["kg"], d["piece_count"],
+            # Satıra giriş de satın alma girişi olarak kaydedilir
+            db.add_movement(fid, "SATINALMA GİRİŞİ", d["meter"], d["kg"], d["piece_count"],
                             d["notes"], user_name=CURRENT_USER["full_name"])
             self.refresh()
 

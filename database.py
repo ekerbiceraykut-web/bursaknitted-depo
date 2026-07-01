@@ -1556,7 +1556,7 @@ def add_movement(fabric_id, movement_type, meter, kg, piece_count, notes,
           out_fabric_type, out_print_type, out_zemin_rengi, out_baski_desen_no))
     mid = c.lastrowid
     if fabric:
-        if movement_type == "GİRİŞ":
+        if movement_type in ("GİRİŞ", "SATINALMA GİRİŞİ"):
             new_meter = (fabric["meter"] or 0) + (meter or 0)
             new_kg    = (fabric["kg"] or 0) + (kg or 0)
             new_pieces = _apply_piece_delta(fabric["piece_count"], piece_count, +1)
