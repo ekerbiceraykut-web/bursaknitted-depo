@@ -72,6 +72,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 )
                 self._send(_ok([dict(r) for r in rows]))
 
+            elif path.startswith("/api/fabrics/") and path.endswith("/linked-order"):
+                fid = int(path.split("/")[-2])
+                self._send(_ok({"linked": db.is_fabric_linked_to_order(fid)}))
+
             elif path.startswith("/api/fabrics/"):
                 fid = int(path.split("/")[-1])
                 r = db.get_fabric(fid)

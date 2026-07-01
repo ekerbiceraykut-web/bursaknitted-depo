@@ -93,6 +93,14 @@ def get_all_fabrics(search="", location="", fabric_type="", include_deleted=Fals
 def get_fabric(fid):
     return _get(f"/api/fabrics/{fid}")
 
+def is_fabric_linked_to_order(fabric_id):
+    # Endpoint eski sunucuda yoksa hata verme; bağlı değil say (silmeyi engelleme)
+    try:
+        r = _get(f"/api/fabrics/{fabric_id}/linked-order")
+        return bool((r or {}).get("linked"))
+    except Exception:
+        return False
+
 def add_fabric(product_name, product_code, color, location, meter, kg,
                piece_count, birim_fiyat, fabric_type, lot, description, user_name="",
                entry_location="", lab_no="", print_type="", zemin_rengi="", baski_desen_no=""):
