@@ -6260,6 +6260,169 @@ class MultiCikisDialog(QDialog):
         return dest, t, self.notes.text().strip(), rows
 
 
+class SplitCikisDialog(QDialog):
+    """Tek lottan birden çok hedefe parçalı çıkış (ör. 800 müşteri + 100 depo + 50 kartela).
+    Fire, toplam çıkış metresine göre hesaplanır."""
+    def __init__(self, parent, fabric):
+        super().__init__(parent)
+        self.fabric = dict(fabric)
+        self.setWindowTitle(f"Çıkış — {self.fabric.get('product_code','')} / {self.fabric.get('color','')}")
+        self.setMinimumSize(720, 560)
+        dis = {l["name"] for l in (db.get_active_locations() or []) if l["group_name"] != "DEPO"}
+        self._is_dis_depo = (self.fabric.get("location") or "") in dis
+        self._dest_options = []
+        for c in (db.get_all_customers() or []):
+            self._dest_options.append((f"👤 {c['name']}", ("Müşteri", c["name"])))
+        for l in (db.get_active_locations() or []):
+            self._dest_options.append((f"🏭 {l['name']}", ("Lokasyon", l["name"])))
+        self._rows = []
+        self._lines = []
+        self._build_ui()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        f = self.fabric
+        av_m = f.get("meter") or 0; av_k = f.get("kg") or 0
+        info = QLabel(f"<b>{f.get('product_name') or f.get('product_code')}</b>  |  Renk: {f.get('color','')}  |  "
+                     f"Lot: {f.get('lot','')}  |  Lokasyon: {f.get('location','')}<br>"
+                     f"Mevcut: <b>{av_m:,.2f} mt / {av_k:,.2f} kg</b>")
+        info.setStyleSheet("background:#FFEBEE; padding:8px; border-radius:4px;")
+        lay.addWidget(info)
+
+        form = QFormLayout(); form.setSpacing(8)
+        self.out_fabric_type = QComboBox(); self.out_fabric_type.addItem("— Seçiniz —", "")
+        for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]:
+            self.out_fabric_type.addItem(t, t)
+        i = self.out_fabric_type.findData(f.get("fabric_type") or "")
+        if i >= 0: self.out_fabric_type.setCurrentIndex(i)
+        self.out_print_type = QComboBox(); self.out_print_type.addItem("— Seçiniz —", "")
+        for t in PRINT_TYPES: self.out_print_type.addItem(t, t)
+        self.out_color = QLineEdit()
+        self.out_zemin_rengi = QLineEdit(f.get("zemin_rengi") or "")
+        self.lab_no = QLineEdit()
+        self.out_baski_desen_no = QLineEdit(f.get("baski_desen_no") or "")
+        self.parti_no = QLineEdit()
+        form.addRow("Kumaş Tipi:", self.out_fabric_type)
+        form.addRow("Baskı Tipi:", self.out_print_type)
+        form.addRow("Renk:", self.out_color)
+        form.addRow("Zemin Rengi:", self.out_zemin_rengi)
+        form.addRow("Lab No:", self.lab_no)
+        form.addRow("Baskı Desen No:", self.out_baski_desen_no)
+        form.addRow("Parti No:", self.parti_no)
+        if self._is_dis_depo:
+            self.pre_meter = QDoubleSpinBox(); self.pre_meter.setRange(0, 999999); self.pre_meter.setDecimals(2); self.pre_meter.setValue(av_m)
+            self.pre_kg = QDoubleSpinBox(); self.pre_kg.setRange(0, 999999); self.pre_kg.setDecimals(2); self.pre_kg.setValue(av_k)
+            self.fire_label = QLabel("—"); self.fire_label.setStyleSheet("color:#C62828; font-weight:bold;")
+            form.addRow("Çıkış Öncesi Metre:", self.pre_meter)
+            form.addRow("Çıkış Öncesi Kilo:", self.pre_kg)
+            form.addRow("Fire (toplam çıkışa göre):", self.fire_label)
+            self.pre_meter.valueChanged.connect(self._update_totals)
+            self.pre_kg.valueChanged.connect(self._update_totals)
+        self.notes = QLineEdit()
+        form.addRow("Not:", self.notes)
+        lay.addLayout(form)
+
+        lay.addWidget(QLabel("<b>Çıkış Hedefleri</b> — aynı lottan birden çok hedefe parçalı çıkış:"))
+        self.tbl = QTableWidget(); self.tbl.setColumnCount(3)
+        self.tbl.setHorizontalHeaderLabels(["Hedef (Müşteri / Lokasyon / serbest)", "Metre", "Kilo"])
+        self.tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
+        self.tbl.verticalHeader().setVisible(False)
+        self.tbl.setMinimumHeight(160)
+        lay.addWidget(self.tbl)
+
+        brow = QHBoxLayout()
+        b_add = QPushButton("+ Hedef Satırı"); b_add.clicked.connect(self._add_row)
+        b_del = QPushButton("- Satır Sil"); b_del.clicked.connect(self._del_row)
+        self.total_lbl = QLabel(""); self.total_lbl.setStyleSheet("font-weight:bold; color:#1565C0;")
+        brow.addWidget(b_add); brow.addWidget(b_del); brow.addStretch(); brow.addWidget(self.total_lbl)
+        lay.addLayout(brow)
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Çıkışı Yap")
+        bb.accepted.connect(self._accept); bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+        self._add_row(); self._add_row()
+        self._update_totals()
+
+    def _add_row(self):
+        r = self.tbl.rowCount(); self.tbl.insertRow(r)
+        hedef = QComboBox(); hedef.setEditable(True); _make_searchable(hedef)
+        hedef.addItem("", None)
+        for lbl, data in self._dest_options:
+            hedef.addItem(lbl, data)
+        hedef.setCurrentIndex(0)
+        ms = QDoubleSpinBox(); ms.setRange(0, 999999); ms.setDecimals(2); ms.valueChanged.connect(self._update_totals)
+        ks = QDoubleSpinBox(); ks.setRange(0, 999999); ks.setDecimals(2); ks.valueChanged.connect(self._update_totals)
+        self.tbl.setCellWidget(r, 0, hedef); self.tbl.setCellWidget(r, 1, ms); self.tbl.setCellWidget(r, 2, ks)
+        self._rows.append((hedef, ms, ks))
+
+    def _del_row(self):
+        if self.tbl.rowCount() > 1:
+            self.tbl.removeRow(self.tbl.rowCount() - 1)
+            self._rows.pop()
+            self._update_totals()
+
+    def _update_totals(self):
+        tot_m = sum(ms.value() for _, ms, _ in self._rows)
+        tot_k = sum(ks.value() for _, _, ks in self._rows)
+        self.total_lbl.setText(f"Toplam çıkış: {tot_m:,.2f} mt / {tot_k:,.2f} kg")
+        if self._is_dis_depo:
+            pm = self.pre_meter.value()
+            fire = pm - tot_m
+            pct = (fire / pm * 100) if pm > 0 else 0
+            self.fire_label.setText(f"{fire:,.2f} mt  (%{pct:.1f})")
+
+    def _parse_hedef(self, combo):
+        data = combo.currentData()
+        if data:
+            return data
+        txt = combo.currentText().strip()
+        # emoji önekini temizle (kullanıcı listeden seçip düzenlediyse)
+        for pre in ("👤 ", "🏭 "):
+            if txt.startswith(pre):
+                txt = txt[len(pre):]
+        return ("Diğer", txt) if txt else (None, None)
+
+    def _accept(self):
+        lines = []
+        for hedef, ms, ks in self._rows:
+            if ms.value() > 0 or ks.value() > 0:
+                t, dest = self._parse_hedef(hedef)
+                if not dest:
+                    return QMessageBox.warning(self, "Eksik", "Miktar girilen satırda hedef seçin/yazın.")
+                lines.append((t, dest, ms.value(), ks.value()))
+        if not lines:
+            return QMessageBox.warning(self, "Eksik", "En az bir hedefe çıkış miktarı girin.")
+        tot_m = sum(l[2] for l in lines)
+        limit = self.pre_meter.value() if self._is_dis_depo else (self.fabric.get("meter") or 0)
+        if limit > 0 and tot_m - limit > 0.01:
+            return QMessageBox.warning(self, "Hata",
+                f"Toplam çıkış ({tot_m:,.0f} mt) mevcut/çıkış öncesi miktarı ({limit:,.0f} mt) aşıyor.")
+        self._lines = lines
+        self.accept()
+
+    def result(self):
+        ft = self.out_fabric_type.currentData() or ""
+        is_bask = ft == "BASKILI"
+        pt = (self.out_print_type.currentData() or "") if is_bask else ""
+        out = {"out_fabric_type": ft, "out_print_type": pt,
+               "out_color": self.out_color.text().strip().upper() if not is_bask else "",
+               "out_zemin_rengi": self.out_zemin_rengi.text().strip().upper(),
+               "lab_no": self.lab_no.text().strip(),
+               "out_baski_desen_no": self.out_baski_desen_no.text().strip(),
+               "parti_no": self.parti_no.text().strip(),
+               "notes": self.notes.text().strip()}
+        fire = None
+        if self._is_dis_depo:
+            pm, pk = self.pre_meter.value(), self.pre_kg.value()
+            tot_m = sum(l[2] for l in self._lines); tot_k = sum(l[3] for l in self._lines)
+            if pm > tot_m + 0.01 or pk > tot_k + 0.01:
+                pct = ((pm - tot_m) / pm * 100) if pm > 0 else 0
+                fire = {"pre_m": pm, "pre_k": pk, "out_m": tot_m, "out_k": tot_k, "pct": pct}
+        return self._lines, out, fire
+
+
 TYPE_COLORS = {"GİRİŞ": "#2E7D32", "SATINALMA GİRİŞİ": "#1565C0",
                "ÇIKIŞ": "#C62828", "SİLME": "#880E4F"}
 
@@ -7227,40 +7390,53 @@ class StockTable(QWidget):
         if not fid:
             return
         fabric = db.get_fabric(fid)
-        dlg = MovementDialog(self, fabric, "ÇIKIŞ")
-        if dlg.exec():
-            d = dlg.get_data()
-            notes = d["notes"]
-            deduct_m = deduct_k = None
-            if d["fire_active"]:
-                # Depodan çıkış öncesi miktar düşülür (fire dahil)
-                deduct_m, deduct_k = d["pre_meter"] or None, d["pre_kg"] or None
-                fire_note = f"Fire: %{d['fire_pct']:.1f}" + (" (elle)" if d["fire_manual"] else "")
-                notes = f"{notes} | {fire_note}" if notes else fire_note
-            mid = db.add_movement(fid, "ÇIKIŞ", d["meter"], d["kg"], d["piece_count"],
-                                  notes, user_name=CURRENT_USER["full_name"],
-                                  destination=d.get("destination",""),
-                                  destination_type=d.get("destination_type",""),
-                                  deduct_meter=deduct_m, deduct_kg=deduct_k,
-                                  out_color=d["out_color"], lab_no=d["lab_no"],
-                                  parti_no=d["parti_no"],
-                                  out_fabric_type=d["out_fabric_type"],
-                                  out_print_type=d["out_print_type"],
-                                  out_zemin_rengi=d["out_zemin_rengi"],
-                                  out_baski_desen_no=d["out_baski_desen_no"])
-            if d["fire_active"]:
-                db.add_fire_record(
-                    fid, mid, fabric["product_code"], fabric["color"] or "",
-                    fabric["lot"] or "", fabric["location"] or "", d["destination"],
-                    d["pre_meter"], d["pre_kg"], d["meter"], d["kg"], d["fire_pct"],
-                    manual_pct=d["fire_manual"], user_name=CURRENT_USER["full_name"],
-                    out_color=d["out_color"], lab_no=d["lab_no"], parti_no=d["parti_no"])
-                if db.finalize_lot_if_consumed(fid, CURRENT_USER["full_name"]):
-                    QMessageBox.information(
-                        self, "Lot Tükendi",
-                        f"<b>{fabric['product_code']} / {fabric['lot'] or '-'}</b> lotu tükendi.<br>"
-                        f"Toplam fire 'Boyahane Fire Oranları' sekmesine işlendi.")
-            self.refresh()
+        dlg = SplitCikisDialog(self, fabric)
+        if not dlg.exec():
+            return
+        lines, out, fire = dlg.result()
+        total_m = sum(l[2] for l in lines)
+        total_k = sum(l[3] for l in lines)
+        notes = out["notes"]
+        if fire:
+            fire_note = f"Fire: %{fire['pct']:.1f}"
+            notes = f"{notes} | {fire_note}" if notes else fire_note
+        fire_extra_m = (fire["pre_m"] - total_m) if fire else 0
+        fire_extra_k = (fire["pre_k"] - total_k) if fire else 0
+        first_mid = None
+        for idx, (tip, dest, mt, kg) in enumerate(lines):
+            ded_m = ded_k = None
+            if fire and idx == 0:   # fire kaybı ilk satırın stok düşüşüne eklenir
+                ded_m = mt + fire_extra_m
+                ded_k = kg + fire_extra_k
+            mid = db.add_movement(fid, "ÇIKIŞ", mt, kg, "", notes,
+                                  user_name=CURRENT_USER["full_name"],
+                                  destination=dest, destination_type=tip,
+                                  deduct_meter=ded_m, deduct_kg=ded_k,
+                                  out_color=out["out_color"], lab_no=out["lab_no"],
+                                  parti_no=out["parti_no"],
+                                  out_fabric_type=out["out_fabric_type"],
+                                  out_print_type=out["out_print_type"],
+                                  out_zemin_rengi=out["out_zemin_rengi"],
+                                  out_baski_desen_no=out["out_baski_desen_no"])
+            if first_mid is None:
+                first_mid = mid
+        if fire:
+            hedefler = "; ".join(f"{d} ({m:,.0f}mt)" for _, d, m, _ in lines)
+            db.add_fire_record(
+                fid, first_mid, fabric["product_code"], fabric["color"] or "",
+                fabric["lot"] or "", fabric["location"] or "", hedefler,
+                fire["pre_m"], fire["pre_k"], fire["out_m"], fire["out_k"], fire["pct"],
+                manual_pct=False, user_name=CURRENT_USER["full_name"],
+                out_color=out["out_color"], lab_no=out["lab_no"], parti_no=out["parti_no"])
+            if db.finalize_lot_if_consumed(fid, CURRENT_USER["full_name"]):
+                QMessageBox.information(
+                    self, "Lot Tükendi",
+                    f"<b>{fabric['product_code']} / {fabric['lot'] or '-'}</b> lotu tükendi.<br>"
+                    f"Toplam fire 'Boyahane Fire Oranları' sekmesine işlendi.")
+        self.refresh()
+        if len(lines) > 1:
+            QMessageBox.information(self, "Çıkış",
+                f"{len(lines)} hedefe parçalı çıkış yapıldı. Toplam {total_m:,.0f} mt.")
 
     # Çift tıklanabilen sütunlar → veritabanı alanı
     CELL_FIELDS = {1: "product_code", 2: "product_name", 3: "description", 4: "color",
