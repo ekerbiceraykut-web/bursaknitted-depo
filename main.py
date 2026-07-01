@@ -6155,6 +6155,146 @@ class MovementDialog(QDialog):
         return d
 
 
+class MultiCikisDialog(QDialog):
+    """Birden çok kumaş satırını (aynı ürün/farklı lot) tek hedefe toplu çıkış."""
+    def __init__(self, parent, fabrics):
+        super().__init__(parent)
+        self.fabrics = [dict(f) for f in fabrics]
+        self.setWindowTitle(f"Toplu Çıkış — {len(self.fabrics)} kalem")
+        self.setMinimumSize(780, 500)
+        self._build_ui()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        form = QFormLayout(); form.setSpacing(8)
+        self.dest_type = QComboBox(); self.dest_type.addItems(["Müşteri", "Lokasyon", "Diğer"])
+        self.dest_type.currentIndexChanged.connect(self._on_type)
+        self.dest_customer = QComboBox(); _make_searchable(self.dest_customer)
+        self.dest_customer.addItem("— Seçiniz —", "")
+        for c in (db.get_all_customers() or []):
+            self.dest_customer.addItem(c["name"], c["name"])
+        self.dest_loc = QComboBox(); _make_searchable(self.dest_loc)
+        self.dest_loc.addItem("— Seçiniz —", "")
+        for l in (db.get_active_locations() or []):
+            self.dest_loc.addItem(l["name"], l["name"])
+        self.dest_other = QLineEdit(); self.dest_other.setPlaceholderText("Hedef açıklayınız...")
+        self.notes = QLineEdit()
+        self.lbl_customer = QLabel("Müşteri:"); self.lbl_loc = QLabel("Lokasyon:"); self.lbl_other = QLabel("Diğer:")
+        form.addRow("Çıkış Hedefi:", self.dest_type)
+        form.addRow(self.lbl_customer, self.dest_customer)
+        form.addRow(self.lbl_loc, self.dest_loc)
+        form.addRow(self.lbl_other, self.dest_other)
+        form.addRow("Not:", self.notes)
+        lay.addLayout(form)
+
+        cols = ["Ürün Kodu", "Lot", "Renk", "Lokasyon", "Mevcut mt", "Mevcut kg", "Çıkış mt", "Çıkış kg"]
+        self.tbl = QTableWidget(); self.tbl.setColumnCount(len(cols))
+        self.tbl.setHorizontalHeaderLabels(cols)
+        self.tbl.verticalHeader().setVisible(False)
+        self.tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.tbl.setRowCount(len(self.fabrics))
+        self._spins = []
+        for i, f in enumerate(self.fabrics):
+            av_m = f.get("meter") or 0; av_k = f.get("kg") or 0
+            for c, txt in enumerate([f.get("product_code") or "", f.get("lot") or "",
+                                     f.get("color") or "", f.get("location") or "",
+                                     f"{av_m:,.2f}", f"{av_k:,.2f}"]):
+                it = QTableWidgetItem(txt)
+                if c >= 4:
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.tbl.setItem(i, c, it)
+            ms = QDoubleSpinBox(); ms.setRange(0, av_m if av_m > 0 else 999999); ms.setDecimals(2); ms.setValue(av_m)
+            ks = QDoubleSpinBox(); ks.setRange(0, av_k if av_k > 0 else 999999); ks.setDecimals(2); ks.setValue(av_k)
+            self.tbl.setCellWidget(i, 6, ms); self.tbl.setCellWidget(i, 7, ks)
+            self._spins.append((ms, ks))
+        self.tbl.resizeColumnsToContents()
+        lay.addWidget(self.tbl)
+
+        # Parçalı çıkış: istenen toplam metreyi lotlara sırayla dağıt
+        drow = QHBoxLayout()
+        drow.addWidget(QLabel("İstenen toplam metre:"))
+        self.dagit_mt = QDoubleSpinBox(); self.dagit_mt.setRange(0, 9999999); self.dagit_mt.setDecimals(2)
+        toplam_mt = sum(f.get("meter") or 0 for f in self.fabrics)
+        self.dagit_mt.setValue(0)
+        self.dagit_mt.setToolTip(f"Seçili lotlarda toplam {toplam_mt:,.0f} mt var")
+        drow.addWidget(self.dagit_mt)
+        b_dagit = QPushButton("↧ Lotlara Dağıt"); b_dagit.clicked.connect(self._distribute)
+        b_dagit.setStyleSheet("background:#1565C0;color:white;font-weight:bold;border-radius:4px;padding:5px 12px;")
+        drow.addWidget(b_dagit)
+        drow.addWidget(QLabel(f"(mevcut toplam: {toplam_mt:,.0f} mt)"))
+        drow.addStretch()
+        lay.addLayout(drow)
+
+        row = QHBoxLayout()
+        b_full = QPushButton("Tümünü tam çıkış"); b_full.clicked.connect(self._fill_full)
+        b_zero = QPushButton("Sıfırla"); b_zero.clicked.connect(self._fill_zero)
+        row.addWidget(b_full); row.addWidget(b_zero); row.addStretch()
+        lay.addLayout(row)
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Çıkışı Yap")
+        bb.accepted.connect(self._accept); bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        self._on_type()
+
+    def _on_type(self):
+        t = self.dest_type.currentText()
+        for w in (self.lbl_customer, self.dest_customer): w.setVisible(t == "Müşteri")
+        for w in (self.lbl_loc, self.dest_loc): w.setVisible(t == "Lokasyon")
+        for w in (self.lbl_other, self.dest_other): w.setVisible(t == "Diğer")
+
+    def _fill_full(self):
+        for i, f in enumerate(self.fabrics):
+            self._spins[i][0].setValue(f.get("meter") or 0)
+            self._spins[i][1].setValue(f.get("kg") or 0)
+
+    def _fill_zero(self):
+        for ms, ks in self._spins:
+            ms.setValue(0); ks.setValue(0)
+
+    def _distribute(self):
+        """İstenen toplam metreyi lotlara sırayla dağıtır (parçalı çıkış).
+        Her lottan mevcut kadar alır, kalanı sonraki lota geçer; kg oranlı düşülür."""
+        kalan = self.dagit_mt.value()
+        for i, f in enumerate(self.fabrics):
+            av_m = f.get("meter") or 0
+            av_k = f.get("kg") or 0
+            ms, ks = self._spins[i]
+            if kalan <= 0 or av_m <= 0:
+                ms.setValue(0); ks.setValue(0)
+                continue
+            al = min(av_m, kalan)
+            ms.setValue(al)
+            ks.setValue(av_k * (al / av_m) if av_m else 0)   # kg'yi oranlı düş
+            kalan -= al
+        if kalan > 0.01:
+            QMessageBox.information(self, "Bilgi",
+                f"Seçili lotlar yetmedi; {kalan:,.0f} mt dağıtılamadı. "
+                "Daha fazla lot seçmelisin.")
+
+    def _dest(self):
+        t = self.dest_type.currentText()
+        if t == "Müşteri":
+            return (self.dest_customer.currentData() or "", t)
+        if t == "Lokasyon":
+            return (self.dest_loc.currentData() or "", t)
+        return (self.dest_other.text().strip(), t)
+
+    def _accept(self):
+        dest, t = self._dest()
+        if not dest:
+            return QMessageBox.warning(self, "Eksik", "Lütfen çıkış hedefi seçin.")
+        if not any(ms.value() > 0 or ks.value() > 0 for ms, ks in self._spins):
+            return QMessageBox.warning(self, "Eksik", "En az bir satıra çıkış miktarı girin.")
+        self.accept()
+
+    def result_data(self):
+        dest, t = self._dest()
+        rows = [(self.fabrics[i]["id"], ms.value(), ks.value())
+                for i, (ms, ks) in enumerate(self._spins)]
+        return dest, t, self.notes.text().strip(), rows
+
+
 TYPE_COLORS = {"GİRİŞ": "#2E7D32", "SATINALMA GİRİŞİ": "#1565C0",
                "ÇIKIŞ": "#C62828", "SİLME": "#880E4F"}
 
@@ -6163,7 +6303,7 @@ def _fill_movement_table(table, movements, show_product=False):
     """Hareket tablosunu doldur. show_product=True ise ürün sütunu eklenir.
     Sütunlar elle ayarlanabilir, başlıklar taşınabilir, tıklayınca sıralanır."""
     if show_product:
-        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Satın Alma Lok.", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
+        cols = ["Tarih", "Tür", "Ürün Kodu", "Renk", "Lot", "Satın Alma Lok.", "Lokasyon", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
     else:
         cols = ["Tarih", "Tür", "Metre", "Kilo", "Top/Adet", "Hedef", "Kullanıcı", "Not"]
 
@@ -6205,6 +6345,7 @@ def _fill_movement_table(table, movements, show_product=False):
         if show_product:
             _set(m["product_code"] or "")
             _set(m["color"] or "")
+            _set(m.get("lot") or "", color="#78909C")             # lot
             _set(m.get("entry_location") or "", color="#00695C")   # köken
             # Hareketin yapıldığı lokasyon; eski kayıtlarda kumaşın güncel lokasyonu
             _set(m.get("location") or m.get("fabric_location") or "")
@@ -6237,7 +6378,7 @@ def _fill_movement_table(table, movements, show_product=False):
     # Sütun düzeni (sıra + genişlik) kalıcı: kapatıp açınca aynı kalır
     if not table.property("hdr_wired"):
         from PyQt6.QtCore import QSettings
-        key = "mv_header_p" if show_product else "mv_header_s"
+        key = "mv_header_p2" if show_product else "mv_header_s"
         settings = QSettings("BursaKnitted", "DepoTakip")
         st = settings.value(key)
         restored = False
@@ -7086,6 +7227,36 @@ class StockTable(QWidget):
             self.refresh()
 
     def _cikis(self):
+        # Birden çok satır seçiliyse toplu çıkış (aynı ürün/farklı lot → tek hedef)
+        sel = self.table.selectionModel().selectedRows() if self.table.selectionModel() else []
+        fids = [self._model.id_at(i.row()) for i in sel]
+        fids = [f for f in fids if f]
+        if len(fids) > 1:
+            return self._cikis_multi(fids)
+        return self._cikis_single()
+
+    def _cikis_multi(self, fids):
+        fabrics = [db.get_fabric(f) for f in fids]
+        fabrics = [f for f in fabrics if f]
+        if not fabrics:
+            return
+        dlg = MultiCikisDialog(self, fabrics)
+        if not dlg.exec():
+            return
+        dest, dtype, notes, rows = dlg.result_data()
+        n = 0
+        for fid, cm, ck in rows:
+            if cm <= 0 and ck <= 0:
+                continue
+            db.add_movement(fid, "ÇIKIŞ", cm, ck, "", notes,
+                            user_name=CURRENT_USER["full_name"],
+                            destination=dest, destination_type=dtype)
+            n += 1
+        self.refresh()
+        QMessageBox.information(self, "Toplu Çıkış",
+            f"{n} kalem için çıkış yapıldı.\nHedef: {dest or '—'}")
+
+    def _cikis_single(self):
         fid = self._selected_id()
         if not fid:
             return
