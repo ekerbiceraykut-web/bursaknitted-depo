@@ -3720,15 +3720,11 @@ class IplikWidget(QWidget):
         num = self.numara.currentText().strip()
         if num:
             parts.append(num)
-        total = 0.0
-        for i, r in enumerate(self._rows):
-            active = (i == 0) or (0 < total < 99.999)
-            if not active:
-                break
+        for i in self._active_indices():
+            r = self._rows[i]
             c = (r["cins"].currentData() or "").strip(); o = r["oran"].value()
             if c:
                 parts.append(f"%{o:.0f} {c.upper()}")
-            total += o
         par = (self.parlaklik.currentData() or "").strip()
         if par:
             parts.append(par.upper())
@@ -3743,13 +3739,38 @@ class IplikWidget(QWidget):
             parts.append(f"{lik} LİKRA")
         return " ".join(parts)
 
+    def _active_indices(self):
+        """Görünür/aktif kompozisyon satırlarının indeksleri.
+        İlk satır her zaman; sonraki satır ancak bir önceki satır dolu (oran>0) VE
+        toplam < 100 ise açılır → en fazla bir boş satır görünür."""
+        idxs = []
+        total = 0.0; stop = False
+        for i, r in enumerate(self._rows):
+            if i == 0:
+                active = True
+            elif stop:
+                active = False
+            else:
+                prev = self._rows[i - 1]["oran"].value()
+                active = (prev > 0) and (total < 99.999)
+            if active:
+                idxs.append(i)
+                o = r["oran"].value()
+                total += o
+                if o <= 0 or total >= 99.999:
+                    stop = True
+            else:
+                stop = True
+        return idxs
+
     def _recompute(self):
+        active = set(self._active_indices())
         total = 0.0
         for i, r in enumerate(self._rows):
-            active = (i == 0) or (0 < total < 99.999)
+            vis = i in active
             for w in (r["lbl"], r["cins"], r["oran"]):
-                w.setVisible(active)
-            if active:
+                w.setVisible(vis)
+            if vis:
                 total += r["oran"].value()
         if abs(total - 100) < 0.01:
             self.total_lbl.setText(f"Toplam: %{total:.0f}  ✓")
@@ -3803,15 +3824,12 @@ class IplikWidget(QWidget):
         self._refresh_cins_combos()
 
     def get_dict(self):
-        comp = []; total = 0.0
-        for i, r in enumerate(self._rows):
-            active = (i == 0) or (0 < total < 99.999)
-            if not active:
-                break
+        comp = []
+        for i in self._active_indices():
+            r = self._rows[i]
             c = (r["cins"].currentData() or "").strip(); o = r["oran"].value()
             if c or o:
                 comp.append({"cins": c, "oran": o})
-            total += o
         return {
             "iplik_no": self.iplik_no.text().strip(),
             "flament": self.flament.text().strip(),
