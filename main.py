@@ -6297,12 +6297,15 @@ class SplitCikisDialog(QDialog):
         self.fabric = dict(fabric)
         self.setWindowTitle(f"Çıkış — {self.fabric.get('product_code','')} / {self.fabric.get('color','')}")
         self.setMinimumSize(720, 560)
-        dis = {l["name"] for l in (db.get_active_locations() or []) if l["group_name"] != "DEPO"}
+        locs = db.get_active_locations() or []
+        dis = {l["name"] for l in locs if l["group_name"] != "DEPO"}
         self._is_dis_depo = (self.fabric.get("location") or "") in dis
+        self._loc_names = {l["name"] for l in locs}   # lokasyon adları → transfer
+        self._cust_names = {c["name"] for c in (db.get_all_customers() or [])}
         self._dest_options = []
         for c in (db.get_all_customers() or []):
             self._dest_options.append((f"👤 {c['name']}", ("Müşteri", c["name"])))
-        for l in (db.get_active_locations() or []):
+        for l in locs:
             self._dest_options.append((f"🏭 {l['name']}", ("Lokasyon", l["name"])))
         self._rows = []
         self._lines = []
@@ -6428,15 +6431,21 @@ class SplitCikisDialog(QDialog):
             self.fire_label.setText(f"{fire:,.2f} mt  (%{pct:.1f})")
 
     def _parse_hedef(self, combo):
+        # Hedef adını al (combo data'sından ya da yazılan metinden)
         data = combo.currentData()
-        if data:
-            return data
-        txt = combo.currentText().strip()
-        # emoji önekini temizle (kullanıcı listeden seçip düzenlediyse)
+        dest = data[1] if data else combo.currentText().strip()
         for pre in ("👤 ", "🏭 "):
-            if txt.startswith(pre):
-                txt = txt[len(pre):]
-        return ("Diğer", txt) if txt else (None, None)
+            if dest.startswith(pre):
+                dest = dest[len(pre):]
+        dest = dest.strip()
+        if not dest:
+            return (None, None)
+        # Tipi HER ZAMAN isme göre belirle: lokasyon → transfer, müşteri → düş
+        if dest in self._loc_names:
+            return ("Lokasyon", dest)
+        if dest in self._cust_names:
+            return ("Müşteri", dest)
+        return ("Diğer", dest)
 
     def _accept(self):
         lines = []
