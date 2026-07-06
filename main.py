@@ -557,12 +557,41 @@ def _den_from(value_str, birim):
     return 0.0
 
 
+from PyQt6.QtCore import QObject, QEvent
+from PyQt6.QtWidgets import QAbstractSpinBox, QAbstractScrollArea
+
+
+class _NoWheelFilter(QObject):
+    """Spin box / combo üzerinde fare tekerleği değeri değiştirmesin;
+    tekerlek en yakın kaydırma alanına iletilir (sayfa kayar)."""
+    def eventFilter(self, obj, ev):
+        if ev.type() == QEvent.Type.Wheel:
+            p = obj.parent()
+            while p is not None and not isinstance(p, QAbstractScrollArea):
+                p = p.parent()
+            if p is not None:
+                QApplication.sendEvent(p.viewport(), ev)
+            return True   # widget'ın kendi değeri değişmesin
+        return False
+
+
+_NO_WHEEL_FILTER = _NoWheelFilter()
+
+
+def _disable_wheel(root):
+    """root altındaki tüm spin box ve combo'larda tekerlek ile değer değişimini engeller."""
+    for w in root.findChildren((QAbstractSpinBox, QComboBox)):
+        w.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        w.installEventFilter(_NO_WHEEL_FILTER)
+
+
 class MaliyetWidget(QWidget):
     """Ürün diyaloğuna gömülebilir maliyet hesaplama widget'ı."""
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._build_ui()
+        _disable_wheel(self)   # fare tekerleği spinbox değerlerini değiştirmesin
         self._recalc()
 
     def _build_ui(self):
@@ -6290,6 +6319,7 @@ class SplitCikisDialog(QDialog):
         lay.addWidget(info)
 
         form = QFormLayout(); form.setSpacing(8)
+        self._form = form
         self.out_fabric_type = QComboBox(); self.out_fabric_type.addItem("— Seçiniz —", "")
         for t in ["HAM", "PFD", "BOYALI", "İPLİĞİ BOYALI", "BASKILI"]:
             self.out_fabric_type.addItem(t, t)
@@ -6297,6 +6327,8 @@ class SplitCikisDialog(QDialog):
         if i >= 0: self.out_fabric_type.setCurrentIndex(i)
         self.out_print_type = QComboBox(); self.out_print_type.addItem("— Seçiniz —", "")
         for t in PRINT_TYPES: self.out_print_type.addItem(t, t)
+        pt_i = self.out_print_type.findData(f.get("print_type") or "")
+        if pt_i >= 0: self.out_print_type.setCurrentIndex(pt_i)
         self.out_color = QLineEdit()
         self.out_zemin_rengi = QLineEdit(f.get("zemin_rengi") or "")
         self.lab_no = QLineEdit()
@@ -6309,6 +6341,9 @@ class SplitCikisDialog(QDialog):
         form.addRow("Lab No:", self.lab_no)
         form.addRow("Baskı Desen No:", self.out_baski_desen_no)
         form.addRow("Parti No:", self.parti_no)
+        # Kumaş/baskı tipine göre ilgili satırları göster/gizle
+        self.out_fabric_type.currentIndexChanged.connect(self._update_out_fields)
+        self.out_print_type.currentIndexChanged.connect(self._update_out_fields)
         if self._is_dis_depo:
             self.pre_meter = QDoubleSpinBox(); self.pre_meter.setRange(0, 999999); self.pre_meter.setDecimals(2); self.pre_meter.setValue(av_m)
             self.pre_kg = QDoubleSpinBox(); self.pre_kg.setRange(0, 999999); self.pre_kg.setDecimals(2); self.pre_kg.setValue(av_k)
@@ -6344,6 +6379,25 @@ class SplitCikisDialog(QDialog):
 
         self._add_row(); self._add_row()
         self._update_totals()
+        self._update_out_fields()
+
+    def _update_out_fields(self):
+        """BASKILI/Baskı Tipi seçimine göre Renk, Zemin Rengi, Lab No,
+        Baskı Tipi ve Baskı Desen No satırlarını göster/gizle."""
+        is_baskili = self.out_fabric_type.currentData() == "BASKILI"
+        pt = self.out_print_type.currentData() if is_baskili else ""
+        is_ronjan = pt == "RONJAN"
+        for widget, visible in (
+            (self.out_print_type, is_baskili),
+            (self.out_color, not is_baskili),
+            (self.out_zemin_rengi, is_ronjan),
+            (self.lab_no, (not is_baskili) or is_ronjan),
+            (self.out_baski_desen_no, is_baskili and bool(pt)),
+        ):
+            label = self._form.labelForField(widget)
+            if label:
+                label.setVisible(visible)
+            widget.setVisible(visible)
 
     def _add_row(self):
         r = self.tbl.rowCount(); self.tbl.insertRow(r)
