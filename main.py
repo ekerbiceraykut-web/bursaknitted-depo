@@ -3620,7 +3620,8 @@ class SupplierManagementDialog(QDialog):
 
 
 class IplikWidget(QWidget):
-    """Ürün diyaloğuna gömülen iplik giriş formu."""
+    """İplik giriş formu (İplik Kataloğu'nda kullanılır)."""
+    changed = pyqtSignal()
     NUMARA = ["DN", "NM", "NE", "DTEX"]
     _NUM_MAP = {"DN": "Den", "DTEX": "dTex", "NM": "Nm", "NE": "Ne"}
     PARLAKLIK = ["Yarım Mat", "Parlak", "Full Mat", "Süper Parlak"]
@@ -3643,15 +3644,13 @@ class IplikWidget(QWidget):
         inner = QWidget(); scroll.setWidget(inner); v.addWidget(scroll, 1)
         vl = QVBoxLayout(inner)
 
-        # 1) Numara sistemine kadar olan alanlar
+        # 1) Numara sistemine kadar olan alanlar (Kat sayısı üst seviyede — dialogda)
         form = QFormLayout(); form.setSpacing(8)
         self.iplik_no = QLineEdit()
         self.flament  = QLineEdit()
-        self.kat      = QLineEdit()
         self.numara   = QComboBox(); self.numara.addItems(self.NUMARA)
         form.addRow("İplik No:", self.iplik_no)
         form.addRow("Flament Sayısı:", self.flament)
-        form.addRow("Kat Sayısı:", self.kat)
         form.addRow("Numara Sistemi:", self.numara)
         vl.addLayout(form)
 
@@ -3683,10 +3682,12 @@ class IplikWidget(QWidget):
         for x in self.CEKIM: self.cekim.addItem(x, x)
         self.tur = QLineEdit()
         self.likra = QLineEdit(); self.likra.setPlaceholderText("DN cinsinden — girilirse 1/3'ü hesaba katılır")
+        self.fiyat = QDoubleSpinBox(); self.fiyat.setRange(0, 999999); self.fiyat.setDecimals(2); self.fiyat.setSuffix(" $/kg")
         form2.addRow("Parlaklık:", self.parlaklik)
         form2.addRow("Çekim Sistemi:", self.cekim)
         form2.addRow("Tur Sayısı:", self.tur)
         form2.addRow("Likra (DN):", self.likra)
+        form2.addRow("Fiyat:", self.fiyat)
         vl.addLayout(form2)
 
         self.denye_lbl = QLabel("—"); self.denye_lbl.setStyleSheet("font-weight:bold; color:#1A237E; font-size:13px;")
@@ -3694,10 +3695,53 @@ class IplikWidget(QWidget):
         vl.addLayout(f3)
         vl.addStretch()
 
-        for w in (self.iplik_no, self.kat, self.likra):
+        for w in (self.iplik_no, self.likra):
             w.textChanged.connect(self._update_denye)
         self.numara.currentIndexChanged.connect(self._update_denye)
+        # Tüm alanlar değişince 'changed' yayınla (ad otomatik güncellensin)
+        for w in (self.iplik_no, self.flament, self.tur, self.likra):
+            w.textChanged.connect(lambda *a: self.changed.emit())
+        for cb in (self.numara, self.parlaklik, self.cekim):
+            cb.currentIndexChanged.connect(lambda *a: self.changed.emit())
+        self.fiyat.valueChanged.connect(lambda *a: self.changed.emit())
+        for r in self._rows:
+            r["cins"].currentIndexChanged.connect(lambda *a: self.changed.emit())
+            r["oran"].valueChanged.connect(lambda *a: self.changed.emit())
         self._recompute()
+
+    def build_name(self):
+        """Alanlardan otomatik iplik adı/kodu üretir (boşlukla ayrılmış düz metin)."""
+        parts = []
+        no = self.iplik_no.text().strip(); fl = self.flament.text().strip()
+        if no and fl:
+            parts.append(f"{no}/{fl}")
+        elif no or fl:
+            parts.append(no or fl)
+        num = self.numara.currentText().strip()
+        if num:
+            parts.append(num)
+        total = 0.0
+        for i, r in enumerate(self._rows):
+            active = (i == 0) or (0 < total < 99.999)
+            if not active:
+                break
+            c = (r["cins"].currentData() or "").strip(); o = r["oran"].value()
+            if c:
+                parts.append(f"%{o:.0f} {c.upper()}")
+            total += o
+        par = (self.parlaklik.currentData() or "").strip()
+        if par:
+            parts.append(par.upper())
+        cek = (self.cekim.currentData() or "").strip()
+        if cek:
+            parts.append(cek.upper())
+        tur = self.tur.text().strip()
+        if tur:
+            parts.append(f"{tur} TUR")
+        lik = self.likra.text().strip()
+        if lik:
+            parts.append(f"{lik} LİKRA")
+        return " ".join(parts)
 
     def _recompute(self):
         total = 0.0
@@ -3715,14 +3759,15 @@ class IplikWidget(QWidget):
             self.total_lbl.setStyleSheet("color:#C62828; font-weight:bold;")
         self._update_denye()
 
-    def _update_denye(self):
+    def denye_value(self):
         no = self.iplik_no.text().strip().replace(",", ".")
         base = _den_from(no, self._NUM_MAP.get(self.numara.currentText(), "Den"))
-        try: kat = float((self.kat.text() or "1").replace(",", ".")) or 1
-        except Exception: kat = 1
         try: lik = float((self.likra.text() or "0").replace(",", "."))
         except Exception: lik = 0
-        toplam = base * kat + lik / 3.0
+        return base + lik / 3.0
+
+    def _update_denye(self):
+        toplam = self.denye_value()
         self.denye_lbl.setText(f"{toplam:,.1f} DN" if toplam else "—")
 
     def _refresh_cins_combos(self):
@@ -3757,8 +3802,7 @@ class IplikWidget(QWidget):
                 self._cins_list.append(name)
         self._refresh_cins_combos()
 
-    def get_json(self):
-        import json
+    def get_dict(self):
         comp = []; total = 0.0
         for i, r in enumerate(self._rows):
             active = (i == 0) or (0 < total < 99.999)
@@ -3768,81 +3812,121 @@ class IplikWidget(QWidget):
             if c or o:
                 comp.append({"cins": c, "oran": o})
             total += o
-        d = {
+        return {
             "iplik_no": self.iplik_no.text().strip(),
             "flament": self.flament.text().strip(),
-            "kat": self.kat.text().strip(),
             "numara_sistemi": self.numara.currentText(),
             "parlaklik": self.parlaklik.currentData() or "",
             "cekim_sistemi": self.cekim.currentData() or "",
             "tur_sayisi": self.tur.text().strip(),
             "likra_dn": self.likra.text().strip(),
+            "fiyat": self.fiyat.value(),
             "kompozisyon": comp,
-            "toplam_denye": self.denye_lbl.text(),
         }
-        return json.dumps(d, ensure_ascii=False)
 
-    def load(self, p):
-        import json
-        raw = ""
-        try:
-            raw = (p.get("iplik_json", "") if isinstance(p, dict)
-                   else (p["iplik_json"] if p and "iplik_json" in p.keys() else ""))
-        except Exception:
-            raw = ""
-        if not raw:
-            return
-        try: d = json.loads(raw)
-        except Exception: return
-        self.iplik_no.setText(d.get("iplik_no", ""))
-        self.flament.setText(d.get("flament", ""))
-        self.kat.setText(d.get("kat", ""))
+    def load_dict(self, d):
+        d = d or {}
+        self.iplik_no.setText(str(d.get("iplik_no", "")))
+        self.flament.setText(str(d.get("flament", "")))
         i = self.numara.findText(d.get("numara_sistemi", "")); self.numara.setCurrentIndex(i if i >= 0 else 0)
         pi = self.parlaklik.findData(d.get("parlaklik", "")); self.parlaklik.setCurrentIndex(pi if pi >= 0 else 0)
         ci = self.cekim.findData(d.get("cekim_sistemi", "")); self.cekim.setCurrentIndex(ci if ci >= 0 else 0)
-        self.tur.setText(d.get("tur_sayisi", ""))
-        self.likra.setText(d.get("likra_dn", ""))
+        self.tur.setText(str(d.get("tur_sayisi", "")))
+        self.likra.setText(str(d.get("likra_dn", "")))
+        try: self.fiyat.setValue(float(d.get("fiyat") or 0))
+        except Exception: pass
         for j, item in enumerate((d.get("kompozisyon") or [])[:self.MAX_CINS]):
             cb = self._rows[j]["cins"]; cins = item.get("cins", "")
             if cins:
                 idx = cb.findText(cins)
-                if idx < 0:            # listede yoksa combo'ya ekle ki görünsün
+                if idx < 0:
                     cb.addItem(cins, cins); idx = cb.count() - 1
                 cb.setCurrentIndex(idx)
             try: self._rows[j]["oran"].setValue(float(item.get("oran") or 0))
             except Exception: pass
         self._recompute()
 
-
 class IplikEntryDialog(QDialog):
-    """Tek bir iplik tanımı — Ad + IplikWidget."""
+    """İplik tanımı — Kat sayısı + her kat için ayrı iplik formu (sekme). Ad otomatik."""
+    MAX_KAT = 6
+
     def __init__(self, parent=None, iplik=None):
         super().__init__(parent)
         self.iplik = dict(iplik) if iplik else None
         self.setWindowTitle("İplik" + (" Düzenle" if iplik else " Ekle"))
-        self.setMinimumSize(560, 620)
+        self.setMinimumSize(600, 660)
         lay = QVBoxLayout(self)
+
         form = QFormLayout()
-        self.ad = QLineEdit(self.iplik.get("ad", "") if self.iplik else "")
-        self.ad.setPlaceholderText("İplik adı / kodu (ör. 150/48 PES Parlak)")
-        form.addRow("İplik Adı / Kodu *:", self.ad)
+        self.ad = QLineEdit()
+        self.ad.setReadOnly(True)
+        self.ad.setStyleSheet("background:#F1F3F4; color:#1A237E; font-weight:bold;")
+        self.ad.setToolTip("Otomatik oluşturulur — alanları doldurdukça güncellenir")
+        self.kat_spin = QSpinBox(); self.kat_spin.setRange(1, self.MAX_KAT); self.kat_spin.setValue(1)
+        self.kat_spin.valueChanged.connect(self._rebuild_kat_tabs)
+        form.addRow("İplik Adı / Kodu (oto):", self.ad)
+        form.addRow("Kat Sayısı:", self.kat_spin)
         lay.addLayout(form)
-        self.iplik_w = IplikWidget()
-        if self.iplik:
-            self.iplik_w.load({"iplik_json": self.iplik.get("data_json", "")})
-        lay.addWidget(self.iplik_w, 1)
+
+        self.kat_tabs = QTabWidget()
+        lay.addWidget(self.kat_tabs, 1)
+        self._plies = []   # her kat için IplikWidget
+
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.button(QDialogButtonBox.StandardButton.Ok).setText("Kaydet")
         bb.accepted.connect(self._accept); bb.rejected.connect(self.reject)
         lay.addWidget(bb)
 
+        # Mevcut kaydı yükle
+        katlar = []
+        if self.iplik:
+            import json
+            try:
+                d = json.loads(self.iplik.get("data_json") or "{}")
+            except Exception:
+                d = {}
+            katlar = d.get("katlar") or ([d] if d.get("iplik_no") or d.get("kompozisyon") else [])
+        n = max(1, len(katlar))
+        self.kat_spin.blockSignals(True); self.kat_spin.setValue(n); self.kat_spin.blockSignals(False)
+        self._rebuild_kat_tabs()
+        for i, kd in enumerate(katlar):
+            if i < len(self._plies):
+                self._plies[i].load_dict(kd)
+        self._refresh_name()
+
+    def _rebuild_kat_tabs(self):
+        n = self.kat_spin.value()
+        while len(self._plies) < n:
+            w = IplikWidget()
+            w.changed.connect(self._refresh_name)
+            self._plies.append(w)
+            self.kat_tabs.addTab(w, f"Kat {len(self._plies)}")
+        while len(self._plies) > n:
+            self.kat_tabs.removeTab(len(self._plies) - 1)
+            self._plies.pop()
+        self._refresh_name()
+
+    def _refresh_name(self):
+        n = self.kat_spin.value()
+        names = [self._plies[i].build_name() for i in range(min(n, len(self._plies)))]
+        names = [x for x in names if x]
+        ad = " + ".join(names)
+        if n > 1:
+            ad = (ad + "  " if ad else "") + f"{n} KAT"
+        self.ad.setText(ad)
+
     def _accept(self):
         if not self.ad.text().strip():
-            return QMessageBox.warning(self, "Eksik", "İplik adı/kodu zorunludur.")
+            return QMessageBox.warning(self, "Eksik", "En az bir iplik bilgisi girin (ad otomatik oluşur).")
         self.accept()
 
     def result_data(self):
-        return self.ad.text().strip(), self.iplik_w.get_json()
+        import json
+        n = self.kat_spin.value()
+        katlar = [self._plies[i].get_dict() for i in range(min(n, len(self._plies)))]
+        toplam = sum(self._plies[i].denye_value() for i in range(min(n, len(self._plies))))
+        data = {"kat": n, "katlar": katlar, "toplam_denye": f"{toplam:,.1f} DN" if toplam else ""}
+        return self.ad.text().strip(), json.dumps(data, ensure_ascii=False)
 
 
 class IplikManagementDialog(QDialog):
@@ -3862,9 +3946,9 @@ class IplikManagementDialog(QDialog):
         lay.addLayout(top)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(7)
+        self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["İplik Adı / Kodu", "İplik No", "Numara", "Kompozisyon", "Çekim", "Likra (DN)", "Toplam Denye"])
+            ["İplik Adı / Kodu", "Kat", "Kompozisyon (katlar)", "Toplam Denye", "Fiyat ($/kg)"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -3894,17 +3978,24 @@ class IplikManagementDialog(QDialog):
             r = dict(r)
             try: d = json.loads(r.get("data_json") or "{}")
             except Exception: d = {}
-            komp = " + ".join(f"{c.get('cins','')} %{c.get('oran',0):.0f}"
-                              for c in (d.get("kompozisyon") or []))
+            katlar = d.get("katlar") or ([d] if d.get("kompozisyon") else [])
+            kat_ozet = []; fiyatlar = []
+            for kd in katlar:
+                komp = " ".join(f"%{c.get('oran',0):.0f} {c.get('cins','')}"
+                                for c in (kd.get("kompozisyon") or []))
+                parca = " ".join(x for x in [str(kd.get("iplik_no", "")), komp] if x.strip())
+                if parca.strip():
+                    kat_ozet.append(parca)
+                fv = kd.get("fiyat") or 0
+                if fv:
+                    fiyatlar.append(f"{float(fv):,.2f}")
             it = QTableWidgetItem(r.get("ad", "") or "")
             it.setData(Qt.ItemDataRole.UserRole, r.get("id"))
             self.table.setItem(i, 0, it)
-            self.table.setItem(i, 1, QTableWidgetItem(str(d.get("iplik_no", ""))))
-            self.table.setItem(i, 2, QTableWidgetItem(str(d.get("numara_sistemi", ""))))
-            self.table.setItem(i, 3, QTableWidgetItem(komp))
-            self.table.setItem(i, 4, QTableWidgetItem(str(d.get("cekim_sistemi", ""))))
-            self.table.setItem(i, 5, QTableWidgetItem(str(d.get("likra_dn", ""))))
-            self.table.setItem(i, 6, QTableWidgetItem(str(d.get("toplam_denye", ""))))
+            self.table.setItem(i, 1, QTableWidgetItem(str(d.get("kat", len(katlar) or 1))))
+            self.table.setItem(i, 2, QTableWidgetItem("  +  ".join(kat_ozet)))
+            self.table.setItem(i, 3, QTableWidgetItem(str(d.get("toplam_denye", ""))))
+            self.table.setItem(i, 4, QTableWidgetItem(" + ".join(fiyatlar)))
         self.table.resizeColumnsToContents()
 
     def _selected_id(self):
