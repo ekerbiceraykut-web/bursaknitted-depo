@@ -3879,6 +3879,7 @@ class IplikEntryDialog(QDialog):
         self.kat_spin = QSpinBox(); self.kat_spin.setRange(1, self.MAX_KAT); self.kat_spin.setValue(1)
         self.kat_spin.valueChanged.connect(self._rebuild_kat_tabs)
         self.toplam_tur = QLineEdit(); self.toplam_tur.setPlaceholderText("Katların toplam turu (opsiyonel)")
+        self.toplam_tur.textChanged.connect(self._refresh_name)
         self.katlama_ucreti = QDoubleSpinBox()
         self.katlama_ucreti.setRange(0, 999999); self.katlama_ucreti.setDecimals(2)
         self.katlama_ucreti.setSuffix(" $/kg")
@@ -3974,6 +3975,9 @@ class IplikEntryDialog(QDialog):
         ad = " + ".join(names)
         if n > 1:
             ad = (ad + "  " if ad else "") + f"{n} KAT"
+        tt = self.toplam_tur.text().strip()
+        if tt and ad:
+            ad += f"  {tt} TUR"
         self.ad.setText(ad)
         self._refresh_ozet()
 
@@ -4080,22 +4084,30 @@ class IplikManagementDialog(QDialog):
             try: d = json.loads(r.get("data_json") or "{}")
             except Exception: d = {}
             katlar = d.get("katlar") or ([d] if d.get("kompozisyon") else [])
-            kat_ozet = []; fiyatlar = []
+            # Kompozisyon: tüm katların ağırlıklı (her katın toplamdaki %'sine göre) toplam oranı
+            nkat = len(katlar) or 1
+            toplam_komp = {}   # cins -> toplam yüzde
+            fiyatlar = []
             for kd in katlar:
-                comp = kd.get("kompozisyon") or []
-                # Kompozisyon: yalnızca oranlar (iplik no yok)
-                komp = " + ".join(f"%{c.get('oran',0):.0f} {c.get('cins','')}".strip()
-                                  for c in comp if c.get('cins') or c.get('oran'))
-                if komp.strip():
-                    kat_ozet.append(komp)
+                # katın toplam içindeki payı: kayıtlı toplam_yuzde, yoksa eşit dağıt
+                kat_pay = kd.get("toplam_yuzde")
+                kat_pay = float(kat_pay) if kat_pay is not None else (100.0 / nkat)
+                for c in (kd.get("kompozisyon") or []):
+                    cins = (c.get("cins") or "").strip()
+                    if not cins:
+                        continue
+                    oran = float(c.get("oran") or 0)
+                    toplam_komp[cins] = toplam_komp.get(cins, 0.0) + oran * kat_pay / 100.0
                 fv = kd.get("fiyat") or 0
                 if fv:
                     fiyatlar.append(f"{float(fv):,.2f}")
+            kat_ozet = " + ".join(f"%{v:.0f} {cins}"
+                                  for cins, v in sorted(toplam_komp.items(), key=lambda x: -x[1]))
             it = QTableWidgetItem(r.get("ad", "") or "")
             it.setData(Qt.ItemDataRole.UserRole, r.get("id"))
             self.table.setItem(i, 0, it)
             self.table.setItem(i, 1, QTableWidgetItem(str(d.get("kat", len(katlar) or 1))))
-            self.table.setItem(i, 2, QTableWidgetItem("  +  ".join(kat_ozet)))
+            self.table.setItem(i, 2, QTableWidgetItem(kat_ozet))
             self.table.setItem(i, 3, QTableWidgetItem(str(d.get("toplam_denye", ""))))
             # Orana göre toplam fiyat; yoksa kat fiyatlarını göster
             self.table.setItem(i, 4, QTableWidgetItem(str(d.get("toplam_fiyat", "")) or " + ".join(fiyatlar)))
