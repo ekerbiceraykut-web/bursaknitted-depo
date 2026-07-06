@@ -3648,12 +3648,17 @@ class IplikWidget(QWidget):
 
         # 1) Numara sistemine kadar olan alanlar (Kat sayısı üst seviyede — dialogda)
         form = QFormLayout(); form.setSpacing(8)
-        self.iplik_no = QLineEdit()
+        self.teorik_no = QLineEdit(); self.teorik_no.setPlaceholderText("İplik tanımında/adda kullanılır")
+        self.fiili_no  = QLineEdit(); self.fiili_no.setPlaceholderText("Hesaplamalarda kullanılır (boşsa teorik)")
         self.flament  = QLineEdit()
         self.numara   = QComboBox(); self.numara.addItems(self.NUMARA)
-        form.addRow("İplik No:", self.iplik_no)
+        self.tedarikci = QComboBox(); _make_searchable(self.tedarikci)
+        self._load_tedarikciler()
+        form.addRow("Teorik No:", self.teorik_no)
+        form.addRow("Fiili No:", self.fiili_no)
         form.addRow("Flament Sayısı:", self.flament)
         form.addRow("Numara Sistemi:", self.numara)
+        form.addRow("Tedarikçi:", self.tedarikci)
         vl.addLayout(form)
 
         # 2) İplik Cinsi & Oranları — numara sisteminin hemen altında
@@ -3696,13 +3701,13 @@ class IplikWidget(QWidget):
         vl.addLayout(f3)
         vl.addStretch()
 
-        for w in (self.iplik_no, self.likra):
+        for w in (self.fiili_no, self.teorik_no, self.likra):
             w.textChanged.connect(self._update_denye)
         self.numara.currentIndexChanged.connect(self._update_denye)
         # Tüm alanlar değişince 'changed' yayınla (ad otomatik güncellensin)
-        for w in (self.iplik_no, self.flament, self.tur, self.likra):
+        for w in (self.teorik_no, self.fiili_no, self.flament, self.tur, self.likra):
             w.textChanged.connect(lambda *a: self.changed.emit())
-        for cb in (self.numara, self.parlaklik, self.cekim):
+        for cb in (self.numara, self.parlaklik, self.cekim, self.tedarikci):
             cb.currentIndexChanged.connect(lambda *a: self.changed.emit())
         self.fiyat.valueChanged.connect(lambda *a: self.changed.emit())
         for r in self._rows:
@@ -3710,10 +3715,26 @@ class IplikWidget(QWidget):
             r["oran"].valueChanged.connect(lambda *a: self.changed.emit())
         self._recompute()
 
+    def _load_tedarikciler(self):
+        """Tedarikçi açılır listesini müşteriler listesinden doldurur."""
+        self.tedarikci.blockSignals(True)
+        self.tedarikci.clear()
+        self.tedarikci.addItem("— Seçiniz —", None)
+        try:
+            for c in (db.get_all_customers() or []):
+                c = dict(c)
+                self.tedarikci.addItem(c.get("name", ""), c.get("id"))
+        except Exception:
+            pass
+        self.tedarikci.setCurrentIndex(0)
+        self.tedarikci.blockSignals(False)
+
     def build_name(self):
-        """Alanlardan otomatik iplik adı/kodu üretir (boşlukla ayrılmış düz metin)."""
+        """Alanlardan otomatik iplik adı/kodu üretir (boşlukla ayrılmış düz metin).
+        İplik tanımında TEORİK no kullanılır (yoksa fiili)."""
         parts = []
-        no = self.iplik_no.text().strip(); fl = self.flament.text().strip()
+        no = self.teorik_no.text().strip() or self.fiili_no.text().strip()
+        fl = self.flament.text().strip()
         num = self.numara.currentText().strip()
         # NE / NM sistemlerinde flament girilmezse kat "1" varsayılır (ör. 28 NE → 28/1)
         if not fl and no and num in ("NE", "NM"):
@@ -3786,7 +3807,8 @@ class IplikWidget(QWidget):
         self._update_denye()
 
     def denye_value(self):
-        no = self.iplik_no.text().strip().replace(",", ".")
+        # Hesaplamalarda FİİLİ no kullanılır (yoksa teorik'e düşer)
+        no = (self.fiili_no.text().strip() or self.teorik_no.text().strip()).replace(",", ".")
         base = _den_from(no, self._NUM_MAP.get(self.numara.currentText(), "Den"))
         try: lik = float((self.likra.text() or "0").replace(",", "."))
         except Exception: lik = 0
@@ -3826,10 +3848,15 @@ class IplikWidget(QWidget):
             c = (r["cins"].currentData() or "").strip(); o = r["oran"].value()
             if c or o:
                 comp.append({"cins": c, "oran": o})
+        teorik = self.teorik_no.text().strip()
         return {
-            "iplik_no": self.iplik_no.text().strip(),
+            "teorik_no": teorik,
+            "fiili_no": self.fiili_no.text().strip(),
+            "iplik_no": teorik,   # geriye dönük uyumluluk
             "flament": self.flament.text().strip(),
             "numara_sistemi": self.numara.currentText(),
+            "tedarikci_id": self.tedarikci.currentData(),
+            "tedarikci": self.tedarikci.currentText() if self.tedarikci.currentData() is not None else "",
             "parlaklik": self.parlaklik.currentData() or "",
             "cekim_sistemi": self.cekim.currentData() or "",
             "tur_sayisi": self.tur.text().strip(),
@@ -3840,7 +3867,21 @@ class IplikWidget(QWidget):
 
     def load_dict(self, d):
         d = d or {}
-        self.iplik_no.setText(str(d.get("iplik_no", "")))
+        self.teorik_no.setText(str(d.get("teorik_no", d.get("iplik_no", ""))))
+        self.fiili_no.setText(str(d.get("fiili_no", "")))
+        # Tedarikçi
+        tid = d.get("tedarikci_id")
+        if tid is not None:
+            ix = self.tedarikci.findData(tid)
+            if ix >= 0:
+                self.tedarikci.setCurrentIndex(ix)
+            elif d.get("tedarikci"):
+                self.tedarikci.addItem(str(d.get("tedarikci")), tid)
+                self.tedarikci.setCurrentIndex(self.tedarikci.count() - 1)
+        elif d.get("tedarikci"):
+            ix = self.tedarikci.findText(str(d.get("tedarikci")))
+            if ix >= 0:
+                self.tedarikci.setCurrentIndex(ix)
         self.flament.setText(str(d.get("flament", "")))
         i = self.numara.findText(d.get("numara_sistemi", "")); self.numara.setCurrentIndex(i if i >= 0 else 0)
         pi = self.parlaklik.findData(d.get("parlaklik", "")); self.parlaklik.setCurrentIndex(pi if pi >= 0 else 0)
@@ -3907,6 +3948,14 @@ class IplikEntryDialog(QDialog):
         self.ozet_lbl.setWordWrap(True)
         lay.addWidget(self.ozet_lbl)
 
+        # Fiyat / tedarikçi geçmişi (son 6 ay)
+        self._gecmis = []
+        btn_row = QHBoxLayout()
+        self.btn_gecmis = QPushButton("📊 Fiyat / Tedarikçi Geçmişi (son 6 ay)")
+        self.btn_gecmis.clicked.connect(self._show_gecmis)
+        btn_row.addWidget(self.btn_gecmis); btn_row.addStretch()
+        lay.addLayout(btn_row)
+
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.button(QDialogButtonBox.StandardButton.Ok).setText("Kaydet")
         bb.accepted.connect(self._accept); bb.rejected.connect(self.reject)
@@ -3920,6 +3969,7 @@ class IplikEntryDialog(QDialog):
                 d = json.loads(self.iplik.get("data_json") or "{}")
             except Exception:
                 d = {}
+            self._gecmis = d.get("fiyat_gecmisi") or []
             self.toplam_tur.setText(str(d.get("toplam_tur", "")))
             try:
                 self.katlama_ucreti.setValue(float(d.get("katlama_ucreti") or 0))
@@ -3998,6 +4048,51 @@ class IplikEntryDialog(QDialog):
         alt += f"\nNet Toplam Fiyat: {net_fiyat:,.2f} $/kg"
         self.ozet_lbl.setText((line + "\n" if line else "") + alt)
 
+    def _current_snapshot(self):
+        """Katların güncel fiyat + tedarikçi durumu (geçmiş karşılaştırması için)."""
+        snap = []
+        for i, w in enumerate(self._plies_active(), start=1):
+            snap.append({
+                "kat": i,
+                "fiyat": round(w.fiyat.value(), 2),
+                "tedarikci": w.tedarikci.currentText() if w.tedarikci.currentData() is not None else "",
+            })
+        return snap
+
+    def _show_gecmis(self):
+        import datetime
+        cutoff = (datetime.date.today() - datetime.timedelta(days=182)).isoformat()
+        satirlar = []
+        # Kaydedilmiş geçmiş
+        for e in self._gecmis:
+            if str(e.get("tarih", "")) >= cutoff:
+                for k in e.get("katlar", []):
+                    satirlar.append((e.get("tarih", ""), k.get("kat"), k.get("fiyat"), k.get("tedarikci")))
+        satirlar.sort(key=lambda x: str(x[0]), reverse=True)
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Fiyat / Tedarikçi Geçmişi — son 6 ay")
+        dlg.setMinimumSize(520, 360)
+        dl = QVBoxLayout(dlg)
+        if not satirlar:
+            dl.addWidget(QLabel("Son 6 ayda kayıtlı fiyat/tedarikçi değişikliği yok.\n"
+                                "(Kaydettikçe geçmiş burada birikir.)"))
+        else:
+            t = QTableWidget(len(satirlar), 4)
+            t.setHorizontalHeaderLabels(["Tarih", "Kat", "Fiyat ($/kg)", "Tedarikçi"])
+            t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            for i, (tar, kat, fy, ted) in enumerate(satirlar):
+                t.setItem(i, 0, QTableWidgetItem(str(tar)))
+                t.setItem(i, 1, QTableWidgetItem(str(kat or "")))
+                t.setItem(i, 2, QTableWidgetItem(f"{float(fy or 0):,.2f}"))
+                t.setItem(i, 3, QTableWidgetItem(str(ted or "")))
+            t.resizeColumnsToContents()
+            t.horizontalHeader().setStretchLastSection(True)
+            dl.addWidget(t)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dlg.reject); bb.accepted.connect(dlg.accept)
+        dl.addWidget(bb)
+        dlg.exec()
+
     def _accept(self):
         if not self.ad.text().strip():
             return QMessageBox.warning(self, "Eksik", "En az bir iplik bilgisi girin (ad otomatik oluşur).")
@@ -4012,7 +4107,7 @@ class IplikEntryDialog(QDialog):
         self.accept()
 
     def result_data(self):
-        import json
+        import json, datetime
         n = self.kat_spin.value()
         plies = self._plies_active()
         denyeler, toplam, yuzdeler, iplik_fiyat, net_fiyat = self._totals()
@@ -4022,6 +4117,12 @@ class IplikEntryDialog(QDialog):
             kd["denye"] = round(denyeler[i], 1)
             kd["toplam_yuzde"] = round(yuzdeler[i], 1)   # iplik no'suna göre toplamdaki %
             katlar.append(kd)
+        # Fiyat/tedarikçi geçmişi: değişiklik varsa bugünün tarihiyle ekle
+        gecmis = list(self._gecmis)
+        snap = self._current_snapshot()
+        son = gecmis[-1].get("katlar") if gecmis else None
+        if snap and snap != son:
+            gecmis.append({"tarih": datetime.date.today().isoformat(), "katlar": snap})
         data = {
             "kat": n, "katlar": katlar,
             "toplam_tur": self.toplam_tur.text().strip(),
@@ -4030,6 +4131,7 @@ class IplikEntryDialog(QDialog):
             "toplam_denye": f"{toplam:,.1f} DN" if toplam else "",
             "iplik_fiyat": f"{iplik_fiyat:,.2f} $/kg" if iplik_fiyat else "",
             "toplam_fiyat": f"{net_fiyat:,.2f} $/kg" if net_fiyat else "",
+            "fiyat_gecmisi": gecmis,
         }
         return self.ad.text().strip(), json.dumps(data, ensure_ascii=False)
 
