@@ -3714,12 +3714,16 @@ class IplikWidget(QWidget):
         """Alanlardan otomatik iplik adı/kodu üretir (boşlukla ayrılmış düz metin)."""
         parts = []
         no = self.iplik_no.text().strip(); fl = self.flament.text().strip()
+        num = self.numara.currentText().strip()
+        # NE / NM sistemlerinde flament girilmezse kat "1" varsayılır (ör. 28 NE → 28/1)
+        if not fl and no and num in ("NE", "NM"):
+            fl = "1"
         if no and fl:
             parts.append(f"{no}/{fl}")
         elif no or fl:
             parts.append(no or fl)
-        num = self.numara.currentText().strip()
-        if num:
+        # Numara sistemi sadece iplik no/flament girildiyse ada eklenir
+        if num and (no or fl):
             parts.append(num)
         for i in self._active_indices():
             r = self._rows[i]
@@ -3811,6 +3815,10 @@ class IplikWidget(QWidget):
                 cb.setCurrentIndex(0)
             cb.blockSignals(False)
 
+    def kompozisyon_toplami(self):
+        """Girilmiş kompozisyon oranlarının toplamı (hiç girilmemişse 0)."""
+        return sum(self._rows[i]["oran"].value() for i in self._active_indices())
+
     def get_dict(self):
         comp = []
         for i in self._active_indices():
@@ -3871,9 +3879,20 @@ class IplikEntryDialog(QDialog):
         self.kat_spin = QSpinBox(); self.kat_spin.setRange(1, self.MAX_KAT); self.kat_spin.setValue(1)
         self.kat_spin.valueChanged.connect(self._rebuild_kat_tabs)
         self.toplam_tur = QLineEdit(); self.toplam_tur.setPlaceholderText("Katların toplam turu (opsiyonel)")
+        self.katlama_ucreti = QDoubleSpinBox()
+        self.katlama_ucreti.setRange(0, 999999); self.katlama_ucreti.setDecimals(2)
+        self.katlama_ucreti.setSuffix(" $/kg")
+        self.katlama_ucreti.setToolTip("Toplam katlama ücreti — iplik fiyatına eklenir")
+        self.katlama_ucreti.valueChanged.connect(self._refresh_ozet)
+        self.fire = QDoubleSpinBox()
+        self.fire.setRange(0, 100); self.fire.setDecimals(2); self.fire.setSuffix(" %")
+        self.fire.setToolTip("Fire oranı — toplam fiyata yüzde olarak eklenir")
+        self.fire.valueChanged.connect(self._refresh_ozet)
         form.addRow("İplik Adı / Kodu (oto):", self.ad)
         form.addRow("Kat Sayısı:", self.kat_spin)
         form.addRow("Toplam Tur:", self.toplam_tur)
+        form.addRow("Toplam Katlama Ücreti:", self.katlama_ucreti)
+        form.addRow("Fire:", self.fire)
         lay.addLayout(form)
 
         self.kat_tabs = QTabWidget()
@@ -3901,6 +3920,14 @@ class IplikEntryDialog(QDialog):
             except Exception:
                 d = {}
             self.toplam_tur.setText(str(d.get("toplam_tur", "")))
+            try:
+                self.katlama_ucreti.setValue(float(d.get("katlama_ucreti") or 0))
+            except Exception:
+                pass
+            try:
+                self.fire.setValue(float(d.get("fire") or 0))
+            except Exception:
+                pass
             katlar = d.get("katlar") or ([d] if d.get("iplik_no") or d.get("kompozisyon") else [])
         n = max(1, len(katlar))
         self.kat_spin.blockSignals(True); self.kat_spin.setValue(n); self.kat_spin.blockSignals(False)
@@ -3909,6 +3936,7 @@ class IplikEntryDialog(QDialog):
             if i < len(self._plies):
                 self._plies[i].load_dict(kd)
         self._refresh_name()
+        _disable_wheel(self)
 
     def _rebuild_kat_tabs(self):
         n = self.kat_spin.value()
@@ -3927,13 +3955,17 @@ class IplikEntryDialog(QDialog):
         return self._plies[:min(n, len(self._plies))]
 
     def _totals(self):
-        """(denyeler, toplam_denye, yüzdeler, ort_fiyat) hesaplar."""
+        """(denyeler, toplam_denye, yüzdeler, iplik_fiyat, net_fiyat) hesaplar.
+        net_fiyat = (orana göre iplik fiyatı + katlama ücreti) × (1 + fire%)."""
         plies = self._plies_active()
         denyeler = [w.denye_value() for w in plies]
         toplam = sum(denyeler)
         yuzdeler = [(d / toplam * 100) if toplam else 0 for d in denyeler]
-        ort_fiyat = sum(plies[i].fiyat.value() * yuzdeler[i] / 100 for i in range(len(plies)))
-        return denyeler, toplam, yuzdeler, ort_fiyat
+        iplik_fiyat = sum(plies[i].fiyat.value() * yuzdeler[i] / 100 for i in range(len(plies)))
+        katlama = self.katlama_ucreti.value()
+        fire = self.fire.value()
+        net_fiyat = (iplik_fiyat + katlama) * (1 + fire / 100.0)
+        return denyeler, toplam, yuzdeler, iplik_fiyat, net_fiyat
 
     def _refresh_name(self):
         n = self.kat_spin.value()
@@ -3946,26 +3978,40 @@ class IplikEntryDialog(QDialog):
         self._refresh_ozet()
 
     def _refresh_ozet(self):
-        denyeler, toplam, yuzdeler, ort_fiyat = self._totals()
+        denyeler, toplam, yuzdeler, iplik_fiyat, net_fiyat = self._totals()
         parts = []
         for i in range(len(denyeler)):
             fy = self._plies_active()[i].fiyat.value()
             parts.append(f"Kat{i+1}: {denyeler[i]:,.0f} DN  (%{yuzdeler[i]:.1f})  {fy:,.2f} $/kg")
         line = "   |   ".join(parts)
-        self.ozet_lbl.setText(
-            (line + "\n" if line else "") +
-            f"Toplam İplik No: {toplam:,.0f} DN     Orana Göre Toplam Fiyat: {ort_fiyat:,.2f} $/kg")
+        katlama = self.katlama_ucreti.value(); fire = self.fire.value()
+        alt = (f"Toplam İplik No: {toplam:,.0f} DN     "
+               f"İplik Fiyatı: {iplik_fiyat:,.2f} $/kg")
+        if katlama:
+            alt += f"  + Katlama: {katlama:,.2f}"
+        if fire:
+            alt += f"  + Fire %{fire:g}"
+        alt += f"\nNet Toplam Fiyat: {net_fiyat:,.2f} $/kg"
+        self.ozet_lbl.setText((line + "\n" if line else "") + alt)
 
     def _accept(self):
         if not self.ad.text().strip():
             return QMessageBox.warning(self, "Eksik", "En az bir iplik bilgisi girin (ad otomatik oluşur).")
+        # Kompozisyon girilen her katta oran toplamı %100 olmalı
+        for i, w in enumerate(self._plies_active(), start=1):
+            toplam = w.kompozisyon_toplami()
+            if toplam > 0 and abs(toplam - 100) > 0.001:
+                return QMessageBox.warning(
+                    self, "Kompozisyon Hatalı",
+                    f"Kat {i} iplik cinsi oranları toplamı %{toplam:.0f} — "
+                    f"%100 olmalı. Lütfen düzeltin.")
         self.accept()
 
     def result_data(self):
         import json
         n = self.kat_spin.value()
         plies = self._plies_active()
-        denyeler, toplam, yuzdeler, ort_fiyat = self._totals()
+        denyeler, toplam, yuzdeler, iplik_fiyat, net_fiyat = self._totals()
         katlar = []
         for i, w in enumerate(plies):
             kd = w.get_dict()
@@ -3975,8 +4021,11 @@ class IplikEntryDialog(QDialog):
         data = {
             "kat": n, "katlar": katlar,
             "toplam_tur": self.toplam_tur.text().strip(),
+            "katlama_ucreti": round(self.katlama_ucreti.value(), 2),
+            "fire": round(self.fire.value(), 2),
             "toplam_denye": f"{toplam:,.1f} DN" if toplam else "",
-            "toplam_fiyat": f"{ort_fiyat:,.2f} $/kg" if ort_fiyat else "",
+            "iplik_fiyat": f"{iplik_fiyat:,.2f} $/kg" if iplik_fiyat else "",
+            "toplam_fiyat": f"{net_fiyat:,.2f} $/kg" if net_fiyat else "",
         }
         return self.ad.text().strip(), json.dumps(data, ensure_ascii=False)
 
@@ -4000,7 +4049,7 @@ class IplikManagementDialog(QDialog):
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(
-            ["İplik Adı / Kodu", "Kat", "Kompozisyon (katlar)", "Toplam Denye", "Fiyat ($/kg)"])
+            ["İplik Adı / Kodu", "Kat", "Kompozisyon", "Toplam Denye", "Fiyat ($/kg)"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -4033,11 +4082,12 @@ class IplikManagementDialog(QDialog):
             katlar = d.get("katlar") or ([d] if d.get("kompozisyon") else [])
             kat_ozet = []; fiyatlar = []
             for kd in katlar:
-                komp = " ".join(f"%{c.get('oran',0):.0f} {c.get('cins','')}"
-                                for c in (kd.get("kompozisyon") or []))
-                parca = " ".join(x for x in [str(kd.get("iplik_no", "")), komp] if x.strip())
-                if parca.strip():
-                    kat_ozet.append(parca)
+                comp = kd.get("kompozisyon") or []
+                # Kompozisyon: yalnızca oranlar (iplik no yok)
+                komp = " + ".join(f"%{c.get('oran',0):.0f} {c.get('cins','')}".strip()
+                                  for c in comp if c.get('cins') or c.get('oran'))
+                if komp.strip():
+                    kat_ozet.append(komp)
                 fv = kd.get("fiyat") or 0
                 if fv:
                     fiyatlar.append(f"{float(fv):,.2f}")
