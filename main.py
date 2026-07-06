@@ -3634,6 +3634,8 @@ class IplikWidget(QWidget):
         try:
             self._cins_list = db.get_iplik_cinsleri() or []
         except Exception:
+            self._cins_list = []
+        if not self._cins_list:   # uzak modda boş dönerse temel listeye düş
             self._cins_list = list(getattr(_local_db, "IPLIK_CINSLERI_BASE", []))
         self._build_ui()
         _disable_wheel(self)
@@ -3668,9 +3670,8 @@ class IplikWidget(QWidget):
             self._rows.append({"lbl": lbl, "cins": cb, "oran": oran})
         self._refresh_cins_combos()
         r2 = QHBoxLayout()
-        b_new = QPushButton("+ Yeni İplik Cinsi"); b_new.clicked.connect(self._add_cins_type)
         self.total_lbl = QLabel()
-        r2.addWidget(b_new); r2.addStretch(); r2.addWidget(self.total_lbl)
+        r2.addStretch(); r2.addWidget(self.total_lbl)
         gl.addLayout(r2)
         vl.addWidget(grp)
 
@@ -3810,19 +3811,6 @@ class IplikWidget(QWidget):
                 cb.setCurrentIndex(0)
             cb.blockSignals(False)
 
-    def _add_cins_type(self):
-        name, ok = QInputDialog.getText(self, "Yeni İplik Cinsi", "İplik cinsi adı:")
-        if not ok or not name.strip():
-            return
-        name = name.strip()
-        try:
-            db.add_iplik_cinsi(name)
-            self._cins_list = db.get_iplik_cinsleri() or self._cins_list
-        except Exception:
-            if name not in self._cins_list:
-                self._cins_list.append(name)
-        self._refresh_cins_combos()
-
     def get_dict(self):
         comp = []
         for i in self._active_indices():
@@ -3882,13 +3870,22 @@ class IplikEntryDialog(QDialog):
         self.ad.setToolTip("Otomatik oluşturulur — alanları doldurdukça güncellenir")
         self.kat_spin = QSpinBox(); self.kat_spin.setRange(1, self.MAX_KAT); self.kat_spin.setValue(1)
         self.kat_spin.valueChanged.connect(self._rebuild_kat_tabs)
+        self.toplam_tur = QLineEdit(); self.toplam_tur.setPlaceholderText("Katların toplam turu (opsiyonel)")
         form.addRow("İplik Adı / Kodu (oto):", self.ad)
         form.addRow("Kat Sayısı:", self.kat_spin)
+        form.addRow("Toplam Tur:", self.toplam_tur)
         lay.addLayout(form)
 
         self.kat_tabs = QTabWidget()
         lay.addWidget(self.kat_tabs, 1)
         self._plies = []   # her kat için IplikWidget
+
+        # Özet: kat başına denye + toplam içindeki %, toplam denye, orana göre toplam fiyat
+        self.ozet_lbl = QLabel()
+        self.ozet_lbl.setStyleSheet(
+            "background:#E8EAF6; color:#1A237E; border-radius:4px; padding:8px; font-weight:bold;")
+        self.ozet_lbl.setWordWrap(True)
+        lay.addWidget(self.ozet_lbl)
 
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.button(QDialogButtonBox.StandardButton.Ok).setText("Kaydet")
@@ -3903,6 +3900,7 @@ class IplikEntryDialog(QDialog):
                 d = json.loads(self.iplik.get("data_json") or "{}")
             except Exception:
                 d = {}
+            self.toplam_tur.setText(str(d.get("toplam_tur", "")))
             katlar = d.get("katlar") or ([d] if d.get("iplik_no") or d.get("kompozisyon") else [])
         n = max(1, len(katlar))
         self.kat_spin.blockSignals(True); self.kat_spin.setValue(n); self.kat_spin.blockSignals(False)
@@ -3924,14 +3922,39 @@ class IplikEntryDialog(QDialog):
             self._plies.pop()
         self._refresh_name()
 
+    def _plies_active(self):
+        n = self.kat_spin.value()
+        return self._plies[:min(n, len(self._plies))]
+
+    def _totals(self):
+        """(denyeler, toplam_denye, yüzdeler, ort_fiyat) hesaplar."""
+        plies = self._plies_active()
+        denyeler = [w.denye_value() for w in plies]
+        toplam = sum(denyeler)
+        yuzdeler = [(d / toplam * 100) if toplam else 0 for d in denyeler]
+        ort_fiyat = sum(plies[i].fiyat.value() * yuzdeler[i] / 100 for i in range(len(plies)))
+        return denyeler, toplam, yuzdeler, ort_fiyat
+
     def _refresh_name(self):
         n = self.kat_spin.value()
-        names = [self._plies[i].build_name() for i in range(min(n, len(self._plies)))]
+        names = [w.build_name() for w in self._plies_active()]
         names = [x for x in names if x]
         ad = " + ".join(names)
         if n > 1:
             ad = (ad + "  " if ad else "") + f"{n} KAT"
         self.ad.setText(ad)
+        self._refresh_ozet()
+
+    def _refresh_ozet(self):
+        denyeler, toplam, yuzdeler, ort_fiyat = self._totals()
+        parts = []
+        for i in range(len(denyeler)):
+            fy = self._plies_active()[i].fiyat.value()
+            parts.append(f"Kat{i+1}: {denyeler[i]:,.0f} DN  (%{yuzdeler[i]:.1f})  {fy:,.2f} $/kg")
+        line = "   |   ".join(parts)
+        self.ozet_lbl.setText(
+            (line + "\n" if line else "") +
+            f"Toplam İplik No: {toplam:,.0f} DN     Orana Göre Toplam Fiyat: {ort_fiyat:,.2f} $/kg")
 
     def _accept(self):
         if not self.ad.text().strip():
@@ -3941,9 +3964,20 @@ class IplikEntryDialog(QDialog):
     def result_data(self):
         import json
         n = self.kat_spin.value()
-        katlar = [self._plies[i].get_dict() for i in range(min(n, len(self._plies)))]
-        toplam = sum(self._plies[i].denye_value() for i in range(min(n, len(self._plies))))
-        data = {"kat": n, "katlar": katlar, "toplam_denye": f"{toplam:,.1f} DN" if toplam else ""}
+        plies = self._plies_active()
+        denyeler, toplam, yuzdeler, ort_fiyat = self._totals()
+        katlar = []
+        for i, w in enumerate(plies):
+            kd = w.get_dict()
+            kd["denye"] = round(denyeler[i], 1)
+            kd["toplam_yuzde"] = round(yuzdeler[i], 1)   # iplik no'suna göre toplamdaki %
+            katlar.append(kd)
+        data = {
+            "kat": n, "katlar": katlar,
+            "toplam_tur": self.toplam_tur.text().strip(),
+            "toplam_denye": f"{toplam:,.1f} DN" if toplam else "",
+            "toplam_fiyat": f"{ort_fiyat:,.2f} $/kg" if ort_fiyat else "",
+        }
         return self.ad.text().strip(), json.dumps(data, ensure_ascii=False)
 
 
@@ -4013,7 +4047,8 @@ class IplikManagementDialog(QDialog):
             self.table.setItem(i, 1, QTableWidgetItem(str(d.get("kat", len(katlar) or 1))))
             self.table.setItem(i, 2, QTableWidgetItem("  +  ".join(kat_ozet)))
             self.table.setItem(i, 3, QTableWidgetItem(str(d.get("toplam_denye", ""))))
-            self.table.setItem(i, 4, QTableWidgetItem(" + ".join(fiyatlar)))
+            # Orana göre toplam fiyat; yoksa kat fiyatlarını göster
+            self.table.setItem(i, 4, QTableWidgetItem(str(d.get("toplam_fiyat", "")) or " + ".join(fiyatlar)))
         self.table.resizeColumnsToContents()
 
     def _selected_id(self):
