@@ -48,6 +48,7 @@ _LIST_FUNCS = {
     "get_po_items_for_order", "get_all_armur_desenleri",
     "get_crm_customers", "get_crm_visits", "get_crm_sales", "get_crm_orders",
     "get_crm_years", "get_stock_snapshots", "get_movement_destinations",
+    "get_iplik_cinsleri",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -3618,6 +3619,216 @@ class SupplierManagementDialog(QDialog):
             QMessageBox.critical(self,"Hata",f"İçe aktarma hatası:\n{e}")
 
 
+class IplikWidget(QWidget):
+    """Ürün diyaloğuna gömülen iplik giriş formu."""
+    NUMARA = ["DN", "NM", "NE", "DTEX"]
+    _NUM_MAP = {"DN": "Den", "DTEX": "dTex", "NM": "Nm", "NE": "Ne"}
+    PARLAKLIK = ["Yarım Mat", "Parlak", "Full Mat", "Süper Parlak"]
+    CEKIM = ["Ring", "Vortex", "Open End", "Compact", "Karde", "Penye", "Siro",
+             "Tex", "FDY", "IMG", "Soft IMG", "Single Cover"]
+    MAX_CINS = 6
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        try:
+            self._cins_list = db.get_iplik_cinsleri() or []
+        except Exception:
+            self._cins_list = list(getattr(_local_db, "IPLIK_CINSLERI_BASE", []))
+        self._build_ui()
+        _disable_wheel(self)
+
+    def _build_ui(self):
+        v = QVBoxLayout(self)
+        scroll = QScrollArea(); scroll.setWidgetResizable(True)
+        inner = QWidget(); scroll.setWidget(inner); v.addWidget(scroll, 1)
+        vl = QVBoxLayout(inner)
+
+        form = QFormLayout(); form.setSpacing(8)
+        self.iplik_no = QLineEdit()
+        self.flament  = QLineEdit()
+        self.kat      = QLineEdit()
+        self.numara   = QComboBox(); self.numara.addItems(self.NUMARA)
+        self.parlaklik = QComboBox(); self.parlaklik.addItem("— Seçiniz —", "")
+        for x in self.PARLAKLIK: self.parlaklik.addItem(x, x)
+        self.cekim = QComboBox(); self.cekim.addItem("— Seçiniz —", "")
+        for x in self.CEKIM: self.cekim.addItem(x, x)
+        self.tur = QLineEdit()
+        self.likra = QLineEdit(); self.likra.setPlaceholderText("DN cinsinden — girilirse 1/3'ü hesaba katılır")
+        form.addRow("İplik No:", self.iplik_no)
+        form.addRow("Flament Sayısı:", self.flament)
+        form.addRow("Kat Sayısı:", self.kat)
+        form.addRow("Numara Sistemi:", self.numara)
+        form.addRow("Parlaklık:", self.parlaklik)
+        form.addRow("Çekim Sistemi:", self.cekim)
+        form.addRow("Tur Sayısı:", self.tur)
+        form.addRow("Likra (DN):", self.likra)
+        vl.addLayout(form)
+
+        grp = QGroupBox("İplik Cinsi & Oranları — toplam %100 olmalı")
+        gl = QVBoxLayout(grp)
+        grid = QGridLayout(); gl.addLayout(grid)
+        self._rows = []
+        for i in range(self.MAX_CINS):
+            lbl = QLabel(f"İplik Cinsi {i+1}:")
+            cb = QComboBox(); cb.setEditable(True); cb.addItem("", "")
+            for c in self._cins_list: cb.addItem(c, c)
+            cb.setCurrentIndex(0)
+            oran = QDoubleSpinBox(); oran.setRange(0, 100); oran.setDecimals(1); oran.setSuffix(" %")
+            oran.valueChanged.connect(self._recompute)
+            grid.addWidget(lbl, i, 0); grid.addWidget(cb, i, 1); grid.addWidget(oran, i, 2)
+            self._rows.append({"lbl": lbl, "cins": cb, "oran": oran})
+        r2 = QHBoxLayout()
+        b_new = QPushButton("+ Yeni İplik Cinsi"); b_new.clicked.connect(self._add_cins_type)
+        self.total_lbl = QLabel()
+        r2.addWidget(b_new); r2.addStretch(); r2.addWidget(self.total_lbl)
+        gl.addLayout(r2)
+        vl.addWidget(grp)
+
+        self.denye_lbl = QLabel("—"); self.denye_lbl.setStyleSheet("font-weight:bold; color:#1A237E; font-size:13px;")
+        f2 = QFormLayout(); f2.addRow("Toplam Denye (likra 1/3 dahil):", self.denye_lbl)
+        vl.addLayout(f2)
+        vl.addStretch()
+
+        for w in (self.iplik_no, self.kat, self.likra):
+            w.textChanged.connect(self._update_denye)
+        self.numara.currentIndexChanged.connect(self._update_denye)
+        self._recompute()
+
+    def _recompute(self):
+        total = 0.0
+        for i, r in enumerate(self._rows):
+            active = (i == 0) or (0 < total < 99.999)
+            for w in (r["lbl"], r["cins"], r["oran"]):
+                w.setVisible(active)
+            if active:
+                total += r["oran"].value()
+        if abs(total - 100) < 0.01:
+            self.total_lbl.setText(f"Toplam: %{total:.0f}  ✓")
+            self.total_lbl.setStyleSheet("color:#2E7D32; font-weight:bold;")
+        else:
+            self.total_lbl.setText(f"Toplam: %{total:.0f}" + ("  (100 olmalı)" if total > 0 else ""))
+            self.total_lbl.setStyleSheet("color:#C62828; font-weight:bold;")
+        self._update_denye()
+
+    def _update_denye(self):
+        no = self.iplik_no.text().strip().replace(",", ".")
+        base = _den_from(no, self._NUM_MAP.get(self.numara.currentText(), "Den"))
+        try: kat = float((self.kat.text() or "1").replace(",", ".")) or 1
+        except Exception: kat = 1
+        try: lik = float((self.likra.text() or "0").replace(",", "."))
+        except Exception: lik = 0
+        toplam = base * kat + lik / 3.0
+        self.denye_lbl.setText(f"{toplam:,.1f} DN" if toplam else "—")
+
+    def _add_cins_type(self):
+        name, ok = QInputDialog.getText(self, "Yeni İplik Cinsi", "İplik cinsi adı:")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        try: db.add_iplik_cinsi(name)
+        except Exception: pass
+        for r in self._rows:
+            if r["cins"].findText(name) < 0:
+                r["cins"].addItem(name, name)
+
+    def get_json(self):
+        import json
+        comp = []; total = 0.0
+        for i, r in enumerate(self._rows):
+            active = (i == 0) or (0 < total < 99.999)
+            if not active:
+                break
+            c = r["cins"].currentText().strip(); o = r["oran"].value()
+            if c or o:
+                comp.append({"cins": c, "oran": o})
+            total += o
+        d = {
+            "iplik_no": self.iplik_no.text().strip(),
+            "flament": self.flament.text().strip(),
+            "kat": self.kat.text().strip(),
+            "numara_sistemi": self.numara.currentText(),
+            "parlaklik": self.parlaklik.currentData() or "",
+            "cekim_sistemi": self.cekim.currentData() or "",
+            "tur_sayisi": self.tur.text().strip(),
+            "likra_dn": self.likra.text().strip(),
+            "kompozisyon": comp,
+            "toplam_denye": self.denye_lbl.text(),
+        }
+        return json.dumps(d, ensure_ascii=False)
+
+    def load(self, p):
+        import json
+        raw = ""
+        try:
+            raw = (p.get("iplik_json", "") if isinstance(p, dict)
+                   else (p["iplik_json"] if p and "iplik_json" in p.keys() else ""))
+        except Exception:
+            raw = ""
+        if not raw:
+            return
+        try: d = json.loads(raw)
+        except Exception: return
+        self.iplik_no.setText(d.get("iplik_no", ""))
+        self.flament.setText(d.get("flament", ""))
+        self.kat.setText(d.get("kat", ""))
+        i = self.numara.findText(d.get("numara_sistemi", "")); self.numara.setCurrentIndex(i if i >= 0 else 0)
+        pi = self.parlaklik.findData(d.get("parlaklik", "")); self.parlaklik.setCurrentIndex(pi if pi >= 0 else 0)
+        ci = self.cekim.findData(d.get("cekim_sistemi", "")); self.cekim.setCurrentIndex(ci if ci >= 0 else 0)
+        self.tur.setText(d.get("tur_sayisi", ""))
+        self.likra.setText(d.get("likra_dn", ""))
+        for j, item in enumerate((d.get("kompozisyon") or [])[:self.MAX_CINS]):
+            self._rows[j]["cins"].setEditText(item.get("cins", ""))
+            try: self._rows[j]["oran"].setValue(float(item.get("oran") or 0))
+            except Exception: pass
+        self._recompute()
+
+
+class _ProductNameConfirmDialog(QDialog):
+    """Ürün adı onayı. Onaylamazsa (Yeni Öner) mevcut öneri kara listeye alınır
+    ve yeni bir ad önerilir; kullanıcı elle de yazabilir."""
+    def __init__(self, parent, suggested):
+        super().__init__(parent)
+        self.setWindowTitle("Ürün Adı Onayı")
+        self.setMinimumWidth(380)
+        self._suggested = suggested   # o an önerilen (otomatik) ad
+        lay = QVBoxLayout(self)
+        lay.addWidget(QLabel("Ürün adını onaylayın, beğenmezseniz yeni öneri isteyin\n"
+                             "ya da elle yazın:"))
+        self.edit = QLineEdit(suggested)
+        lay.addWidget(self.edit)
+        row = QHBoxLayout()
+        b_new = QPushButton("🎲 Beğenmedim / Yeni Öner")
+        b_new.clicked.connect(self._reject_and_new)
+        row.addWidget(b_new); row.addStretch()
+        lay.addLayout(row)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("✅ Onayla")
+        bb.button(QDialogButtonBox.StandardButton.Cancel).setText("İptal")
+        bb.accepted.connect(self._accept); bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def _reject_and_new(self):
+        # Mevcut öneriyi kalıcı olarak kara listeye al, tekrar önerme
+        if self._suggested:
+            try:
+                db.reject_product_name(self._suggested)
+            except Exception:
+                pass
+        try:
+            self._suggested = db.generate_product_name()
+        except Exception:
+            self._suggested = ""
+        self.edit.setText(self._suggested)
+
+    def _accept(self):
+        if not self.edit.text().strip():
+            return QMessageBox.warning(self, "Eksik", "Ürün adı boş olamaz.")
+        self.accept()
+
+    def result_name(self):
+        return self.edit.text().strip()
+
+
 class ProductManagementDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3786,6 +3997,22 @@ class ProductManagementDialog(QDialog):
         dlg.code     = QLineEdit(p["product_code"] if p else "")
         dlg.ref      = QLineEdit(p.get("reference_code","") if p else "")
         dlg.name     = QLineEdit(p.get("product_name","") if p else "")
+        if not p:   # yeni ürün → otomatik benzersiz ad öner
+            try:
+                dlg.name.setText(db.generate_product_name())
+            except Exception:
+                pass
+        # Adın yanına "yeni ad üret" düğmesi
+        _name_w = QWidget(); _nh = QHBoxLayout(_name_w); _nh.setContentsMargins(0,0,0,0); _nh.setSpacing(6)
+        _btn_gen = QPushButton("🎲"); _btn_gen.setFixedWidth(34)
+        _btn_gen.setToolTip("Otomatik yeni ad üret")
+        def _regen_name():
+            try:
+                dlg.name.setText(db.generate_product_name())
+            except Exception:
+                pass
+        _btn_gen.clicked.connect(_regen_name)
+        _nh.addWidget(dlg.name, 1); _nh.addWidget(_btn_gen)
         dlg.comp     = QLineEdit(p.get("composition","") if p else "")
         dlg.width    = QLineEdit(p.get("width","") if p else "")
         dlg.gramaj   = QLineEdit(p.get("gramaj","") if p else "")
@@ -3815,7 +4042,7 @@ class ProductManagementDialog(QDialog):
 
         f1.addRow("Ürün Durumu:", dlg.product_status)
         f1.addRow("Ürün Kodu *:", dlg.code)
-        f1.addRow("Ürün Adı/Bilgisi:", dlg.name)
+        f1.addRow("Ürün Adı/Bilgisi:", _name_w)
         f1.addRow("Kompozisyon:", dlg.comp)
         f1.addRow("En (cm):", dlg.width)
         f1.addRow("Gramaj (gr/m2):", dlg.gramaj)
@@ -3966,6 +4193,12 @@ class ProductManagementDialog(QDialog):
             dlg.jakar_w.load(p)
         tabs.addTab(dlg.jakar_w, "Jakar Desen")
 
+        # ── Sekme: İplik ─────────────────────────────────────────
+        dlg.iplik_w = IplikWidget()
+        if p:
+            dlg.iplik_w.load(p)
+        tabs.addTab(dlg.iplik_w, "🧵 İplik")
+
         lay.addWidget(tabs)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         def _try_accept():
@@ -4011,6 +4244,7 @@ class ProductManagementDialog(QDialog):
             jakar_jpeg_ad=dlg.jakar_w.get_jpeg_ad(),
             jakar_jpeg_data=dlg.jakar_w.get_jpeg_b64(),
             product_status=product_status,
+            iplik_json=dlg.iplik_w.get_json(),
         )
         try:
             if pid:
@@ -4024,7 +4258,14 @@ class ProductManagementDialog(QDialog):
 
     def _add(self):
         dlg = self._product_dialog()
-        if dlg.exec() and self._collect_product(dlg):
+        if not dlg.exec():
+            return
+        # Ürün adı onayı: onaylanmazsa reddedilen ad kara listeye alınır ve yeni ad önerilir
+        cd = _ProductNameConfirmDialog(self, dlg.name.text().strip())
+        if not cd.exec():
+            return   # iptal → kayıt yok
+        dlg.name.setText(cd.result_name())
+        if self._collect_product(dlg):
             self._refresh_all()
 
     def _edit(self):
@@ -6566,22 +6807,13 @@ def _fill_movement_table(table, movements, show_product=False):
 
     table.setSortingEnabled(True)   # başlığa tıklayınca sıralar
 
-    # Sütun düzeni (sıra + genişlik) kalıcı: kapatıp açınca aynı kalır
-    if not table.property("hdr_wired"):
-        from PyQt6.QtCore import QSettings
-        key = "mv_header_p2" if show_product else "mv_header_s"
-        settings = QSettings("BursaKnitted", "DepoTakip")
-        st = settings.value(key)
-        restored = False
-        if st is not None:
-            restored = hdr.restoreState(st)
-        if not restored:
-            table.resizeColumnsToContents()   # kayıt yoksa makul genişlik
-        def _save_hdr(*a):
-            QSettings("BursaKnitted", "DepoTakip").setValue(key, hdr.saveState())
-        hdr.sectionMoved.connect(_save_hdr)
-        hdr.sectionResized.connect(_save_hdr)
-        table.setProperty("hdr_wired", True)
+    # Sütun düzeni (sıra + genişlik) kalıcı: kapatıp açınca aynı kalır.
+    # NOT: saveState() sectionResized içinde SENKRON çağrılırsa (sürükleme sırasında
+    # art arda tetiklenir) Windows/macOS'ta reentrancy → çökme (SIGSEGV) olur.
+    # Bu yüzden QTimer ile geciktirip event-loop'a döndükten sonra kaydeden
+    # ortak _wire_header_persistence yardımcısı kullanılır.
+    key = "mv_header_p2" if show_product else "mv_header_s"
+    _wire_header_persistence(table, key)
 
 
 class MovementsDialog(QDialog):
@@ -8660,56 +8892,57 @@ class SiparisOnayDialog(QDialog):
         # ── 3. Sipariş Kalemleri ─────────────────────────────────────────────
         kal_grp = _grp("3 — Sipariş Kalemleri")
         kg = QVBoxLayout(kal_grp)
-        tbl = QTableWidget()
-        cols = ["Ürün Kodu", "Ürün Adı", "Kumaş Tipi", "Renk", "Kompozisyon",
-                "En (cm)", "Gramaj", "Lab No", "Baskı Tipi", "Zemin Rengi",
-                "Baskı Desen No", "Miktar (mt)", "Miktar (kg)", "Birim Fiyat", "Tutar", "Açıklama"]
-        tbl.setColumnCount(len(cols))
-        tbl.setHorizontalHeaderLabels(cols)
-        tbl.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        tbl.verticalHeader().setVisible(False)
-        tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        tbl.setAlternatingRowColors(True)
-        tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        tbl.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Stretch)
-
         items = o.get("items") or []
         toplam_mt = 0.0; toplam_kg = 0.0; toplam_tutar = 0.0
-        cur = o.get("currency","USD")
-        tbl.setRowCount(len(items))
-        for ri, it in enumerate(items):
+        cur = o.get("currency", "USD")
+        if not items:
+            kg.addWidget(QLabel("Bu siparişte kalem yok."))
+        for idx, it in enumerate(items, start=1):
             mt  = float(it.get("meter") or 0)
             kgi = float(it.get("kg") or 0)
             sp  = float(it.get("sale_price") or 0)
             tut = mt * sp
             toplam_mt += mt; toplam_kg += kgi; toplam_tutar += tut
-            vals = [
-                it.get("product_code",""),
-                it.get("product_name",""),
-                it.get("fabric_type",""),
-                it.get("color",""),
-                it.get("composition",""),
-                it.get("width",""),
-                it.get("gramaj",""),
-                it.get("lab_no",""),
-                it.get("print_type",""),
-                it.get("zemin_rengi",""),
-                it.get("baski_desen_no",""),
-                f"{mt:.2f}",
-                f"{kgi:.2f}",
-                f"{sp:.2f}" if sp else "",
-                f"{tut:.2f}" if sp else "",
-                it.get("description",""),
-            ]
-            for ci, v in enumerate(vals):
-                cell = QTableWidgetItem(str(v))
-                cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if ci in (11, 12, 13, 14):
-                    cell.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                tbl.setItem(ri, ci, cell)
 
-        tbl.setMaximumHeight(min(len(items) * 28 + 40, 280))
-        kg.addWidget(tbl)
+            card = QFrame()
+            card.setStyleSheet("QFrame{background:#FAFAFA;border:1px solid #CFD8DC;border-radius:6px;}")
+            cl = QVBoxLayout(card); cl.setSpacing(4)
+            title = QLabel(f"Kalem {idx}:  {it.get('product_code','') or '—'}  —  {it.get('product_name','') or ''}")
+            title.setStyleSheet("font-weight:bold;color:#1565C0;font-size:13px;")
+            cl.addWidget(title)
+
+            grid = QGridLayout(); grid.setSpacing(5); grid.setContentsMargins(4, 2, 4, 2)
+            fields = [
+                ("Ürün Kodu",      it.get("product_code","")),
+                ("Ürün Adı",       it.get("product_name","")),
+                ("Kumaş Tipi",     it.get("fabric_type","")),
+                ("Renk",           it.get("color","")),
+                ("Kompozisyon",    it.get("composition","")),
+                ("En (cm)",        it.get("width","")),
+                ("Gramaj",         it.get("gramaj","")),
+                ("Lab No",         it.get("lab_no","")),
+                ("Baskı Tipi",     it.get("print_type","")),
+                ("Zemin Rengi",    it.get("zemin_rengi","")),
+                ("Baskı Desen No", it.get("baski_desen_no","")),
+                ("Miktar (mt)",    f"{mt:.2f}"),
+                ("Miktar (kg)",    f"{kgi:.2f}"),
+                ("Birim Fiyat",    f"{sp:.2f} {cur}" if sp else "—"),
+                ("Tutar",          f"{tut:.2f} {cur}" if sp else "—"),
+                ("Açıklama",       it.get("description","")),
+            ]
+            for i, (lbl, val) in enumerate(fields):
+                r, c = divmod(i, 2)          # sağlı-sollu: 2 alan yan yana
+                cb = c * 2
+                grid.addWidget(QLabel(f"<b>{lbl}:</b>"), r, cb)
+                v = QLabel(str(val) if str(val) else "—")
+                v.setWordWrap(True)
+                v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                if lbl == "Tutar" and sp:
+                    v.setStyleSheet("font-weight:bold;color:#C62828;")
+                grid.addWidget(v, r, cb + 1)
+            grid.setColumnStretch(1, 1); grid.setColumnStretch(3, 1)
+            cl.addLayout(grid)
+            kg.addWidget(card)
 
         # Toplamlar
         tot_lay = QHBoxLayout(); tot_lay.addStretch()

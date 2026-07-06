@@ -140,7 +140,8 @@ def init_db():
             jakar_jpeg_ad TEXT DEFAULT '',
             jakar_jpeg_data TEXT DEFAULT '',
             product_status TEXT DEFAULT 'AKTİF',
-            numune_code TEXT DEFAULT ''
+            numune_code TEXT DEFAULT '',
+            iplik_json TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS armur_desenleri (
@@ -387,6 +388,10 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_crm_sales_paz ON crm_sales(pazarlamaci);
         CREATE INDEX IF NOT EXISTS idx_crm_orders_paz ON crm_orders(pazarlamaci);
 
+        CREATE TABLE IF NOT EXISTS rejected_product_names (
+            name TEXT PRIMARY KEY
+        );
+
         CREATE TABLE IF NOT EXISTS stock_snapshots (
             week_start TEXT PRIMARY KEY,
             captured_at TEXT DEFAULT (datetime('now','localtime')),
@@ -441,6 +446,7 @@ def init_db():
         "ALTER TABLE products ADD COLUMN jakar_jpeg_data TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN product_status TEXT DEFAULT 'AKTİF'",
         "ALTER TABLE products ADD COLUMN numune_code TEXT DEFAULT ''",
+        "ALTER TABLE products ADD COLUMN iplik_json TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN numune_code TEXT DEFAULT ''",
         """CREATE TABLE IF NOT EXISTS armur_desenleri (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1003,6 +1009,167 @@ def get_all_products(search="", active_only=True, status_filter=""):
     return rows
 
 
+# Ürün adı havuzu — dağ / şehir / nehir / çiçek / meyve / deniz canlısı / taş / ağaç…
+# EN/IT/ES ama Türkçe okunuşu/söylenişi kolay TEK kelimeler. Çekirdek gerçek
+# kelimeler + Türkçe'de kolay okunan üretilmiş tek kelimelerle 2000'e tamamlanır.
+_CURATED_NAMES = [
+    # Çiçekler
+    "Lotus", "Iris", "Lavanta", "Kamelya", "Jasmin", "Dalya", "Freesia", "Mimoza",
+    "Manolya", "Orkide", "Petunya", "Begonya", "Gardenya", "Lilyum", "Nergis",
+    "Fulya", "Açelya", "Zambak", "Yasemin", "Sardunya", "Peony", "Tulip",
+    "Lila", "Menekşe", "Papatya", "Gül", "Karanfil", "Sümbül", "Zakkum", "Glayöl",
+    "Krizantem", "Kardelen", "Şebboy", "Ortanca", "Fesleğen", "Salkım", "Yonca",
+    # Meyveler
+    "Mango", "Papaya", "Kivi", "Ananas", "Mandalina", "Kavun", "Bergamot", "Guava",
+    "Nektarin", "Portakal", "Vişne", "Kiraz", "Kayısı", "Şeftali", "Nar", "İncir",
+    "Ayva", "Limon", "Erik", "Karpuz", "Melon", "Cherry", "Böğürtlen", "Ahududu",
+    "Çilek", "Dut", "Greyfurt", "Hurma", "Kestane", "Badem", "Fındık", "Ceviz",
+    # Şehirler (IT/ES + genel)
+    "Milano", "Verona", "Roma", "Torino", "Siena", "Toskana", "Sevilla", "Cordoba",
+    "Malaga", "Granada", "Valencia", "Segovia", "Ronda", "Pisa", "Como", "Napoli",
+    "Palermo", "Genova", "Lucca", "Modena", "Parma", "Bilbao", "Murcia", "Girona",
+    "Ravenna", "Bologna", "Rimini", "Sorrento", "Capri", "Amalfi", "Toledo",
+    "Marbella", "Zaragoza", "Cadiz", "Alicante", "Salerno", "Padova", "Treviso",
+    # Nehirler
+    "Arno", "Ebro", "Tiber", "Duero", "Tajo", "Adige", "Mino", "Segura",
+    "Tevere", "Piave", "Sele", "Serchio", "Ombrone", "Guadiana", "Genil",
+    # Dağlar
+    "Etna", "Toros", "Sierra", "Andes", "Vezuv", "Alper", "Nevada", "Olimpos",
+    "Erciyes", "Uludağ", "Kazdağ", "Aneto", "Teide", "Mulhacen", "Gennargentu",
+    # Deniz / deniz canlıları
+    "Delfin", "Marlin", "Medusa", "Mercan", "Sedef", "Yunus", "Nautilus", "Coral",
+    "Laguna", "Marina", "Perla", "Onda", "Reef", "Kaya", "Foka", "Vatoz", "Orfoz",
+    "Levrek", "Çipura", "Lagos", "Yakamoz", "Deniz", "Kumsal", "Dalga", "Sahil",
+    # Değerli taş / renk
+    "Safir", "Yakut", "Zümrüt", "Opal", "Kehribar", "Turkuaz", "Ametist", "Kuvars",
+    "Jade", "Topaz", "Oniks", "İnci", "Kristal", "Lapis", "Mercan", "Firuze",
+    # Doğa / gökyüzü (IT/ES)
+    "Aurora", "Luna", "Sole", "Estrella", "Cielo", "Vento", "Terra", "Neve",
+    "Fiore", "Bella", "Verde", "Azul", "Oro", "Rosa", "Stella", "Nube", "Brisa",
+    "Rocio", "Sereno", "Alba", "Sole", "Monte", "Valle", "Bosco", "Prato",
+    # Ağaç / bitki / baharat
+    "Sedir", "Çınar", "Ladin", "Köknar", "Zeytin", "Defne", "Mersin", "Kekik",
+    "Adaçayı", "Nane", "Vanilya", "Tarçın", "Safran", "Zencefil", "Karabiber",
+    "Rezene", "Anason", "Kimyon", "Sumak", "Biberiye",
+]
+
+
+def _build_name_pool(target=2000):
+    """Çekirdek gerçek kelimelere, Türkçe'de kolay okunan üretilmiş tek kelimeler
+    ekleyerek `target` adet benzersiz tek kelimelik ad havuzu oluşturur.
+    Sabit seed → her kurulumda/makinede aynı havuz."""
+    import random
+    rnd = random.Random(20260701)
+    cons = ["b", "c", "d", "f", "g", "k", "l", "m", "n", "p", "r", "s", "t", "v", "y", "z"]
+    vowels = ["a", "e", "i", "o", "u"]
+    pool, seen = [], set()
+    for w in _CURATED_NAMES:
+        if w.upper() not in seen:
+            seen.add(w.upper()); pool.append(w)
+    # 2-3 heceli, ünsüz+ünlü kalıbıyla kolay okunan tek kelimeler üret
+    while len(pool) < target:
+        w = "".join(rnd.choice(cons) + rnd.choice(vowels) for _ in range(rnd.choice([2, 3])))
+        w = w.capitalize()
+        if w.upper() not in seen:
+            seen.add(w.upper()); pool.append(w)
+    return pool
+
+
+PRODUCT_NAME_POOL = _build_name_pool(2000)
+
+
+# ── İplik cinsi master listesi (sonradan eklenebilir) ───────────
+IPLIK_CINSLERI_BASE = [
+    "PES", "Pamuk", "Tencel", "Lyocell", "Rayon", "Viskon", "Asetat", "Akrilik",
+    "Nylon", "Sim", "Yün", "Kesik Elyaf", "Keten", "Elastan", "Şönil", "Cupro", "Modal",
+]
+
+def get_iplik_cinsleri():
+    """Temel + kullanıcı eklemesi iplik cinsleri (benzersiz, sıralı)."""
+    import json as _json
+    extra = []
+    try:
+        extra = _json.loads(get_setting("iplik_cinsleri_custom", "[]")) or []
+    except Exception:
+        extra = []
+    out, seen = [], set()
+    for c in IPLIK_CINSLERI_BASE + list(extra):
+        k = (c or "").strip()
+        if k and k.upper() not in seen:
+            seen.add(k.upper()); out.append(k)
+    return out
+
+def add_iplik_cinsi(name):
+    """Yeni iplik cinsini kalıcı listeye ekler."""
+    import json as _json
+    name = (name or "").strip()
+    if not name:
+        return
+    if name.upper() in {c.upper() for c in get_iplik_cinsleri()}:
+        return
+    try:
+        extra = _json.loads(get_setting("iplik_cinsleri_custom", "[]")) or []
+    except Exception:
+        extra = []
+    extra.append(name)
+    set_setting("iplik_cinsleri_custom", _json.dumps(extra, ensure_ascii=False))
+
+
+def _unique_product_name(conn, name, exclude_id=None):
+    """Ürün adını benzersiz yapar; aynısı varsa sonuna ' 2', ' 3' … ekler."""
+    name = (name or "").strip()
+    if not name:
+        return name
+    base = name
+    i = 1
+    while True:
+        q = "SELECT 1 FROM products WHERE UPPER(product_name)=UPPER(?)"
+        params = [name]
+        if exclude_id:
+            q += " AND id<>?"; params.append(exclude_id)
+        if not conn.execute(q, params).fetchone():
+            return name
+        i += 1
+        name = f"{base} {i}"
+
+
+def reject_product_name(name):
+    """Kullanıcının onaylamadığı adı kalıcı kara listeye alır (bir daha önerilmez)."""
+    name = (name or "").strip()
+    if not name:
+        return
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO rejected_product_names (name) VALUES (?)", (name.upper(),))
+    conn.commit(); conn.close()
+
+
+def generate_product_name():
+    """Havuzdan; hiçbir üründe kullanılmamış VE reddedilmemiş benzersiz tek kelime üretir."""
+    import random
+    conn = get_connection()
+    used = {(r[0] or "").strip().upper() for r in
+            conn.execute("SELECT product_name FROM products")}
+    used |= {(r[0] or "").strip().upper() for r in
+             conn.execute("SELECT name FROM rejected_product_names")}
+    conn.close()
+    pool = PRODUCT_NAME_POOL[:]
+    random.shuffle(pool)
+
+    # Tek kelime — 2000'lik havuzdan kullanılmamış ilk ad
+    for name in pool:
+        if name.upper() not in used:
+            return name
+
+    # Havuz tümüyle tükenirse (çok düşük ihtimal) sayı ekle
+    i = 2
+    while True:
+        for name in pool:
+            cand = f"{name} {i}"
+            if cand.upper() not in used:
+                return cand
+        i += 1
+
+
 def _generate_numune_code(conn):
     # Aktife dönüşmüş numuneler de sayılmalı (numune_code'ta saklı) ki kod tekrar etmesin
     row = conn.execute(
@@ -1058,24 +1225,25 @@ def add_product(product_code, product_name="", composition="", width="", gramaj=
                 dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
                 atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
                 jakar_desen_ad="", jakar_desen_data="",
-                jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF"):
+                jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF", iplik_json=""):
     conn = get_connection()
     numune_code = ""
     if product_status == "NUMUNE":
         product_code = _generate_numune_code(conn)
         numune_code = product_code
+    product_name = _unique_product_name(conn, product_name)   # ürün adı benzersiz olsun
     c = conn.execute(
         """INSERT INTO products (product_code, reference_code, product_name, composition, width, gramaj, shrinkage, price, supplier,
            cozgu1, cozgu2, atki1, atki2, atki3, atki4, dokuma_tipi,
            cozgu_sikligi, tarak_no, tarak_eni, atki_sikligi, orgu_desen, maliyet_json, teknik_aciklama, price_currency,
-           jakar_desen_ad, jakar_desen_data, jakar_jpeg_ad, jakar_jpeg_data, product_status, numune_code)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+           jakar_desen_ad, jakar_desen_data, jakar_jpeg_ad, jakar_jpeg_data, product_status, numune_code, iplik_json)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(),
          cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
          dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json,
          teknik_aciklama.strip(), price_currency, jakar_desen_ad.strip(), jakar_desen_data,
-         jakar_jpeg_ad.strip(), jakar_jpeg_data, product_status, numune_code)
+         jakar_jpeg_ad.strip(), jakar_jpeg_data, product_status, numune_code, iplik_json)
     )
     conn.commit()
     pid = c.lastrowid
@@ -1087,21 +1255,22 @@ def update_product(pid, product_code, product_name, composition, width, gramaj, 
                    dokuma_tipi="", cozgu_sikligi="", tarak_no="", tarak_eni="",
                    atki_sikligi="", orgu_desen="", maliyet_json="", teknik_aciklama="", price_currency="USD",
                    jakar_desen_ad="", jakar_desen_data="",
-                   jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF"):
+                   jakar_jpeg_ad="", jakar_jpeg_data="", product_status="AKTİF", iplik_json=""):
     conn = get_connection()
+    product_name = _unique_product_name(conn, product_name, exclude_id=pid)   # ürün adı benzersiz
     conn.execute(
         """UPDATE products SET product_code=?, reference_code=?, product_name=?, composition=?, width=?, gramaj=?, shrinkage=?,
            price=?, supplier=?, active=?,
            cozgu1=?, cozgu2=?, atki1=?, atki2=?, atki3=?, atki4=?, dokuma_tipi=?,
            cozgu_sikligi=?, tarak_no=?, tarak_eni=?, atki_sikligi=?, orgu_desen=?, maliyet_json=?, teknik_aciklama=?, price_currency=?,
-           jakar_desen_ad=?, jakar_desen_data=?, jakar_jpeg_ad=?, jakar_jpeg_data=?, product_status=?
+           jakar_desen_ad=?, jakar_desen_data=?, jakar_jpeg_ad=?, jakar_jpeg_data=?, product_status=?, iplik_json=?
            WHERE id=?""",
         (product_code.strip().upper(), reference_code.strip(), product_name.strip(), composition.strip(), width.strip(),
          gramaj.strip(), shrinkage.strip(), _to_float(price), supplier.strip(), int(active),
          cozgu1.strip(), cozgu2.strip(), atki1.strip(), atki2.strip(), atki3.strip(), atki4.strip(),
          dokuma_tipi.strip(), cozgu_sikligi, tarak_no.strip(), tarak_eni, atki_sikligi, orgu_desen.strip(), maliyet_json,
          teknik_aciklama.strip(), price_currency, jakar_desen_ad.strip(), jakar_desen_data,
-         jakar_jpeg_ad.strip(), jakar_jpeg_data, product_status, pid)
+         jakar_jpeg_ad.strip(), jakar_jpeg_data, product_status, iplik_json, pid)
     )
     conn.commit(); conn.close()
 

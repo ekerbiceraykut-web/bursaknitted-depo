@@ -185,6 +185,12 @@ class APIHandler(BaseHTTPRequestHandler):
                     status_filter=qs.get("status_filter",[""])[0])
                 self._send(_ok([dict(r) for r in rows]))
 
+            elif path == "/api/products/generate-name":
+                self._send(_ok({"name": db.generate_product_name()}))
+
+            elif path == "/api/iplik-cinsleri":
+                self._send(_ok(db.get_iplik_cinsleri()))
+
             elif path.startswith("/api/products/"):
                 pid = int(path.split("/")[-1])
                 r = db.get_product(pid)
@@ -472,7 +478,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("teknik_aciklama",""), body.get("price_currency","USD"),
                     body.get("jakar_desen_ad",""), body.get("jakar_desen_data",""),
                     body.get("jakar_jpeg_ad",""), body.get("jakar_jpeg_data",""),
-                    body.get("product_status","AKTİF")
+                    body.get("product_status","AKTİF"), body.get("iplik_json","")
                 )
                 self._send(_ok({"id": pid}))
 
@@ -486,6 +492,14 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/products/bulk":
                 n = db.import_products_bulk(body.get("records", []))
                 self._send(_ok({"count": n}))
+
+            elif path == "/api/products/reject-name":
+                db.reject_product_name(body.get("name", ""))
+                self._send(_ok())
+
+            elif path == "/api/iplik-cinsleri":
+                db.add_iplik_cinsi(body.get("name", ""))
+                self._send(_ok())
 
             # ── Kullanıcı ekle (admin) ────────────────────────────
             elif path == "/api/users":
@@ -629,7 +643,7 @@ class APIHandler(BaseHTTPRequestHandler):
                     body.get("teknik_aciklama",""), body.get("price_currency","USD"),
                     body.get("jakar_desen_ad",""), body.get("jakar_desen_data",""),
                     body.get("jakar_jpeg_ad",""), body.get("jakar_jpeg_data",""),
-                    body.get("product_status","AKTİF")
+                    body.get("product_status","AKTİF"), body.get("iplik_json","")
                 )
                 self._send(_ok())
             elif path.startswith("/api/armur/"):
