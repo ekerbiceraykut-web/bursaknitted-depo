@@ -3643,40 +3643,31 @@ class IplikWidget(QWidget):
         inner = QWidget(); scroll.setWidget(inner); v.addWidget(scroll, 1)
         vl = QVBoxLayout(inner)
 
+        # 1) Numara sistemine kadar olan alanlar
         form = QFormLayout(); form.setSpacing(8)
         self.iplik_no = QLineEdit()
         self.flament  = QLineEdit()
         self.kat      = QLineEdit()
         self.numara   = QComboBox(); self.numara.addItems(self.NUMARA)
-        self.parlaklik = QComboBox(); self.parlaklik.addItem("— Seçiniz —", "")
-        for x in self.PARLAKLIK: self.parlaklik.addItem(x, x)
-        self.cekim = QComboBox(); self.cekim.addItem("— Seçiniz —", "")
-        for x in self.CEKIM: self.cekim.addItem(x, x)
-        self.tur = QLineEdit()
-        self.likra = QLineEdit(); self.likra.setPlaceholderText("DN cinsinden — girilirse 1/3'ü hesaba katılır")
         form.addRow("İplik No:", self.iplik_no)
         form.addRow("Flament Sayısı:", self.flament)
         form.addRow("Kat Sayısı:", self.kat)
         form.addRow("Numara Sistemi:", self.numara)
-        form.addRow("Parlaklık:", self.parlaklik)
-        form.addRow("Çekim Sistemi:", self.cekim)
-        form.addRow("Tur Sayısı:", self.tur)
-        form.addRow("Likra (DN):", self.likra)
         vl.addLayout(form)
 
+        # 2) İplik Cinsi & Oranları — numara sisteminin hemen altında
         grp = QGroupBox("İplik Cinsi & Oranları — toplam %100 olmalı")
         gl = QVBoxLayout(grp)
         grid = QGridLayout(); gl.addLayout(grid)
         self._rows = []
         for i in range(self.MAX_CINS):
             lbl = QLabel(f"İplik Cinsi {i+1}:")
-            cb = QComboBox(); cb.setEditable(True); cb.addItem("", "")
-            for c in self._cins_list: cb.addItem(c, c)
-            cb.setCurrentIndex(0)
+            cb = QComboBox()   # seçmeli açılır liste (elle yazılamaz; yeni için buton)
             oran = QDoubleSpinBox(); oran.setRange(0, 100); oran.setDecimals(1); oran.setSuffix(" %")
             oran.valueChanged.connect(self._recompute)
             grid.addWidget(lbl, i, 0); grid.addWidget(cb, i, 1); grid.addWidget(oran, i, 2)
             self._rows.append({"lbl": lbl, "cins": cb, "oran": oran})
+        self._refresh_cins_combos()
         r2 = QHBoxLayout()
         b_new = QPushButton("+ Yeni İplik Cinsi"); b_new.clicked.connect(self._add_cins_type)
         self.total_lbl = QLabel()
@@ -3684,9 +3675,23 @@ class IplikWidget(QWidget):
         gl.addLayout(r2)
         vl.addWidget(grp)
 
+        # 3) Kalan alanlar
+        form2 = QFormLayout(); form2.setSpacing(8)
+        self.parlaklik = QComboBox(); self.parlaklik.addItem("— Seçiniz —", "")
+        for x in self.PARLAKLIK: self.parlaklik.addItem(x, x)
+        self.cekim = QComboBox(); self.cekim.addItem("— Seçiniz —", "")
+        for x in self.CEKIM: self.cekim.addItem(x, x)
+        self.tur = QLineEdit()
+        self.likra = QLineEdit(); self.likra.setPlaceholderText("DN cinsinden — girilirse 1/3'ü hesaba katılır")
+        form2.addRow("Parlaklık:", self.parlaklik)
+        form2.addRow("Çekim Sistemi:", self.cekim)
+        form2.addRow("Tur Sayısı:", self.tur)
+        form2.addRow("Likra (DN):", self.likra)
+        vl.addLayout(form2)
+
         self.denye_lbl = QLabel("—"); self.denye_lbl.setStyleSheet("font-weight:bold; color:#1A237E; font-size:13px;")
-        f2 = QFormLayout(); f2.addRow("Toplam Denye (likra 1/3 dahil):", self.denye_lbl)
-        vl.addLayout(f2)
+        f3 = QFormLayout(); f3.addRow("Toplam Denye (likra 1/3 dahil):", self.denye_lbl)
+        vl.addLayout(f3)
         vl.addStretch()
 
         for w in (self.iplik_no, self.kat, self.likra):
@@ -3720,16 +3725,37 @@ class IplikWidget(QWidget):
         toplam = base * kat + lik / 3.0
         self.denye_lbl.setText(f"{toplam:,.1f} DN" if toplam else "—")
 
+    def _refresh_cins_combos(self):
+        """Tüm iplik cinsi açılır listelerini güncel listeyle doldurur (seçimi korur)."""
+        for r in self._rows:
+            cb = r["cins"]
+            cur = cb.currentText()
+            cb.blockSignals(True)
+            cb.clear()
+            cb.addItem("— Seçiniz —", "")
+            for c in self._cins_list:
+                cb.addItem(c, c)
+            if cur:
+                idx = cb.findText(cur)
+                if idx < 0:            # kayıtlı ama listede yoksa yine göster
+                    cb.addItem(cur, cur); idx = cb.count() - 1
+                cb.setCurrentIndex(idx)
+            else:
+                cb.setCurrentIndex(0)
+            cb.blockSignals(False)
+
     def _add_cins_type(self):
         name, ok = QInputDialog.getText(self, "Yeni İplik Cinsi", "İplik cinsi adı:")
         if not ok or not name.strip():
             return
         name = name.strip()
-        try: db.add_iplik_cinsi(name)
-        except Exception: pass
-        for r in self._rows:
-            if r["cins"].findText(name) < 0:
-                r["cins"].addItem(name, name)
+        try:
+            db.add_iplik_cinsi(name)
+            self._cins_list = db.get_iplik_cinsleri() or self._cins_list
+        except Exception:
+            if name not in self._cins_list:
+                self._cins_list.append(name)
+        self._refresh_cins_combos()
 
     def get_json(self):
         import json
@@ -3738,7 +3764,7 @@ class IplikWidget(QWidget):
             active = (i == 0) or (0 < total < 99.999)
             if not active:
                 break
-            c = r["cins"].currentText().strip(); o = r["oran"].value()
+            c = (r["cins"].currentData() or "").strip(); o = r["oran"].value()
             if c or o:
                 comp.append({"cins": c, "oran": o})
             total += o
@@ -3777,7 +3803,12 @@ class IplikWidget(QWidget):
         self.tur.setText(d.get("tur_sayisi", ""))
         self.likra.setText(d.get("likra_dn", ""))
         for j, item in enumerate((d.get("kompozisyon") or [])[:self.MAX_CINS]):
-            self._rows[j]["cins"].setEditText(item.get("cins", ""))
+            cb = self._rows[j]["cins"]; cins = item.get("cins", "")
+            if cins:
+                idx = cb.findText(cins)
+                if idx < 0:            # listede yoksa combo'ya ekle ki görünsün
+                    cb.addItem(cins, cins); idx = cb.count() - 1
+                cb.setCurrentIndex(idx)
             try: self._rows[j]["oran"].setValue(float(item.get("oran") or 0))
             except Exception: pass
         self._recompute()
