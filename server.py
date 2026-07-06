@@ -191,6 +191,14 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/iplik-cinsleri":
                 self._send(_ok(db.get_iplik_cinsleri()))
 
+            elif path == "/api/iplikler":
+                rows = db.get_iplikler(search=qs.get("search",[""])[0])
+                self._send(_ok([dict(r) for r in rows]))
+
+            elif path.startswith("/api/iplikler/"):
+                r = db.get_iplik(int(path.split("/")[-1]))
+                self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
+
             elif path.startswith("/api/products/"):
                 pid = int(path.split("/")[-1])
                 r = db.get_product(pid)
@@ -501,6 +509,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 db.add_iplik_cinsi(body.get("name", ""))
                 self._send(_ok())
 
+            elif path == "/api/iplikler":
+                iid = db.add_iplik(body.get("ad", ""), body.get("data_json", ""))
+                self._send(_ok({"id": iid}))
+
             # ── Kullanıcı ekle (admin) ────────────────────────────
             elif path == "/api/users":
                 if user.get("role") != "admin":
@@ -586,6 +598,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 db.update_customer(cid, body.get("name",""), body.get("code",""),
                                    body.get("phone",""), body.get("address",""),
                                    body.get("tax_no",""), body.get("active",1))
+                self._send(_ok())
+
+            elif path.startswith("/api/iplikler/"):
+                db.update_iplik(int(path.split("/")[-1]), body.get("ad", ""), body.get("data_json", ""))
                 self._send(_ok())
 
             # ── CRM güncelleme (PUT) ──────────────────────────────
@@ -748,6 +764,8 @@ class APIHandler(BaseHTTPRequestHandler):
                 db.delete_crm_sale(int(path.split("/")[-1])); self._send(_ok())
             elif path.startswith("/api/crm/orders/"):
                 db.delete_crm_order(int(path.split("/")[-1])); self._send(_ok())
+            elif path.startswith("/api/iplikler/"):
+                db.delete_iplik(int(path.split("/")[-1])); self._send(_ok())
             elif path.startswith("/api/suppliers/"):
                 sid = int(path.split("/")[-1])
                 db.delete_supplier(sid)

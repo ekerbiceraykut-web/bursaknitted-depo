@@ -392,6 +392,14 @@ def init_db():
             name TEXT PRIMARY KEY
         );
 
+        CREATE TABLE IF NOT EXISTS iplikler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ad TEXT DEFAULT '',
+            data_json TEXT DEFAULT '',
+            active INTEGER DEFAULT 1,
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        );
+
         CREATE TABLE IF NOT EXISTS stock_snapshots (
             week_start TEXT PRIMARY KEY,
             captured_at TEXT DEFAULT (datetime('now','localtime')),
@@ -1113,6 +1121,44 @@ def add_iplik_cinsi(name):
         extra = []
     extra.append(name)
     set_setting("iplik_cinsleri_custom", _json.dumps(extra, ensure_ascii=False))
+
+
+# ── İplik Kataloğu ──────────────────────────────────────────────
+def get_iplikler(search=""):
+    conn = get_connection()
+    q = "SELECT * FROM iplikler WHERE 1=1"
+    p = []
+    if search:
+        q += " AND (ad LIKE ? OR data_json LIKE ?)"
+        s = f"%{search}%"; p.extend([s, s])
+    q += " ORDER BY ad, id"
+    rows = conn.execute(q, p).fetchall()
+    conn.close()
+    return rows
+
+def get_iplik(iid):
+    conn = get_connection()
+    row = conn.execute("SELECT * FROM iplikler WHERE id=?", (iid,)).fetchone()
+    conn.close()
+    return row
+
+def add_iplik(ad="", data_json=""):
+    conn = get_connection()
+    c = conn.execute("INSERT INTO iplikler (ad, data_json) VALUES (?, ?)",
+                     (ad.strip(), data_json))
+    conn.commit(); iid = c.lastrowid; conn.close()
+    return iid
+
+def update_iplik(iid, ad="", data_json=""):
+    conn = get_connection()
+    conn.execute("UPDATE iplikler SET ad=?, data_json=? WHERE id=?",
+                 (ad.strip(), data_json, iid))
+    conn.commit(); conn.close()
+
+def delete_iplik(iid):
+    conn = get_connection()
+    conn.execute("DELETE FROM iplikler WHERE id=?", (iid,))
+    conn.commit(); conn.close()
 
 
 def _unique_product_name(conn, name, exclude_id=None):

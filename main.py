@@ -48,7 +48,7 @@ _LIST_FUNCS = {
     "get_po_items_for_order", "get_all_armur_desenleri",
     "get_crm_customers", "get_crm_visits", "get_crm_sales", "get_crm_orders",
     "get_crm_years", "get_stock_snapshots", "get_movement_destinations",
-    "get_iplik_cinsleri",
+    "get_iplik_cinsleri", "get_iplikler",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -3814,6 +3814,131 @@ class IplikWidget(QWidget):
         self._recompute()
 
 
+class IplikEntryDialog(QDialog):
+    """Tek bir iplik tanımı — Ad + IplikWidget."""
+    def __init__(self, parent=None, iplik=None):
+        super().__init__(parent)
+        self.iplik = dict(iplik) if iplik else None
+        self.setWindowTitle("İplik" + (" Düzenle" if iplik else " Ekle"))
+        self.setMinimumSize(560, 620)
+        lay = QVBoxLayout(self)
+        form = QFormLayout()
+        self.ad = QLineEdit(self.iplik.get("ad", "") if self.iplik else "")
+        self.ad.setPlaceholderText("İplik adı / kodu (ör. 150/48 PES Parlak)")
+        form.addRow("İplik Adı / Kodu *:", self.ad)
+        lay.addLayout(form)
+        self.iplik_w = IplikWidget()
+        if self.iplik:
+            self.iplik_w.load({"iplik_json": self.iplik.get("data_json", "")})
+        lay.addWidget(self.iplik_w, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Kaydet")
+        bb.accepted.connect(self._accept); bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+    def _accept(self):
+        if not self.ad.text().strip():
+            return QMessageBox.warning(self, "Eksik", "İplik adı/kodu zorunludur.")
+        self.accept()
+
+    def result_data(self):
+        return self.ad.text().strip(), self.iplik_w.get_json()
+
+
+class IplikManagementDialog(QDialog):
+    """İplik Kataloğu — ürün kataloğu gibi liste + ekle/düzenle/sil."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("🧵 İplik Kataloğu")
+        self.setMinimumSize(880, 520)
+        self._build_ui(); self._load()
+
+    def _build_ui(self):
+        lay = QVBoxLayout(self)
+        top = QHBoxLayout()
+        self.search = QLineEdit(); self.search.setPlaceholderText("İplik adı / kodu ara...")
+        self.search.textChanged.connect(lambda: self._load(self.search.text()))
+        top.addWidget(QLabel("Ara:")); top.addWidget(self.search); top.addStretch()
+        lay.addLayout(top)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(
+            ["İplik Adı / Kodu", "İplik No", "Numara", "Kompozisyon", "Çekim", "Likra (DN)", "Toplam Denye"])
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.verticalHeader().setVisible(False)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        hdr.setSectionsMovable(True)
+        hdr.setStretchLastSection(True)
+        self.table.doubleClicked.connect(self._edit)
+        lay.addWidget(self.table)
+
+        btn_row = QHBoxLayout()
+        b_add = QPushButton("+ Yeni İplik"); b_add.clicked.connect(self._add)
+        b_edit = QPushButton("✎ Düzenle"); b_edit.clicked.connect(self._edit)
+        b_del = QPushButton("✕ Sil")
+        b_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
+        b_del.clicked.connect(self._delete)
+        b_close = QPushButton("Kapat"); b_close.clicked.connect(self.accept)
+        for b in (b_add, b_edit, b_del): btn_row.addWidget(b)
+        btn_row.addStretch(); btn_row.addWidget(b_close)
+        lay.addLayout(btn_row)
+
+    def _load(self, search=""):
+        import json
+        rows = db.get_iplikler(search=search) or []
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            r = dict(r)
+            try: d = json.loads(r.get("data_json") or "{}")
+            except Exception: d = {}
+            komp = " + ".join(f"{c.get('cins','')} %{c.get('oran',0):.0f}"
+                              for c in (d.get("kompozisyon") or []))
+            it = QTableWidgetItem(r.get("ad", "") or "")
+            it.setData(Qt.ItemDataRole.UserRole, r.get("id"))
+            self.table.setItem(i, 0, it)
+            self.table.setItem(i, 1, QTableWidgetItem(str(d.get("iplik_no", ""))))
+            self.table.setItem(i, 2, QTableWidgetItem(str(d.get("numara_sistemi", ""))))
+            self.table.setItem(i, 3, QTableWidgetItem(komp))
+            self.table.setItem(i, 4, QTableWidgetItem(str(d.get("cekim_sistemi", ""))))
+            self.table.setItem(i, 5, QTableWidgetItem(str(d.get("likra_dn", ""))))
+            self.table.setItem(i, 6, QTableWidgetItem(str(d.get("toplam_denye", ""))))
+        self.table.resizeColumnsToContents()
+
+    def _selected_id(self):
+        row = self.table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "İplik seçin."); return None
+        return self.table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+
+    def _add(self):
+        dlg = IplikEntryDialog(self)
+        if dlg.exec():
+            ad, data = dlg.result_data()
+            db.add_iplik(ad, data)
+            self._load(self.search.text())
+
+    def _edit(self):
+        iid = self._selected_id()
+        if not iid: return
+        iplik = db.get_iplik(iid)
+        if not iplik: return
+        dlg = IplikEntryDialog(self, iplik)
+        if dlg.exec():
+            ad, data = dlg.result_data()
+            db.update_iplik(iid, ad, data)
+            self._load(self.search.text())
+
+    def _delete(self):
+        iid = self._selected_id()
+        if not iid: return
+        if QMessageBox.question(self, "Sil", "İplik silinsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
+            db.delete_iplik(iid); self._load(self.search.text())
+
+
 class _ProductNameConfirmDialog(QDialog):
     """Ürün adı onayı. Onaylamazsa (Yeni Öner) mevcut öneri kara listeye alınır
     ve yeni bir ad önerilir; kullanıcı elle de yazabilir."""
@@ -4224,12 +4349,6 @@ class ProductManagementDialog(QDialog):
             dlg.jakar_w.load(p)
         tabs.addTab(dlg.jakar_w, "Jakar Desen")
 
-        # ── Sekme: İplik ─────────────────────────────────────────
-        dlg.iplik_w = IplikWidget()
-        if p:
-            dlg.iplik_w.load(p)
-        tabs.addTab(dlg.iplik_w, "🧵 İplik")
-
         lay.addWidget(tabs)
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         def _try_accept():
@@ -4275,7 +4394,6 @@ class ProductManagementDialog(QDialog):
             jakar_jpeg_ad=dlg.jakar_w.get_jpeg_ad(),
             jakar_jpeg_data=dlg.jakar_w.get_jpeg_b64(),
             product_status=product_status,
-            iplik_json=dlg.iplik_w.get_json(),
         )
         try:
             if pid:
@@ -10878,6 +10996,10 @@ class MainWindow(QMainWindow):
         prod_menu = menubar.addMenu("📦 Ürünler")
         prod_menu.addAction("Ürün Kataloğu...").triggered.connect(
             lambda: ProductManagementDialog(self).exec())
+
+        iplik_menu = menubar.addMenu("🧵 İplik")
+        iplik_menu.addAction("İplik Kataloğu...").triggered.connect(
+            lambda: IplikManagementDialog(self).exec())
 
         loc_menu = menubar.addMenu("🗄 Lokasyonlar")
         loc_menu.addAction("Raf / Lokasyon Tanımlamaları...").triggered.connect(

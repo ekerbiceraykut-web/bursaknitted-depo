@@ -396,6 +396,23 @@ def get_iplik_cinsleri():
 def add_iplik_cinsi(name):
     _post("/api/iplik-cinsleri", {"name": name})
 
+# ── İplik Kataloğu ────────────────────────────────────────────────
+def get_iplikler(search=""):
+    return _get("/api/iplikler", {"search": search}) or []
+
+def get_iplik(iid):
+    return _get(f"/api/iplikler/{iid}")
+
+def add_iplik(ad="", data_json=""):
+    r = _post("/api/iplikler", {"ad": ad, "data_json": data_json})
+    return (r or {}).get("id")
+
+def update_iplik(iid, ad="", data_json=""):
+    _put(f"/api/iplikler/{iid}", {"ad": ad, "data_json": data_json})
+
+def delete_iplik(iid):
+    _delete(f"/api/iplikler/{iid}")
+
 # ── Armür Desenleri ───────────────────────────────────────────────────────────
 
 def get_all_armur_desenleri():
