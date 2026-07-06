@@ -211,3 +211,39 @@ Traceback (most recent call last):
   File "/Users/aykut/tekstil-stok/main.py", line 8826, in _update_user_label
     self._user_label.setText(f"{role_icon} {CURRENT_USER.get('full_name', '')}")
 AttributeError: 'MainWindow' object has no attribute '_user_label'
+
+============================================================
+2026-07-06 18:11:47.136668
+Traceback (most recent call last):
+  File "/Users/aykut/tekstil-stok/main.py", line 95, in wrapper
+    return attr(*args, **kwargs)
+  File "/Users/aykut/tekstil-stok/api_client.py", line 563, in get_all_orders
+    return _get("/api/orders", {"search": search, "status": status}) or []
+  File "/Users/aykut/tekstil-stok/api_client.py", line 68, in _get
+    return _request(req, 30)   # bulut sunucu yanıtı yerel ağdan yavaş olabilir
+  File "/Users/aykut/tekstil-stok/api_client.py", line 58, in _request
+    raise Exception(resp.get("error", "API hatası"))
+Exception: Yetkisiz erişim
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/aykut/tekstil-stok/main.py", line 11574, in <module>
+    self.dashboard.refresh()
+  File "/Users/aykut/tekstil-stok/main.py", line 11564, in main
+  File "/Users/aykut/tekstil-stok/main.py", line 11049, in __init__
+    for loc_name in sorted(dis_groups.keys()):
+  File "/Users/aykut/tekstil-stok/main.py", line 11069, in _build_ui
+    self.loc_table.setItem(i, j, item)
+  File "/Users/aykut/tekstil-stok/main.py", line 9302, in __init__
+    if "Tutar" in lbl:
+  File "/Users/aykut/tekstil-stok/main.py", line 9482, in refresh
+    self.need_table.setColumnCount(len(_NEED_COLS))
+  File "/Users/aykut/tekstil-stok/main.py", line 9488, in _refresh_queue
+    nhdr.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+  File "/Users/aykut/tekstil-stok/main.py", line 98, in wrapper
+    if "Yetkisiz" in str(e) and _reauthenticate(parent):
+  File "/Users/aykut/tekstil-stok/main.py", line 72, in _reauthenticate
+    w._update_user_label()
+  File "/Users/aykut/tekstil-stok/main.py", line 11158, in _update_user_label
+AttributeError: 'MainWindow' object has no attribute '_user_label'
