@@ -94,6 +94,12 @@ class APIHandler(BaseHTTPRequestHandler):
                     rows = db.get_all_movements(limit)
                 self._send(_ok([dict(r) for r in rows]))
 
+            # ── Sağlık / durum (admin) ───────────────────────────
+            elif path == "/api/health":
+                if user.get("role") != "admin":
+                    return self._send(_err("Yetki yok"), 403)
+                self._send(_ok(_health_info()))
+
             # ── Yedek indirme (admin) ────────────────────────────
             elif path == "/api/backup":
                 if user.get("role") != "admin":
@@ -818,9 +824,71 @@ def get_local_ip():
     finally: s.close()
 
 
+# ── Sunucu tarafı otomatik yedek ─────────────────────────────
+SERVER_BACKUP_DIR  = os.path.join(os.path.dirname(db.DB_PATH) or ".", "yedekler_sunucu")
+SERVER_BACKUP_KEEP = 14   # son 14 günlük yedek saklanır
+
+
+def _take_server_backup():
+    """DB'nin tutarlı kopyasını (WAL dahil) sunucu diskine alır. Günde 1 kez."""
+    import sqlite3, glob
+    from datetime import date
+    os.makedirs(SERVER_BACKUP_DIR, exist_ok=True)
+    hedef = os.path.join(SERVER_BACKUP_DIR, f"stok_{date.today().isoformat()}.db")
+    if os.path.exists(hedef):
+        return False   # bugünkü yedek zaten var
+    src = sqlite3.connect(db.DB_PATH, timeout=30)
+    dst = sqlite3.connect(hedef)
+    with dst:
+        src.backup(dst)
+    dst.close(); src.close()
+    # Rotasyon: en eskileri sil
+    files = sorted(glob.glob(os.path.join(SERVER_BACKUP_DIR, "stok_*.db")))
+    while len(files) > SERVER_BACKUP_KEEP:
+        try: os.remove(files.pop(0))
+        except Exception: break
+    return True
+
+
+def _server_backup_loop():
+    """Arka plan iş parçacığı: açılışta ve sonra 6 saatte bir günlük yedeği garantiler."""
+    import time
+    while True:
+        try:
+            if _take_server_backup():
+                print(f"[yedek] Sunucu yedeği alındı → {SERVER_BACKUP_DIR}")
+        except Exception as e:
+            print(f"[yedek] HATA: {e}")
+        time.sleep(6 * 3600)
+
+
+def _health_info():
+    """Admin sağlık raporu: DB boyutu, disk doluluk, sunucu yedek durumu."""
+    import glob, shutil as _sh
+    from datetime import datetime
+    info = {"zaman": datetime.now().isoformat(timespec="seconds"),
+            "db_yolu": db.DB_PATH}
+    try:
+        info["db_boyut_kb"] = round(os.path.getsize(db.DB_PATH) / 1024, 1)
+    except Exception:
+        info["db_boyut_kb"] = None
+    try:
+        du = _sh.disk_usage(os.path.dirname(db.DB_PATH) or ".")
+        info["disk_toplam_mb"] = round(du.total / 1024 / 1024)
+        info["disk_bos_mb"]    = round(du.free / 1024 / 1024)
+    except Exception:
+        pass
+    files = sorted(glob.glob(os.path.join(SERVER_BACKUP_DIR, "stok_*.db")))
+    info["sunucu_yedek_sayisi"] = len(files)
+    info["son_sunucu_yedek"]    = os.path.basename(files[-1]) if files else ""
+    return info
+
+
 def start_server():
     db.init_db()
     ip = get_local_ip()
+    # Sunucu tarafı otomatik günlük yedek (istemciden bağımsız)
+    threading.Thread(target=_server_backup_loop, daemon=True).start()
     # Threading: yavaş bir istemci diğerlerini bekletmesin
     server = ThreadingHTTPServer(("0.0.0.0", PORT), APIHandler)
     print(f"""

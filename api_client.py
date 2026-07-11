@@ -164,6 +164,14 @@ def download_backup(dest_path):
     return len(data)
 
 
+def get_server_health():
+    """Sunucu sağlık raporu: DB boyutu, disk doluluk, sunucu yedek durumu (admin)."""
+    try:
+        return _get("/api/health") or {}
+    except Exception:
+        return {}
+
+
 # ── Customers ────────────────────────────────────────────────────
 
 def get_all_customers(search="", active_only=True):
