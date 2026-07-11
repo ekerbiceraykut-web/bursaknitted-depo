@@ -609,11 +609,17 @@ class MaliyetWidget(QWidget):
 
         grp_genel = QGroupBox("Genel Parametreler")
         fg = QFormLayout(grp_genel); fg.setSpacing(6)
+        # Maliyet birimi (Excel AH12 'm'/'k' karşılığı)
+        self.maliyet_birim = QComboBox()
+        self.maliyet_birim.addItem("Metre ($/mt)", "m")
+        self.maliyet_birim.addItem("Kilo ($/kg)", "k")
+        self.maliyet_birim.currentIndexChanged.connect(self._recalc)
         self.tarak_eni  = QDoubleSpinBox(); self.tarak_eni.setRange(0,500);  self.tarak_eni.setDecimals(1); self.tarak_eni.setSuffix(" cm")
         self.cozgu_sik  = QDoubleSpinBox(); self.cozgu_sik.setRange(0,500);  self.cozgu_sik.setDecimals(1); self.cozgu_sik.setSuffix(" tel/cm")
         self.atki_sik   = QDoubleSpinBox(); self.atki_sik.setRange(0,200);   self.atki_sik.setDecimals(1); self.atki_sik.setSuffix(" atkı/cm")
         self.lbl_toplam_uc    = QLabel("—"); self.lbl_toplam_uc.setStyleSheet("font-weight:bold; color:#1A237E;")
         self.lbl_toplam_desen = QLabel("—"); self.lbl_toplam_desen.setStyleSheet("font-weight:bold; color:#1A237E;")
+        fg.addRow("Maliyet Birimi:", self.maliyet_birim)
         fg.addRow("Tarak Eni:", self.tarak_eni)
         fg.addRow("Çözgü Sıklığı (tel/cm):", self.cozgu_sik)
         fg.addRow("Toplam Çözgü Ucu (otomatik):", self.lbl_toplam_uc)
@@ -623,7 +629,7 @@ class MaliyetWidget(QWidget):
 
         grp_cozgu = QGroupBox("Çözgü İplikleri")
         gc = QGridLayout(grp_cozgu)
-        for ci, h in enumerate(["", "İplik Adı", "Numara", "Birim", "Tel/cm", "Toplam Tel Sayısı", "Çekme %", "Fiyat $/kg", "gr/mt", "%", "$/mt"]):
+        for ci, h in enumerate(["", "İplik Adı", "Numara", "Birim", "Tel/cm", "Toplam Tel Sayısı", "Fire %", "Fiyat $/kg", "gr/mt", "%", "$"]):
             lb = QLabel(f"<b>{h}</b>"); lb.setAlignment(Qt.AlignmentFlag.AlignCenter); gc.addWidget(lb, 0, ci)
         self.cozgu_rows = []
         for i in range(2):
@@ -632,15 +638,16 @@ class MaliyetWidget(QWidget):
             bir   = QComboBox(); bir.addItems(BIRIMLER)
             uc_cm = QDoubleSpinBox(); uc_cm.setRange(0,500); uc_cm.setDecimals(1)
             tot_uc = QLabel("—"); tot_uc.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); tot_uc.setStyleSheet("color:#555;padding-right:4px;")
-            cek   = QDoubleSpinBox(); cek.setRange(0,50); cek.setDecimals(1); cek.setValue(6.0); cek.setSuffix(" %")
+            fire  = QDoubleSpinBox(); fire.setRange(0,99); fire.setDecimals(1); fire.setValue(10.0); fire.setSuffix(" %")
+            fire.setToolTip("İplik firesi — gramajı değil, yalnız maliyeti etkiler: ÷ (1 − fire)")
             fiy   = QDoubleSpinBox(); fiy.setRange(0,999); fiy.setDecimals(2); fiy.setSuffix(" $/kg")
             grs   = QLabel("0.00"); grs.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); grs.setStyleSheet("color:#1565C0;padding-right:4px;")
             pct   = QLabel("—"); pct.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); pct.setStyleSheet("color:#7B1FA2;padding-right:4px;")
             dol   = QLabel("0.0000"); dol.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); dol.setStyleSheet("color:#2E7D32;padding-right:4px;")
-            for ci, w in enumerate([QLabel(f"Çözgü {i+1}:"), ad, num, bir, uc_cm, tot_uc, cek, fiy, grs, pct, dol]):
+            for ci, w in enumerate([QLabel(f"Çözgü {i+1}:"), ad, num, bir, uc_cm, tot_uc, fire, fiy, grs, pct, dol]):
                 gc.addWidget(w, i+1, ci)
-            self.cozgu_rows.append({"ad": ad, "num": num, "bir": bir, "uc_cm": uc_cm, "tot_uc": tot_uc, "cek": cek, "fiy": fiy, "grs": grs, "pct": pct, "dol": dol})
-            for w in (num, bir, uc_cm, cek, fiy):
+            self.cozgu_rows.append({"ad": ad, "num": num, "bir": bir, "uc_cm": uc_cm, "tot_uc": tot_uc, "fire": fire, "fiy": fiy, "grs": grs, "pct": pct, "dol": dol})
+            for w in (num, bir, uc_cm, fire, fiy):
                 (w.valueChanged if hasattr(w,'valueChanged') else w.currentIndexChanged).connect(self._recalc)
         def _auto_cozgu2(*_):
             r1 = self.cozgu_rows[0]; r2 = self.cozgu_rows[1]
@@ -655,7 +662,7 @@ class MaliyetWidget(QWidget):
 
         grp_atki = QGroupBox("Atkı İplikleri")
         ga = QGridLayout(grp_atki)
-        for ci, h in enumerate(["", "İplik Adı", "Numara", "Birim", "Atkı Raporu", "Çekme %", "Fiyat $/kg", "atkı/cm", "gr/mt", "%", "$/mt"]):
+        for ci, h in enumerate(["", "İplik Adı", "Numara", "Birim", "Atkı Raporu", "Fire %", "Fiyat $/kg", "atkı/cm", "gr/mt", "%", "$"]):
             lb = QLabel(f"<b>{h}</b>"); lb.setAlignment(Qt.AlignmentFlag.AlignCenter); ga.addWidget(lb, 0, ci)
         self.atki_rows = []
         for i in range(4):
@@ -663,16 +670,17 @@ class MaliyetWidget(QWidget):
             num = QDoubleSpinBox(); num.setRange(0,99999); num.setDecimals(2)
             bir = QComboBox(); bir.addItems(BIRIMLER)
             atm = QSpinBox(); atm.setRange(0,256)
-            cek = QDoubleSpinBox(); cek.setRange(0,50); cek.setDecimals(1); cek.setValue(8.0); cek.setSuffix(" %")
+            fire = QDoubleSpinBox(); fire.setRange(0,99); fire.setDecimals(1); fire.setValue(5.0); fire.setSuffix(" %")
+            fire.setToolTip("İplik firesi — gramajı değil, yalnız maliyeti etkiler: ÷ (1 − fire)")
             fiy = QDoubleSpinBox(); fiy.setRange(0,999); fiy.setDecimals(2); fiy.setSuffix(" $/kg")
             ppm = QLabel("0.00"); ppm.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); ppm.setStyleSheet("color:#555;padding-right:4px;")
             grs = QLabel("0.00"); grs.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); grs.setStyleSheet("color:#1565C0;padding-right:4px;")
             pct = QLabel("—"); pct.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); pct.setStyleSheet("color:#7B1FA2;padding-right:4px;")
             dol = QLabel("0.0000"); dol.setAlignment(Qt.AlignmentFlag.AlignRight|Qt.AlignmentFlag.AlignVCenter); dol.setStyleSheet("color:#2E7D32;padding-right:4px;")
-            for ci, w in enumerate([QLabel(f"Atkı {i+1}:"), ad, num, bir, atm, cek, fiy, ppm, grs, pct, dol]):
+            for ci, w in enumerate([QLabel(f"Atkı {i+1}:"), ad, num, bir, atm, fire, fiy, ppm, grs, pct, dol]):
                 ga.addWidget(w, i+1, ci)
-            self.atki_rows.append({"ad": ad, "num": num, "bir": bir, "atm": atm, "cek": cek, "fiy": fiy, "ppm": ppm, "grs": grs, "pct": pct, "dol": dol})
-            for w in (num, bir, atm, cek, fiy):
+            self.atki_rows.append({"ad": ad, "num": num, "bir": bir, "atm": atm, "fire": fire, "fiy": fiy, "ppm": ppm, "grs": grs, "pct": pct, "dol": dol})
+            for w in (num, bir, atm, fire, fiy):
                 (w.valueChanged if hasattr(w,'valueChanged') else w.currentIndexChanged).connect(self._recalc)
         vlay.addWidget(grp_atki)
 
@@ -685,15 +693,24 @@ class MaliyetWidget(QWidget):
         self.usd_kuru     = QDoubleSpinBox(); self.usd_kuru.setRange(0.01,999);   self.usd_kuru.setDecimals(2);     self.usd_kuru.setValue(35.0); self.usd_kuru.setSuffix(" TL/$")
         self.lbl_dokuma_mal = QLabel("—"); self.lbl_dokuma_mal.setStyleSheet("font-weight:bold; color:#1A237E;")
         self.hazirlik_mal   = QDoubleSpinBox(); self.hazirlik_mal.setRange(0,99);  self.hazirlik_mal.setDecimals(4); self.hazirlik_mal.setSuffix(" $/mt")
+        self.ham_fire       = QDoubleSpinBox(); self.ham_fire.setRange(0,99);      self.ham_fire.setDecimals(1);     self.ham_fire.setSuffix(" %")
+        self.ham_fire.setToolTip("Ham dokuma firesi — ham maliyete % olarak eklenir")
         self.boya_mal       = QDoubleSpinBox(); self.boya_mal.setRange(0,99);      self.boya_mal.setDecimals(2);     self.boya_mal.setSuffix(" $/kg")
         self.boya_fire      = QDoubleSpinBox(); self.boya_fire.setRange(0,50);     self.boya_fire.setDecimals(1);    self.boya_fire.setSuffix(" %")
+        self.mamul_en       = QDoubleSpinBox(); self.mamul_en.setRange(0,500);     self.mamul_en.setDecimals(1);     self.mamul_en.setSuffix(" cm")
+        self.mamul_en.setToolTip("Boya/apre hesabında kullanılır: En × Gramaj × Boya Fiyatı × Fire")
+        self.mamul_gramaj   = QDoubleSpinBox(); self.mamul_gramaj.setRange(0,2000); self.mamul_gramaj.setDecimals(1); self.mamul_gramaj.setSuffix(" gr/m²")
         fi.addRow("Fason Dokuma (krş/100 atkı):", self.fason_dokuma)
         fi.addRow("USD Kuru:", self.usd_kuru)
         fi.addRow("Dokuma Maliyeti (hesaplanan, $/mt):", self.lbl_dokuma_mal)
         fi.addRow("Çözgü Hazırlık Maliyeti:", self.hazirlik_mal)
+        fi.addRow("Ham Dokuma Firesi:", self.ham_fire)
+        fi.addRow("Mamul En:", self.mamul_en)
+        fi.addRow("Mamul Gramaj:", self.mamul_gramaj)
         fi.addRow("Boya / Apre ($/kg kumaş):", self.boya_mal)
         fi.addRow("Boya Firesi:", self.boya_fire)
-        for w in (self.fason_dokuma, self.usd_kuru, self.hazirlik_mal, self.boya_mal, self.boya_fire):
+        for w in (self.fason_dokuma, self.usd_kuru, self.hazirlik_mal, self.ham_fire,
+                  self.mamul_en, self.mamul_gramaj, self.boya_mal, self.boya_fire):
             w.valueChanged.connect(self._recalc)
         vlay.addWidget(grp_islem)
 
@@ -708,10 +725,10 @@ class MaliyetWidget(QWidget):
         self.res_gri_cost   = _rl("#2E7D32"); self.res_boya_cost = _rl("#2E7D32")
         self.res_total_cost = _rl("#C62828", big=True)
         fs.addRow("Toplam Gramaj (gr/mt):", self.res_total_grs)
-        fs.addRow("Malzeme Maliyeti ($/mt):", self.res_mat_cost)
-        fs.addRow("Ham Maliyet ($/mt):", self.res_gri_cost)
-        fs.addRow("Boya/Apre Maliyeti ($/mt):", self.res_boya_cost)
-        fs.addRow("Toplam Maliyet ($/mt):", self.res_total_cost)
+        fs.addRow("Malzeme Maliyeti:", self.res_mat_cost)
+        fs.addRow("Ham Maliyet:", self.res_gri_cost)
+        fs.addRow("Boya/Apre Maliyeti:", self.res_boya_cost)
+        fs.addRow("Toplam Maliyet:", self.res_total_cost)
         vlay.addWidget(grp_sonuc)
         vlay.addStretch()
 
@@ -744,7 +761,15 @@ class MaliyetWidget(QWidget):
             mj = json.loads(p.get("maliyet_json") or "{}")
         except Exception:
             mj = {}
+        # Mamul en/gramaj: kayıtta yoksa ürün kartındaki En/Gramaj ile ön-doldur
+        try:
+            en_p = float(str(p.get("width") or "0").replace(",", ".") or 0)
+            gr_p = float(str(p.get("gramaj") or "0").replace(",", ".") or 0)
+        except Exception:
+            en_p = gr_p = 0.0
         if not mj:
+            if en_p > 0: self.mamul_en.setValue(en_p)
+            if gr_p > 0: self.mamul_gramaj.setValue(gr_p)
             self._recalc(); return
         try: self.fason_dokuma.setValue(float(mj.get("fason_dokuma", 0)))
         except: pass
@@ -756,13 +781,24 @@ class MaliyetWidget(QWidget):
         except: pass
         try: self.boya_mal.setValue(float(mj.get("boya_mal", 0)))
         except: pass
+        try: self.ham_fire.setValue(float(mj.get("ham_fire", 0)))
+        except: pass
+        try: self.mamul_en.setValue(float(mj.get("mamul_en", 0)) or en_p)
+        except: pass
+        try: self.mamul_gramaj.setValue(float(mj.get("mamul_gramaj", 0)) or gr_p)
+        except: pass
+        try:
+            ix = self.maliyet_birim.findData(mj.get("birim", "m"))
+            self.maliyet_birim.setCurrentIndex(ix if ix >= 0 else 0)
+        except: pass
         for i, row in enumerate(self.cozgu_rows):
             pre = f"c{i+1}_"
             try:
                 if mj.get(pre+"num"):   row["num"].setValue(float(mj[pre+"num"]))
                 if mj.get(pre+"bir"):   row["bir"].setCurrentText(mj[pre+"bir"])
                 if mj.get(pre+"uc_cm"): row["uc_cm"].setValue(float(mj[pre+"uc_cm"]))
-                if mj.get(pre+"cek"):   row["cek"].setValue(float(mj[pre+"cek"]))
+                # eski kayıtlarda fire yok → 0 (mevcut maliyetler değişmesin)
+                row["fire"].setValue(float(mj.get(pre+"fire", 0)))
                 if mj.get(pre+"fiy"):   row["fiy"].setValue(float(mj[pre+"fiy"]))
             except: pass
         for i, row in enumerate(self.atki_rows):
@@ -771,7 +807,7 @@ class MaliyetWidget(QWidget):
                 if mj.get(pre+"num"): row["num"].setValue(float(mj[pre+"num"]))
                 if mj.get(pre+"bir"): row["bir"].setCurrentText(mj[pre+"bir"])
                 if mj.get(pre+"atm"): row["atm"].setValue(int(mj[pre+"atm"]))
-                if mj.get(pre+"cek"): row["cek"].setValue(float(mj[pre+"cek"]))
+                row["fire"].setValue(float(mj.get(pre+"fire", 0)))
                 if mj.get(pre+"fiy"): row["fiy"].setValue(float(mj[pre+"fiy"]))
             except: pass
         self._recalc()
@@ -784,20 +820,24 @@ class MaliyetWidget(QWidget):
             "hazirlik_mal": self.hazirlik_mal.value(),
             "boya_mal": self.boya_mal.value(),
             "boya_fire": self.boya_fire.value(),
+            "birim": self.maliyet_birim.currentData(),
+            "ham_fire": self.ham_fire.value(),
+            "mamul_en": self.mamul_en.value(),
+            "mamul_gramaj": self.mamul_gramaj.value(),
         }
         for i, row in enumerate(self.cozgu_rows):
             pre = f"c{i+1}_"
             mj[pre+"num"]   = row["num"].value()
             mj[pre+"bir"]   = row["bir"].currentText()
             mj[pre+"uc_cm"] = row["uc_cm"].value()
-            mj[pre+"cek"]   = row["cek"].value()
+            mj[pre+"fire"]  = row["fire"].value()
             mj[pre+"fiy"]   = row["fiy"].value()
         for i, row in enumerate(self.atki_rows):
             pre = f"a{i+1}_"
             mj[pre+"num"] = row["num"].value()
             mj[pre+"bir"] = row["bir"].currentText()
             mj[pre+"atm"] = row["atm"].value()
-            mj[pre+"cek"] = row["cek"].value()
+            mj[pre+"fire"] = row["fire"].value()
             mj[pre+"fiy"] = row["fiy"].value()
         return json.dumps(mj)
 
@@ -824,8 +864,10 @@ class MaliyetWidget(QWidget):
             else:                                 effective_uc_cm = max(0.0, cozgu_sik - toplam_girilen_uc_cm)
             total_ends = effective_uc_cm * tarak
             row["tot_uc"].setText(f"{total_ends:.0f}")
-            grs = total_ends * den / 9000 * (1 + row["cek"].value() / 100) if total_ends > 0 else 0.0
-            mat = grs / 1000 * row["fiy"].value()
+            # Gramaj firesiz hesaplanır; fire yalnız maliyete uygulanır
+            grs = total_ends * den / 9000 if total_ends > 0 else 0.0
+            f_pay = max(0.0, min(row["fire"].value(), 99.0)) / 100
+            mat = grs / 1000 * row["fiy"].value() / (1 - f_pay)
             row["grs"].setText(f"{grs:.2f}"); row["dol"].setText(f"{mat:.4f}")
             total_grs += grs; total_mat += mat
         for row in self.atki_rows:
@@ -833,25 +875,44 @@ class MaliyetWidget(QWidget):
             atm = row["atm"].value()
             if den > 0 and atm > 0 and atki_sik > 0 and tarak > 0:
                 p_cm = atki_sik * atm / desen_atim
-                grs  = p_cm * tarak * den / 9000 * (1 + row["cek"].value() / 100)
+                grs  = p_cm * tarak * den / 9000   # gramaj firesiz
             else:
                 grs = 0.0
             p_cm_d = atki_sik * atm / desen_atim if atm > 0 else 0
-            mat = grs / 1000 * row["fiy"].value()
+            f_pay = max(0.0, min(row["fire"].value(), 99.0)) / 100
+            mat = grs / 1000 * row["fiy"].value() / (1 - f_pay)
             row["ppm"].setText(f"{p_cm_d:.2f}"); row["grs"].setText(f"{grs:.2f}"); row["dol"].setText(f"{mat:.4f}")
             total_grs += grs; total_mat += mat
         usd_kuru = max(0.01, self.usd_kuru.value())
         dok = self.fason_dokuma.value() * atki_sik / 100.0 / usd_kuru
         self.lbl_dokuma_mal.setText(f"{dok:.4f} $/mt  ({self.fason_dokuma.value():.2f} krş × {atki_sik:.1f} ÷ {usd_kuru:.2f})")
         haz = self.hazirlik_mal.value(); boya_kg = self.boya_mal.value(); fire_pct = self.boya_fire.value()
-        gri  = total_mat + dok + haz
-        boya = total_grs / 1000 * (1 + fire_pct / 100) * boya_kg
+        # Ham maliyet: malzeme + dokuma + hazırlık, üzerine ham dokuma firesi %
+        gri  = (total_mat + dok + haz) * (1 + self.ham_fire.value() / 100)
+        # Boya/Apre = Mamul En × Mamul Gramaj × Boya Fiyatı × (1 + Boya Firesi)
+        # Mamul en/gramaj girilmemişse eski usül toplam gramaj üzerinden hesaplanır
+        m_en = self.mamul_en.value(); m_gr = self.mamul_gramaj.value()
+        if m_en > 0 and m_gr > 0:
+            kg_mt_mamul = (m_en / 100.0) * m_gr / 1000.0   # kg/mt (en × gr/m²)
+        else:
+            kg_mt_mamul = total_grs / 1000.0
+        boya = kg_mt_mamul * boya_kg * (1 + fire_pct / 100)
         top  = gri + boya
+        # Birim: Metre ($/mt) ya da Kilo ($/kg) — Excel AH12 'm'/'k' karşılığı
+        birim_k = (self.maliyet_birim.currentData() == "k")
+        kg_mt = total_grs / 1000.0
+        if birim_k and kg_mt > 0:
+            unit = "$/kg"
+            mat_g, gri_g, boya_g, top_g = (total_mat / kg_mt, gri / kg_mt,
+                                           boya / kg_mt, top / kg_mt)
+        else:
+            unit = "$/mt"
+            mat_g, gri_g, boya_g, top_g = total_mat, gri, boya, top
         self.res_total_grs.setText(f"{total_grs:.2f} g/mt")
-        self.res_mat_cost.setText(f"{total_mat:.4f} $/mt")
-        self.res_gri_cost.setText(f"{gri:.4f} $/mt")
-        self.res_boya_cost.setText(f"{boya:.4f} $/mt")
-        self.res_total_cost.setText(f"{top:.4f} $/mt")
+        self.res_mat_cost.setText(f"{mat_g:.4f} {unit}")
+        self.res_gri_cost.setText(f"{gri_g:.4f} {unit}")
+        self.res_boya_cost.setText(f"{boya_g:.4f} {unit}")
+        self.res_total_cost.setText(f"{top_g:.4f} {unit}")
         for row in self.cozgu_rows + self.atki_rows:
             try:
                 gv = float(row["grs"].text().replace("—", "0") or 0)
