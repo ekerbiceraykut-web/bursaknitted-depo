@@ -739,6 +739,24 @@ class MaliyetWidget(QWidget):
         fih.addRow("Ham Dokuma Metresi:", self.res_ham_metre)
         fih.addRow("Çözgü Metresi (kıvrım %10):", self.res_cozgu_metre)
         vlay.addWidget(grp_iht)
+
+        # Sipariş miktarı planlayıcı: mamul metre → ham/çözgü metre + iplik kiloları
+        grp_sip = QGroupBox("Sipariş Miktarı Planlama")
+        fsp = QFormLayout(grp_sip); fsp.setSpacing(6)
+        self.siparis_mt = QDoubleSpinBox()
+        self.siparis_mt.setRange(0, 9999999); self.siparis_mt.setDecimals(0); self.siparis_mt.setSuffix(" mt")
+        self.siparis_mt.setToolTip("Üretilecek mamul metre — ham/çözgü metre ve iplik kiloları hesaplanır")
+        self.siparis_mt.valueChanged.connect(self._recalc)
+        self.res_sip_ham    = _rl("#1565C0")
+        self.res_sip_cozgu  = _rl("#1565C0")
+        self.res_sip_cz_kg  = _rl("#6A1B9A")
+        self.res_sip_at_kg  = _rl("#6A1B9A")
+        fsp.addRow("Mamul Metre:", self.siparis_mt)
+        fsp.addRow("Gerekli Ham Dokuma:", self.res_sip_ham)
+        fsp.addRow("Gerekli Çözgü (kıvrım %10):", self.res_sip_cozgu)
+        fsp.addRow("Gerekli Çözgü İpliği:", self.res_sip_cz_kg)
+        fsp.addRow("Gerekli Atkı İpliği:", self.res_sip_at_kg)
+        vlay.addWidget(grp_sip)
         vlay.addStretch()
 
         grp_cvt = QGroupBox("Birim Dönüştürücü")
@@ -947,10 +965,28 @@ class MaliyetWidget(QWidget):
             self.res_ham_metre.setText(
                 f"{ham_metre:.4f} mt   ({ham_ihtiyac:.1f} gr × %{cozgu_orani*100:.1f} çözgü ÷ {cozgu_grs_total:.1f} gr/mt)")
             self.res_cozgu_metre.setText(f"{cozgu_metre:.4f} mt")
+            # Sipariş planlama: mamul metre × birim ihtiyaçlar
+            sip = self.siparis_mt.value()
+            if sip > 0:
+                sip_ham   = sip * ham_metre
+                sip_cozgu = sip * cozgu_metre
+                # İplik kiloları ham kumaş gramajından: çözgüde kıvrım %10 dahil
+                atki_grs = total_grs - cozgu_grs_total
+                sip_cz_kg = sip_cozgu * cozgu_grs_total / 1000.0
+                sip_at_kg = sip_ham * atki_grs / 1000.0
+                self.res_sip_ham.setText(f"{sip_ham:,.0f} mt")
+                self.res_sip_cozgu.setText(f"{sip_cozgu:,.0f} mt")
+                self.res_sip_cz_kg.setText(f"{sip_cz_kg:,.1f} kg   ({cozgu_grs_total:.1f} gr/mt × çözgü metre)")
+                self.res_sip_at_kg.setText(f"{sip_at_kg:,.1f} kg   ({atki_grs:.1f} gr/mt × ham metre)")
+            else:
+                for l in (self.res_sip_ham, self.res_sip_cozgu, self.res_sip_cz_kg, self.res_sip_at_kg):
+                    l.setText("—")
         else:
             eksik = "Mamul En/Gramaj girin" if (m_en <= 0 or m_gr <= 0) else "çözgü ipliği girin"
             self.res_ham_metre.setText(f"—  ({eksik})")
             self.res_cozgu_metre.setText("—")
+            for l in (self.res_sip_ham, self.res_sip_cozgu, self.res_sip_cz_kg, self.res_sip_at_kg):
+                l.setText("—")
         for row in self.cozgu_rows + self.atki_rows:
             try:
                 gv = float(row["grs"].text().replace("—", "0") or 0)
