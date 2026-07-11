@@ -903,8 +903,10 @@ class MaliyetWidget(QWidget):
         kg_mt = total_grs / 1000.0
         if birim_k and kg_mt > 0:
             unit = "$/kg"
-            mat_g, gri_g, boya_g, top_g = (total_mat / kg_mt, gri / kg_mt,
-                                           boya / kg_mt, top / kg_mt)
+            # Boya kilo modunda Excel'deki gibi DOĞRUDAN: fiyat × (1 + fire)
+            boya_g = boya_kg * (1 + fire_pct / 100)
+            mat_g, gri_g = total_mat / kg_mt, gri / kg_mt
+            top_g = gri_g + boya_g
         else:
             unit = "$/mt"
             mat_g, gri_g, boya_g, top_g = total_mat, gri, boya, top
