@@ -7328,9 +7328,11 @@ class MovementsDialog(QDialog):
 
 
 class DailyMovementsDialog(QDialog):
-    """Tarih aralığındaki tüm hareketler — seçili satır yokken açılır."""
-    def __init__(self, parent):
+    """Tarih aralığındaki hareketler. fabric verilirse önce yalnız o satırın
+    (lotun) hareketleri gösterilir; kapsam seçici ile ürün kodunun tümüne genişletilebilir."""
+    def __init__(self, parent, fabric=None):
         super().__init__(parent)
+        self._fabric = dict(fabric) if fabric else None
         self.setWindowTitle("Hareketler")
         self.setMinimumSize(950, 540)
         self._build_ui()
@@ -7351,6 +7353,23 @@ class DailyMovementsDialog(QDialog):
             presets.addWidget(b)
         presets.addStretch()
         layout.addLayout(presets)
+
+        # Kapsam — stok satırından açıldıysa: önce sadece o lot, istenirse kodun tümü
+        if self._fabric:
+            f = self._fabric
+            scope_row = QHBoxLayout()
+            info = QLabel(f"<b>{f.get('product_code','')}</b>  |  Renk: {f.get('color','') or '—'}  |  "
+                          f"Lot: <b>{f.get('lot','') or '—'}</b>  |  Lokasyon: {f.get('location','') or '—'}")
+            info.setStyleSheet("background:#E3F2FD; padding:6px 10px; border-radius:4px;")
+            scope_row.addWidget(info)
+            scope_row.addWidget(QLabel("Kapsam:"))
+            self.scope_combo = QComboBox()
+            self.scope_combo.addItem("Bu satır (lot)", "lot")
+            self.scope_combo.addItem(f"Ürün kodunun tümü ({f.get('product_code','')})", "code")
+            self.scope_combo.currentIndexChanged.connect(self._load)
+            scope_row.addWidget(self.scope_combo)
+            scope_row.addStretch()
+            layout.addLayout(scope_row)
 
         # Filtreler — ürün/lokasyon/tip/tür
         filt = QHBoxLayout()
@@ -7476,9 +7495,15 @@ class DailyMovementsDialog(QDialog):
         hedef = self.hedef_filter.currentData() or ""
         tip = self.tip_filter.currentData() or ""
         tur = self.tur_filter.currentData() or ""
+        # Kapsam: sadece bu satır (lot) ya da ürün kodunun tümü
+        scope = self.scope_combo.currentData() if self._fabric else ""
         movements = []
         for m in all_mv:
             md = dict(m)
+            if scope == "lot" and md.get("fabric_id") != self._fabric.get("id"):
+                continue
+            if scope == "code" and (md.get("product_code") or "") != (self._fabric.get("product_code") or ""):
+                continue
             if tur and md["movement_type"] != tur:
                 continue
             if loc:
@@ -8241,15 +8266,16 @@ class StockTable(QWidget):
             self.refresh_with_locations()
 
     def _history(self):
-        dlg = DailyMovementsDialog(self)
+        fabric = None
         idx = self.table.selectionModel().currentIndex()
         if idx.isValid():
             fid = self._model.id_at(idx.row())
             if fid:
                 fabric = db.get_fabric(fid)
-                # Seçili ürünün tüm geçmişi hazır gelsin; filtreler değiştirilebilir
-                dlg.search_box.setText(fabric["product_code"] or "")
-                dlg._set_preset(None)
+        dlg = DailyMovementsDialog(self, fabric=fabric)
+        if fabric:
+            # Seçili satırın (lotun) girişten bugüne tüm geçmişi hazır gelsin
+            dlg._set_preset(None)
         dlg.exec()
 
     def _context_menu(self, pos):
