@@ -7384,8 +7384,16 @@ class DailyMovementsDialog(QDialog):
             self.scope_combo = QComboBox()
             self.scope_combo.addItem("Bu satır (lot)", "lot")
             self.scope_combo.addItem(f"Ürün kodunun tümü ({f.get('product_code','')})", "code")
-            self.scope_combo.currentIndexChanged.connect(self._load)
+            self.scope_combo.currentIndexChanged.connect(self._on_scope_change)
             scope_row.addWidget(self.scope_combo)
+            # Kodun tümü kapsamındayken belirli bir lota odaklanma
+            self.lot_lbl = QLabel("Lot:")
+            self.lot_combo = QComboBox()
+            self.lot_combo.addItem("Tüm lotlar", "")
+            self.lot_combo.currentIndexChanged.connect(self._load)
+            scope_row.addWidget(self.lot_lbl)
+            scope_row.addWidget(self.lot_combo)
+            self.lot_lbl.setVisible(False); self.lot_combo.setVisible(False)
             scope_row.addStretch()
             layout.addLayout(scope_row)
 
@@ -7461,6 +7469,9 @@ class DailyMovementsDialog(QDialog):
         layout.addLayout(top)
 
         self.table = QTableWidget()
+        if self._fabric:
+            self.table.setToolTip("Kodun tümü kapsamında bir satıra çift tıklayınca o lota odaklanır")
+            self.table.doubleClicked.connect(self._focus_lot)
         layout.addWidget(self.table)
 
         # ── Alt toplam çubuğu ─────────────────────────────────────
@@ -7484,6 +7495,29 @@ class DailyMovementsDialog(QDialog):
         if dest:
             return "Müşteri"      # tip belirsiz ama hedef varsa müşteri sevkiyatı say
         return ""
+
+    def _on_scope_change(self):
+        """Kapsam değişince: Lot seçici yalnız 'kodun tümü'nde görünür."""
+        is_code = self.scope_combo.currentData() == "code"
+        self.lot_lbl.setVisible(is_code)
+        self.lot_combo.setVisible(is_code)
+        if not is_code:
+            self.lot_combo.blockSignals(True)
+            self.lot_combo.setCurrentIndex(0)
+            self.lot_combo.blockSignals(False)
+        self._load()
+
+    def _focus_lot(self, index):
+        """Kodun tümü kapsamında bir harekete çift tıklanınca o lota odaklan."""
+        if not self._fabric or self.scope_combo.currentData() != "code":
+            return
+        item = self.table.item(index.row(), 4)   # Lot sütunu
+        lot = item.text().strip() if item else ""
+        if not lot:
+            return
+        ix = self.lot_combo.findData(lot)
+        if ix >= 0:
+            self.lot_combo.setCurrentIndex(ix)
 
     def _set_preset(self, days):
         from PyQt6.QtCore import QDate
@@ -7515,13 +7549,20 @@ class DailyMovementsDialog(QDialog):
         tur = self.tur_filter.currentData() or ""
         # Kapsam: sadece bu satır (lot) ya da ürün kodunun tümü
         scope = self.scope_combo.currentData() if self._fabric else ""
+        sel_lot = (self.lot_combo.currentData() or "") if (self._fabric and scope == "code") else ""
+        code_lots = set()   # kodun tümü kapsamında görülen lotlar (Lot seçicisini besler)
         movements = []
         for m in all_mv:
             md = dict(m)
             if scope == "lot" and md.get("fabric_id") != self._fabric.get("id"):
                 continue
-            if scope == "code" and (md.get("product_code") or "") != (self._fabric.get("product_code") or ""):
-                continue
+            if scope == "code":
+                if (md.get("product_code") or "") != (self._fabric.get("product_code") or ""):
+                    continue
+                if md.get("lot"):
+                    code_lots.add(str(md["lot"]))
+                if sel_lot and str(md.get("lot") or "") != sel_lot:
+                    continue
             if tur and md["movement_type"] != tur:
                 continue
             if loc:
@@ -7543,6 +7584,21 @@ class DailyMovementsDialog(QDialog):
                 if q not in hay:
                     continue
             movements.append(m)
+
+        # Lot seçicisini kodun lotlarıyla güncelle (seçimi koruyarak)
+        if self._fabric and scope == "code":
+            mevcut = {self.lot_combo.itemData(i) for i in range(self.lot_combo.count())}
+            yeni = {""} | code_lots
+            if mevcut != yeni:
+                sec = self.lot_combo.currentData() or ""
+                self.lot_combo.blockSignals(True)
+                self.lot_combo.clear()
+                self.lot_combo.addItem("Tüm lotlar", "")
+                for l in sorted(code_lots):
+                    self.lot_combo.addItem(l, l)
+                ix = self.lot_combo.findData(sec)
+                self.lot_combo.setCurrentIndex(ix if ix >= 0 else 0)
+                self.lot_combo.blockSignals(False)
 
         _fill_movement_table(self.table, movements, show_product=True)
         if movements:
