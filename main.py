@@ -7046,14 +7046,24 @@ class SplitCikisDialog(QDialog):
         self.out_fabric_type.currentIndexChanged.connect(self._update_out_fields)
         self.out_print_type.currentIndexChanged.connect(self._update_out_fields)
         if self._is_dis_depo:
+            # Fire hesaplama SEÇİMLİ: işaretli değilse sadece çıkan miktar düşülür,
+            # kalan stokta kalır (parçalı transfer). İşaretliyse kalan fire yazılır, lot kapanır.
+            self.fire_check = QCheckBox("Fire hesapla — kalan miktar fire olarak düşülür ve lot kapanır")
+            self.fire_check.setChecked(False)
             self.pre_meter = QDoubleSpinBox(); self.pre_meter.setRange(0, 999999); self.pre_meter.setDecimals(2); self.pre_meter.setValue(av_m)
             self.pre_kg = QDoubleSpinBox(); self.pre_kg.setRange(0, 999999); self.pre_kg.setDecimals(2); self.pre_kg.setValue(av_k)
             self.fire_label = QLabel("—"); self.fire_label.setStyleSheet("color:#C62828; font-weight:bold;")
-            form.addRow("Çıkış Öncesi Metre:", self.pre_meter)
-            form.addRow("Çıkış Öncesi Kilo:", self.pre_kg)
-            form.addRow("Fire (toplam çıkışa göre):", self.fire_label)
+            form.addRow("", self.fire_check)
+            self.lbl_pre_row_m = QLabel("Çıkış Öncesi Metre:")
+            self.lbl_pre_row_k = QLabel("Çıkış Öncesi Kilo:")
+            self.lbl_fire_row = QLabel("Fire (toplam çıkışa göre):")
+            form.addRow(self.lbl_pre_row_m, self.pre_meter)
+            form.addRow(self.lbl_pre_row_k, self.pre_kg)
+            form.addRow(self.lbl_fire_row, self.fire_label)
             self.pre_meter.valueChanged.connect(self._update_totals)
             self.pre_kg.valueChanged.connect(self._update_totals)
+            self.fire_check.toggled.connect(self._toggle_fire_fields)
+            self._toggle_fire_fields(False)
         self.notes = QLineEdit()
         form.addRow("Not:", self.notes)
         lay.addLayout(form)
@@ -7118,11 +7128,22 @@ class SplitCikisDialog(QDialog):
             self._rows.pop()
             self._update_totals()
 
+    def _toggle_fire_fields(self, on):
+        """Fire alanları yalnızca 'Fire hesapla' işaretliyse görünür."""
+        for w in (self.lbl_pre_row_m, self.pre_meter, self.lbl_pre_row_k,
+                  self.pre_kg, self.lbl_fire_row, self.fire_label):
+            w.setVisible(on)
+        if hasattr(self, "total_lbl"):   # kuruluş sırasında henüz yok
+            self._update_totals()
+
     def _update_totals(self):
         tot_m = sum(ms.value() for _, ms, _ in self._rows)
         tot_k = sum(ks.value() for _, _, ks in self._rows)
         self.total_lbl.setText(f"Toplam çıkış: {tot_m:,.2f} mt / {tot_k:,.2f} kg")
         if self._is_dis_depo:
+            if not self.fire_check.isChecked():
+                self.fire_label.setText("—")
+                return
             pm = self.pre_meter.value()
             fire = pm - tot_m
             pct = (fire / pm * 100) if pm > 0 else 0
@@ -7156,7 +7177,8 @@ class SplitCikisDialog(QDialog):
         if not lines:
             return QMessageBox.warning(self, "Eksik", "En az bir hedefe çıkış miktarı girin.")
         tot_m = sum(l[2] for l in lines)
-        limit = self.pre_meter.value() if self._is_dis_depo else (self.fabric.get("meter") or 0)
+        fire_on = self._is_dis_depo and self.fire_check.isChecked()
+        limit = self.pre_meter.value() if fire_on else (self.fabric.get("meter") or 0)
         if limit > 0 and tot_m - limit > 0.01:
             return QMessageBox.warning(self, "Hata",
                 f"Toplam çıkış ({tot_m:,.0f} mt) mevcut/çıkış öncesi miktarı ({limit:,.0f} mt) aşıyor.")
@@ -7175,7 +7197,9 @@ class SplitCikisDialog(QDialog):
                "parti_no": self.parti_no.text().strip(),
                "notes": self.notes.text().strip()}
         fire = None
-        if self._is_dis_depo:
+        # Fire yalnızca kullanıcı 'Fire hesapla'yı işaretlediyse hesaplanır;
+        # aksi halde kalan miktar stokta kalır (parçalı transfer).
+        if self._is_dis_depo and self.fire_check.isChecked():
             pm, pk = self.pre_meter.value(), self.pre_kg.value()
             tot_m = sum(l[2] for l in self._lines); tot_k = sum(l[3] for l in self._lines)
             if pm > tot_m + 0.01 or pk > tot_k + 0.01:
