@@ -914,7 +914,15 @@ class MaliyetWidget(QWidget):
         self.res_mat_cost.setText(f"{mat_g:.4f} {unit}")
         self.res_gri_cost.setText(f"{gri_g:.4f} {unit}")
         self.res_boya_cost.setText(f"{boya_g:.4f} {unit}")
-        self.res_total_cost.setText(f"{top_g:.4f} {unit}")
+        top_txt = f"{top_g:.4f} {unit}"
+        if birim_k:
+            # Metre eşdeğeri: mamul kg/mt (En × Gramaj) ile çevrilir
+            if m_en > 0 and m_gr > 0:
+                mamul_kg_mt = (m_en / 100.0) * m_gr / 1000.0
+                top_txt += f"   (≈ {top_g * mamul_kg_mt:.4f} $/mt — mamul {m_en:g} cm × {m_gr:g} gr/m²)"
+            else:
+                top_txt += "   ($/mt için Mamul En ve Gramaj girin)"
+        self.res_total_cost.setText(top_txt)
         for row in self.cozgu_rows + self.atki_rows:
             try:
                 gv = float(row["grs"].text().replace("—", "0") or 0)
@@ -4449,6 +4457,8 @@ class ProductManagementDialog(QDialog):
         hdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         hdr.setStretchLastSection(False)
         hdr.setSectionsMovable(True)
+        # Satıra çift tıklayınca düzenleme ekranı açılır
+        tbl.doubleClicked.connect(lambda *_: self._edit())
 
     def _on_tab_change(self, idx):
         self.btn_convert.setVisible(idx == 1)

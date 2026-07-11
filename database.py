@@ -1191,13 +1191,21 @@ def reject_product_name(name):
     conn.commit(); conn.close()
 
 
+def _ascii_upper(s):
+    """Ürün adını İngilizce alfabeye çevirip BÜYÜK harf yapar
+    (ç→C, ğ→G, ı/İ→I, ö→O, ş→S, ü→U)."""
+    tr_map = str.maketrans("çÇğĞıİöÖşŞüÜ", "cCgGiIoOsSuU")
+    return (s or "").translate(tr_map).upper().strip()
+
+
 def generate_product_name():
-    """Havuzdan; hiçbir üründe kullanılmamış VE reddedilmemiş benzersiz tek kelime üretir."""
+    """Havuzdan; hiçbir üründe kullanılmamış VE reddedilmemiş benzersiz tek kelime üretir.
+    Ad İngilizce alfabeyle ve BÜYÜK harfle döner (ör. Çilek → CILEK)."""
     import random
     conn = get_connection()
-    used = {(r[0] or "").strip().upper() for r in
+    used = {_ascii_upper(r[0]) for r in
             conn.execute("SELECT product_name FROM products")}
-    used |= {(r[0] or "").strip().upper() for r in
+    used |= {_ascii_upper(r[0]) for r in
              conn.execute("SELECT name FROM rejected_product_names")}
     conn.close()
     pool = PRODUCT_NAME_POOL[:]
@@ -1205,15 +1213,16 @@ def generate_product_name():
 
     # Tek kelime — 2000'lik havuzdan kullanılmamış ilk ad
     for name in pool:
-        if name.upper() not in used:
-            return name
+        cand = _ascii_upper(name)
+        if cand not in used:
+            return cand
 
     # Havuz tümüyle tükenirse (çok düşük ihtimal) sayı ekle
     i = 2
     while True:
         for name in pool:
-            cand = f"{name} {i}"
-            if cand.upper() not in used:
+            cand = _ascii_upper(f"{name} {i}")
+            if cand not in used:
                 return cand
         i += 1
 
