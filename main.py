@@ -9665,14 +9665,23 @@ class PlanningView(QWidget):
         self.queue_table.itemSelectionChanged.connect(self._on_queue_select)
         ll.addWidget(self.queue_table)
 
-        # Admin onay butonu
+        # Kuyruk işlemleri: onay (admin) + planlamadan kaldırma (admin/planlama)
+        qbtns = QHBoxLayout()
         self._btn_approve = QPushButton("✅ Seçili Siparişi Onayla")
         self._btn_approve.setStyleSheet(
             "background:#1B5E20;color:white;font-weight:bold;"
             "border-radius:4px;padding:5px 10px;")
         self._btn_approve.clicked.connect(self._approve_order)
         self._btn_approve.setVisible(CURRENT_USER.get("role") == "admin")
-        ll.addWidget(self._btn_approve)
+        qbtns.addWidget(self._btn_approve)
+        self._btn_remove = QPushButton("🗑 Planlamadan Kaldır (İPTAL)")
+        self._btn_remove.setStyleSheet(
+            "background:#757575;color:white;font-weight:bold;"
+            "border-radius:4px;padding:5px 10px;")
+        self._btn_remove.clicked.connect(self._remove_from_planning)
+        self._btn_remove.setVisible(CURRENT_USER.get("role") in ("admin", "planlama"))
+        qbtns.addWidget(self._btn_remove)
+        ll.addLayout(qbtns)
         splitter.addWidget(left)
 
         # ── Sağ: Detay (scroll) ──────────────────────────────────
@@ -9904,6 +9913,40 @@ class PlanningView(QWidget):
             self._refresh_queue()
             QMessageBox.information(self, "Onaylandı",
                 "Sipariş onaylandı. Planlama ekibine hazır.")
+
+    def _remove_from_planning(self):
+        """Seçili siparişi İPTAL durumuna alarak aktif planlamalardan kaldırır.
+        Kalıcı silme, sipariş ekranındaki mevcut kurala tabidir (önce İPTAL)."""
+        if CURRENT_USER.get("role") not in ("admin", "planlama"):
+            return QMessageBox.warning(self, "Yetki",
+                "Planlamadan kaldırma yalnızca admin veya planlamacı tarafından yapılabilir.")
+        row = self.queue_table.currentRow()
+        if row < 0:
+            return QMessageBox.information(self, "Bilgi", "Önce bir sipariş seçin.")
+        item = self.queue_table.item(row, 0)
+        if not item:
+            return
+        oid = item.data(Qt.ItemDataRole.UserRole)
+        order = db.get_order(oid)
+        if not order:
+            return
+        reply = QMessageBox.question(self, "Planlamadan Kaldır",
+            f"<b>{order.get('order_no','')}</b> — {order.get('customer_name','')}<br>"
+            f"Durum: {order.get('status','')}<br><br>"
+            "Sipariş <b>İPTAL</b> durumuna alınacak ve aktif planlamalardan kaldırılacak.<br>"
+            "<span style='color:#555'>Kalıcı silme gerekiyorsa sipariş ekranından yapılır.</span><br><br>"
+            "Devam edilsin mi?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+        db.update_order_status(oid, "İPTAL")
+        if self._current_order_id == oid:
+            self._current_order_id = None
+            self._order_group.setVisible(False)
+            self._right_scroll.setVisible(False)
+        self._refresh_queue()
+        QMessageBox.information(self, "Kaldırıldı",
+            f"{order.get('order_no','')} planlamadan kaldırıldı (İPTAL).")
 
     # ── PO kalemi seçildi → makbuzları göster ───────────────────
     def _on_po_item_select(self):
