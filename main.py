@@ -40,7 +40,7 @@ CONNECTION_MODE = "local"
 _LIST_FUNCS = {
     "get_all_fabrics", "get_all_customers", "get_all_suppliers",
     "get_all_products", "get_all_locations", "get_active_locations",
-    "get_locations", "get_all_users", "get_fire_records",
+    "get_locations", "get_all_users", "get_user_names", "get_fire_records",
     "get_movements", "get_all_movements", "get_movements_by_range",
     "get_all_orders", "get_all_purchase_orders",
     "get_pending_approval_orders", "get_shippable_orders",
@@ -48,7 +48,7 @@ _LIST_FUNCS = {
     "get_po_items_for_order", "get_all_armur_desenleri",
     "get_crm_customers", "get_crm_visits", "get_crm_sales", "get_crm_orders",
     "get_crm_years", "get_stock_snapshots", "get_movement_destinations",
-    "get_iplik_cinsleri", "get_iplikler",
+    "get_iplik_cinsleri", "get_iplikler", "get_stock_breakdown_by_code",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -5867,18 +5867,10 @@ class OrderItemDialog(QDialog):
         self.meter.valueChanged.connect(self._update_total)
         form.addRow("Metre:", self.meter)
 
-        kg_row = QWidget()
-        kg_lay = QHBoxLayout(kg_row)
-        kg_lay.setContentsMargins(0, 0, 0, 0)
         self.kg = QDoubleSpinBox()
         self.kg.setRange(0, 999999)
         self.kg.setDecimals(2)
-        btn_calc_kg = QPushButton("🧮 Hesapla")
-        btn_calc_kg.setToolTip("Kilo = Gramaj × (En / 100) × Metre / 1000")
-        btn_calc_kg.clicked.connect(self._calc_kg)
-        kg_lay.addWidget(self.kg, 1)
-        kg_lay.addWidget(btn_calc_kg)
-        form.addRow("Kilo:", kg_row)
+        form.addRow("Kilo:", self.kg)
 
         symbol = CURRENCY_SYMBOLS.get(self.currency, "$")
         self.sale_price = QDoubleSpinBox()
@@ -5977,17 +5969,6 @@ class OrderItemDialog(QDialog):
             self.product_code.setCurrentIndex(0)
 
     # ── Hesaplamalar ─────────────────────────────────────────────
-    def _calc_kg(self):
-        try:
-            gramaj = float(str(self.gramaj.text()).replace(",", ".").strip())
-            en = float(str(self.width.text()).replace(",", ".").strip())
-            metre = self.meter.value()
-            kg = gramaj * (en / 100) * metre / 1000
-            self.kg.setValue(round(kg, 2))
-        except ValueError:
-            QMessageBox.warning(self, "Hesaplanamadı",
-                "Kilo hesaplamak için Gramaj, En ve Metre alanları sayısal olmalıdır.")
-
     def _update_total(self):
         symbol = CURRENCY_SYMBOLS.get(self.currency, "$")
         total = self.meter.value() * self.sale_price.value()
@@ -6318,7 +6299,10 @@ class OrderDialog(QDialog):
         self.sales_rep.blockSignals(True)
         self.sales_rep.clear()
         self.sales_rep.addItem("— Seçiniz —", "")
-        for u in (db.get_all_users() or []):
+        # get_user_names her role açık (get_all_users uzak modda admin gerektirir)
+        users = db.get_user_names() or []
+        for u in users:
+            u = dict(u)
             full = u.get("full_name","") or u.get("username","")
             self.sales_rep.addItem(full, full)
         if select_name:
@@ -9725,7 +9709,8 @@ class PlanningView(QWidget):
             "Seç", "Ürün Kodu", "Ürün Adı", "Kumaş Tipi", "Renk",
             "Kompozisyon", "En", "Gramaj", "Lab No", "Baskı Tipi",
             "Zemin Rengi", "Baskı Desen No", "Sip. Mt", "Sip. Kg",
-            "Satış Fiyatı", "Açıklama", "DEPO HAM (mt)", "Eksik (mt)"]
+            "Satış Fiyatı", "Açıklama",
+            "TÜM DEPOLAR HAM (mt)", "BOYALI (mt)", "BASKILI (mt)", "Eksik (mt)"]
         self.need_table.setColumnCount(len(_NEED_COLS))
         self.need_table.setHorizontalHeaderLabels(_NEED_COLS)
         self.need_table.verticalHeader().setVisible(False)
@@ -9737,6 +9722,12 @@ class PlanningView(QWidget):
             if i != 2:
                 nhdr.setSectionResizeMode(i, QHeaderView.ResizeMode.ResizeToContents)
         self.need_table.setMaximumHeight(200)
+        self.need_table.setToolTip(
+            "Stok sütunlarına (HAM / BOYALI / BASKILI) çift tıklayınca depo-lot dökümü açılır\n"
+            "Satıra sağ tıklayınca ürün ağacı (tüm ürün bilgileri) açılır")
+        self.need_table.doubleClicked.connect(self._show_stock_breakdown)
+        self.need_table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.need_table.customContextMenuRequested.connect(self._need_context_menu)
         rl.addWidget(self.need_table)
 
         btn_po = QPushButton("+ Satınalma Siparişi Oluştur (Seçili Kalemler)")
@@ -10065,8 +10056,16 @@ class PlanningView(QWidget):
         for it in items:
             pc = it.get("product_code","")
             fabric_type = it.get("fabric_type","") or ""
-            stock = db.get_fabric_stock_in_depo(pc, fabric_type if fabric_type == "HAM" else "HAM") or {"meter": 0}
-            depo_m = float(stock.get("meter", 0) or 0)
+            # TÜM depolardaki (DEPO grubu + dış depolar) stoklar
+            ham_m = sum(float(r.get("meter") or 0)
+                        for r in (db.get_stock_breakdown_by_code(pc, "HAM") or []))
+            # Kalem İPLİĞİ BOYALI ise o tip, değilse BOYALI gösterilir
+            boyali_tip = "İPLİĞİ BOYALI" if fabric_type == "İPLİĞİ BOYALI" else "BOYALI"
+            boyali_m = sum(float(r.get("meter") or 0)
+                           for r in (db.get_stock_breakdown_by_code(pc, boyali_tip) or []))
+            baskili_m = sum(float(r.get("meter") or 0)
+                            for r in (db.get_stock_breakdown_by_code(pc, "BASKILI") or []))
+            depo_m = ham_m
             order_m = float(it.get("meter") or 0)
             order_kg = float(it.get("kg") or 0)
             missing = max(0.0, order_m - depo_m)
@@ -10097,13 +10096,24 @@ class PlanningView(QWidget):
                 f"{order_kg:.2f}",             # 13 Sip. Kg
                 f"{sp:.2f}" if sp else "",     # 14 Satış Fiyatı
                 it.get("description",""),       # 15 Açıklama
-                f"{depo_m:.2f}",              # 16 DEPO HAM (mt)
-                f"{missing:.2f}",             # 17 Eksik (mt)
+                f"{ham_m:.2f}",               # 16 TÜM DEPOLAR HAM (mt)
+                f"{boyali_m:.2f}",            # 17 BOYALI (mt)
+                f"{baskili_m:.2f}",           # 18 BASKILI (mt)
+                f"{missing:.2f}",             # 19 Eksik (mt)
             ]
             for col, val in enumerate(row_vals, start=1):
                 cell = QTableWidgetItem(str(val))
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if col == 17:
+                if col == 16:
+                    cell.setData(Qt.ItemDataRole.UserRole, (pc, "HAM"))
+                    cell.setToolTip("Çift tıkla: depo-lot dökümü")
+                elif col == 17:
+                    cell.setData(Qt.ItemDataRole.UserRole, (pc, boyali_tip))
+                    cell.setToolTip(f"{boyali_tip} — çift tıkla: depo-lot dökümü")
+                elif col == 18:
+                    cell.setData(Qt.ItemDataRole.UserRole, (pc, "BASKILI"))
+                    cell.setToolTip("Çift tıkla: depo-lot dökümü")
+                elif col == 19:
                     if missing > 0:
                         cell.setText(f"{missing:.2f}  ⚠ Eksik")
                         cell.setForeground(QBrush(QColor("#C62828")))
@@ -10115,6 +10125,97 @@ class PlanningView(QWidget):
 
         self._refresh_po_table(order_id)
         self._right_scroll.setVisible(True)
+
+    def _need_context_menu(self, pos):
+        """İhtiyaç tablosunda sağ tık → ürün ağacı (ürün kartındaki tüm bilgiler)."""
+        from PyQt6.QtWidgets import QMenu
+        idx = self.need_table.indexAt(pos)
+        if not idx.isValid():
+            return
+        code_item = self.need_table.item(idx.row(), 1)   # Ürün Kodu sütunu
+        code = (code_item.text() if code_item else "").strip()
+        if not code:
+            return
+        menu = QMenu(self)
+        act_tree = menu.addAction(f"🌳 Ürün Ağacı — {code} (tüm bilgiler)")
+        action = menu.exec(self.need_table.viewport().mapToGlobal(pos))
+        if action == act_tree:
+            self._open_product_tree(code)
+
+    def _open_product_tree(self, code):
+        """Ürün kataloğundaki tam ürün kartını (Genel/Teknik/Maliyet/Armür/Jakar) açar.
+        Kaydetme yetkisi: admin ve planlamacı."""
+        p = db.get_product_by_code(code)
+        if not p:
+            return QMessageBox.information(self, "Bilgi",
+                f"'{code}' kodu ürün kataloğunda bulunamadı.")
+        p = dict(p)
+        # _product_dialog / _collect_product self'i yalnızca pencere ebeveyni
+        # olarak kullanır; buradan güvenle yeniden kullanılabilir.
+        dlg = ProductManagementDialog._product_dialog(self, p)
+        if not dlg.exec():
+            return
+        if CURRENT_USER.get("role") in ("admin", "planlama"):
+            if ProductManagementDialog._collect_product(self, dlg, pid=p.get("id"),
+                                                        active=p.get("active", 1)):
+                QMessageBox.information(self, "Kaydedildi",
+                    f"{code} ürün bilgileri güncellendi.")
+                if self._current_order_id:
+                    self._show_detail(self._current_order_id)
+        else:
+            QMessageBox.information(self, "Bilgi",
+                "Görüntüleme modu — değişiklikler kaydedilmedi (yetki gerekli).")
+
+    def _show_stock_breakdown(self, index):
+        """HAM / BOYALI / BASKILI stok hücresine çift tıklanınca
+        o kod+tipin tüm depolardaki lokasyon/lot dökümünü gösterir."""
+        cell = self.need_table.item(index.row(), index.column())
+        data = cell.data(Qt.ItemDataRole.UserRole) if cell else None
+        if not (isinstance(data, tuple) and len(data) == 2):
+            return
+        pc, tip = data
+        rows = db.get_stock_breakdown_by_code(pc, tip) or []
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"{pc} — {tip} stok dökümü (tüm depolar)")
+        dlg.setMinimumSize(620, 380)
+        dl = QVBoxLayout(dlg)
+        if not rows:
+            dl.addWidget(QLabel(f"Depolarda <b>{pc}</b> koduna ait <b>{tip}</b> stok bulunmuyor."))
+        else:
+            t = QTableWidget(len(rows) + 1, 6)
+            t.setHorizontalHeaderLabels(["Lokasyon", "Grup", "Lot", "Renk", "Metre", "Kilo"])
+            t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+            t.verticalHeader().setVisible(False)
+            t.setAlternatingRowColors(True)
+            tot_m = tot_k = 0.0
+            for i, r in enumerate(rows):
+                r = dict(r)
+                m = float(r.get("meter") or 0); k = float(r.get("kg") or 0)
+                tot_m += m; tot_k += k
+                grp = r.get("group_name") or ""
+                t.setItem(i, 0, QTableWidgetItem(r.get("location", "") or ""))
+                t.setItem(i, 1, QTableWidgetItem("DEPO" if grp == "DEPO" else (grp or "—")))
+                t.setItem(i, 2, QTableWidgetItem(r.get("lot", "") or "—"))
+                t.setItem(i, 3, QTableWidgetItem(r.get("color", "") or "—"))
+                mi = QTableWidgetItem(f"{m:,.2f}"); mi.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                ki = QTableWidgetItem(f"{k:,.2f}"); ki.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                t.setItem(i, 4, mi); t.setItem(i, 5, ki)
+            # Toplam satırı
+            bold = QFont("", -1, QFont.Weight.Bold)
+            last = len(rows)
+            for c, val in [(0, "TOPLAM"), (4, f"{tot_m:,.2f}"), (5, f"{tot_k:,.2f}")]:
+                it = QTableWidgetItem(val); it.setFont(bold)
+                if c in (4, 5):
+                    it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                t.setItem(last, c, it)
+            t.resizeColumnsToContents()
+            t.horizontalHeader().setStretchLastSection(True)
+            dl.addWidget(t)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dlg.reject); bb.accepted.connect(dlg.accept)
+        bb.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dlg.accept)
+        dl.addWidget(bb)
+        dlg.exec()
 
     def _refresh_po_table(self, order_id=None):
         oid = order_id or self._current_order_id

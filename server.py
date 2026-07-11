@@ -240,6 +240,10 @@ class APIHandler(BaseHTTPRequestHandler):
                 lim = int(qs.get("limit", ["12"])[0])
                 self._send(_ok([dict(r) for r in db.get_stock_snapshots(limit=lim)]))
 
+            # ── Kullanıcı adları (her role açık; hash içermez) ───
+            elif path == "/api/users/names":
+                self._send(_ok(db.get_user_names()))
+
             # ── Users (sadece admin) ─────────────────────────────
             elif path == "/api/users":
                 if user.get("role") != "admin":
@@ -274,6 +278,13 @@ class APIHandler(BaseHTTPRequestHandler):
                     qs.get("product_code",[""])[0],
                     qs.get("fabric_type",["HAM"])[0])
                 self._send(_ok(row))
+
+            # ── Planlama: tüm depolar lokasyon/lot dökümü ─────────
+            elif path == "/api/stock_breakdown":
+                rows = db.get_stock_breakdown_by_code(
+                    qs.get("product_code",[""])[0],
+                    qs.get("fabric_type",[""])[0])
+                self._send(_ok(rows))
 
             # ── Satınalma Siparişleri ──────────────────────────────
             elif path == "/api/purchase_orders":

@@ -1510,6 +1510,17 @@ def get_all_users():
     return rows
 
 
+def get_user_names():
+    """Aktif kullanıcıların adları — şifre hash'i İÇERMEZ.
+    'Siparişi Alan' gibi seçim listeleri için; her role açıktır."""
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT id, username, full_name, role FROM users WHERE active=1 ORDER BY full_name"
+    ).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
 def add_user(username, full_name, password, role="kullanici"):
     conn = get_connection()
     conn.execute(
@@ -2273,6 +2284,24 @@ def update_order_status(order_id, status):
     conn.execute("UPDATE orders SET status=? WHERE id=?", (status, order_id))
     conn.commit()
     conn.close()
+
+
+def get_stock_breakdown_by_code(product_code, fabric_type):
+    """Koda + kumaş tipine ait stokların TÜM depolardaki (DEPO grubu + dış depolar)
+    lokasyon/lot dökümü. Planlama ekranındaki stok sütunlarını ve detayını besler."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT f.location, IFNULL(l.group_name,'') AS group_name, IFNULL(f.lot,'') AS lot,
+               IFNULL(f.color,'') AS color,
+               COALESCE(f.meter,0) AS meter, COALESCE(f.kg,0) AS kg
+        FROM fabrics f
+        LEFT JOIN locations l ON l.name = f.location
+        WHERE f.product_code=? AND IFNULL(f.fabric_type,'')=? AND f.deleted_at IS NULL
+              AND (COALESCE(f.meter,0) > 0 OR COALESCE(f.kg,0) > 0)
+        ORDER BY l.group_name, f.location, f.lot
+    """, (product_code, fabric_type)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
 
 
 def get_fabric_stock_in_depo(product_code, fabric_type="HAM"):

@@ -552,6 +552,10 @@ def authenticate(username, password):
 def get_all_users():
     return _get("/api/users") or []
 
+def get_user_names():
+    """Aktif kullanıcı adları — her role açık (şifre hash'i içermez)."""
+    return _get("/api/users/names") or []
+
 def add_user(username, full_name, password, role="kullanici"):
     _post("/api/users", {"username": username, "full_name": full_name,
                          "password": password, "role": role})
@@ -638,6 +642,11 @@ def get_shippable_orders():
 def get_fabric_stock_in_depo(product_code, fabric_type="HAM"):
     return _get("/api/stock_in_depo", {"product_code": product_code, "fabric_type": fabric_type}) \
            or {"meter": 0, "kg": 0}
+
+def get_stock_breakdown_by_code(product_code, fabric_type):
+    """Koda+tipe ait stokların tüm depolardaki lokasyon/lot dökümü."""
+    return _get("/api/stock_breakdown", {"product_code": product_code,
+                                         "fabric_type": fabric_type}) or []
 
 def get_all_purchase_orders(search="", status="", order_id=None):
     params = {"search": search, "status": status}
