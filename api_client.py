@@ -423,15 +423,19 @@ def delete_iplik(iid):
 
 # ── Armür Desenleri ───────────────────────────────────────────────────────────
 
-def get_all_armur_desenleri():
-    return _get("/api/armur") or []
+def get_all_armur_desenleri(product_code=None):
+    params = {}
+    if product_code is not None:
+        params["product_code"] = product_code
+        params["by_code"] = "1"   # boş kod filtresi ile 'tümü'nü ayırt etmek için
+    return _get("/api/armur", params) or []
 
 def get_armur_desen(did):
     return _get(f"/api/armur/{did}")
 
-def add_armur_desen(name, satirlar=8, sutunlar=8, grid="[]", notes=""):
+def add_armur_desen(name, satirlar=8, sutunlar=8, grid="[]", notes="", product_code=""):
     r = _post("/api/armur", {"name": name, "satirlar": satirlar, "sutunlar": sutunlar,
-                              "grid": grid, "notes": notes})
+                              "grid": grid, "notes": notes, "product_code": product_code})
     return (r or {}).get("id")
 
 def update_armur_desen(did, name, satirlar, sutunlar, grid, notes=""):

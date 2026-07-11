@@ -151,6 +151,7 @@ def init_db():
             sutunlar INTEGER DEFAULT 8,
             grid TEXT DEFAULT '[]',
             notes TEXT DEFAULT '',
+            product_code TEXT DEFAULT '',
             created_at TEXT DEFAULT (datetime('now','localtime'))
         );
 
@@ -456,6 +457,7 @@ def init_db():
         "ALTER TABLE products ADD COLUMN numune_code TEXT DEFAULT ''",
         "ALTER TABLE products ADD COLUMN iplik_json TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN numune_code TEXT DEFAULT ''",
+        "ALTER TABLE armur_desenleri ADD COLUMN product_code TEXT DEFAULT ''",
         """CREATE TABLE IF NOT EXISTS armur_desenleri (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -1327,9 +1329,15 @@ def delete_product(pid):
 
 # ── Armür Desenleri ────────────────────────────────────────────────────────────
 
-def get_all_armur_desenleri():
+def get_all_armur_desenleri(product_code=None):
+    """product_code verilirse yalnız o ürün koduna ait desenler; None ise tümü."""
     conn = get_connection()
-    rows = conn.execute("SELECT * FROM armur_desenleri ORDER BY name").fetchall()
+    if product_code is not None:
+        rows = conn.execute(
+            "SELECT * FROM armur_desenleri WHERE IFNULL(product_code,'')=? ORDER BY name",
+            (product_code,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM armur_desenleri ORDER BY name").fetchall()
     conn.close()
     return [dict(r) for r in rows]
 
@@ -1339,11 +1347,11 @@ def get_armur_desen(did):
     conn.close()
     return dict(row) if row else None
 
-def add_armur_desen(name, satirlar=8, sutunlar=8, grid="[]", notes=""):
+def add_armur_desen(name, satirlar=8, sutunlar=8, grid="[]", notes="", product_code=""):
     conn = get_connection()
     c = conn.execute(
-        "INSERT INTO armur_desenleri (name, satirlar, sutunlar, grid, notes) VALUES (?,?,?,?,?)",
-        (name.strip(), satirlar, sutunlar, grid, notes.strip())
+        "INSERT INTO armur_desenleri (name, satirlar, sutunlar, grid, notes, product_code) VALUES (?,?,?,?,?,?)",
+        (name.strip(), satirlar, sutunlar, grid, notes.strip(), (product_code or "").strip())
     )
     conn.commit()
     did = c.lastrowid

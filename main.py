@@ -309,9 +309,10 @@ class ArmurGrid(QWidget):
 
 class ArmurDesignDialog(QDialog):
     """Tek bir armür desenini düzenler / oluşturur."""
-    def __init__(self, desen=None, parent=None):
+    def __init__(self, desen=None, parent=None, product_code=""):
         super().__init__(parent)
         self.desen = desen   # None = yeni
+        self._product_code = (product_code or "").strip()   # yeni desen bu koda bağlanır
         self.setWindowTitle("Armür Desen Editörü" + (f" — {desen['name']}" if desen else ""))
         self.setMinimumSize(640, 520)
         self._build_ui()
@@ -469,7 +470,8 @@ class ArmurDesignDialog(QDialog):
             if self.desen:
                 db.update_armur_desen(self.desen["id"], name, r, c, grid_json, notes)
             else:
-                db.add_armur_desen(name, r, c, grid_json, notes)
+                db.add_armur_desen(name, r, c, grid_json, notes,
+                                   product_code=self._product_code)
         except Exception as e:
             QMessageBox.critical(self, "Hata", str(e)); return
         self.accept()
@@ -486,8 +488,8 @@ class ArmurDesignManagerDialog(QDialog):
     def _build_ui(self):
         lay = QVBoxLayout(self)
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(["Ad", "Çözgü", "Atkı", "Notlar", "Tarih"])
+        self.table.setColumnCount(6)
+        self.table.setHorizontalHeaderLabels(["Ad", "Ürün Kodu", "Çözgü", "Atkı", "Notlar", "Tarih"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -513,10 +515,11 @@ class ArmurDesignManagerDialog(QDialog):
             id_item = QTableWidgetItem(r["name"])
             id_item.setData(Qt.ItemDataRole.UserRole, r["id"])
             self.table.setItem(i, 0, id_item)
-            self.table.setItem(i, 1, QTableWidgetItem(str(r.get("sutunlar", ""))))
-            self.table.setItem(i, 2, QTableWidgetItem(str(r.get("satirlar", ""))))
-            self.table.setItem(i, 3, QTableWidgetItem(r.get("notes", "")))
-            self.table.setItem(i, 4, QTableWidgetItem(str(r.get("created_at", ""))[:10]))
+            self.table.setItem(i, 1, QTableWidgetItem(r.get("product_code", "") or ""))
+            self.table.setItem(i, 2, QTableWidgetItem(str(r.get("sutunlar", ""))))
+            self.table.setItem(i, 3, QTableWidgetItem(str(r.get("satirlar", ""))))
+            self.table.setItem(i, 4, QTableWidgetItem(r.get("notes", "")))
+            self.table.setItem(i, 5, QTableWidgetItem(str(r.get("created_at", ""))[:10]))
         self.table.resizeColumnsToContents()
 
     def _selected(self):
@@ -864,12 +867,18 @@ class MaliyetWidget(QWidget):
 
 
 class ArmurManagerWidget(QWidget):
-    """Armür desen kütüphanesi — ürün diyaloğuna gömülebilir."""
+    """Armür desen kütüphanesi — ürün diyaloğuna gömülebilir.
+    code_getter verilirse yalnız o ürün koduna ait desenler listelenir
+    ve yeni desenler o koda bağlanır."""
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, code_getter=None):
         super().__init__(parent)
+        self._code_getter = code_getter
         self._build_ui()
         self._load()
+
+    def _code(self):
+        return (self._code_getter() or "").strip() if self._code_getter else None
 
     def _build_ui(self):
         lay = QVBoxLayout(self)
@@ -891,7 +900,10 @@ class ArmurManagerWidget(QWidget):
         btn_row.addStretch(); lay.addLayout(btn_row)
 
     def _load(self):
-        rows = db.get_all_armur_desenleri() or []
+        code = self._code()
+        rows = db.get_all_armur_desenleri(product_code=code) if code is not None \
+               else (db.get_all_armur_desenleri() or [])
+        rows = rows or []
         self.table.setRowCount(len(rows))
         for i, r in enumerate(rows):
             it = QTableWidgetItem(r["name"]); it.setData(Qt.ItemDataRole.UserRole, r["id"])
@@ -909,7 +921,11 @@ class ArmurManagerWidget(QWidget):
         return db.get_armur_desen(did)
 
     def _new(self):
-        dlg = ArmurDesignDialog(parent=self.window())
+        code = self._code()
+        if self._code_getter and not code:
+            return QMessageBox.warning(self, "Ürün Kodu Gerekli",
+                "Önce Genel sekmesinde ürün kodunu girin —\ndesen o koda bağlanacak.")
+        dlg = ArmurDesignDialog(parent=self.window(), product_code=code or "")
         if dlg.exec(): self._load()
 
     def _edit(self):
@@ -4648,9 +4664,11 @@ class ProductManagementDialog(QDialog):
         for i, row in enumerate(mw.atki_rows):
             row["ad"].textChanged.connect(_m2t_txt(i, False))
 
-        # ── Sekme 4: Armür Desen ─────────────────────────────────
-        dlg.armur_w = ArmurManagerWidget()
+        # ── Sekme 4: Armür Desen — sadece bu ürün koduna ait desenler ──
+        dlg.armur_w = ArmurManagerWidget(code_getter=lambda: dlg.code.text())
         tabs.addTab(dlg.armur_w, "Armür Desen")
+        # Ürün kodu değişince desen listesi de o koda göre yenilenir
+        dlg.code.textChanged.connect(lambda *_: dlg.armur_w._load())
 
         dlg.jakar_w = JakarDesenWidget()
         if p:

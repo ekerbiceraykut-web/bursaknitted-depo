@@ -211,7 +211,11 @@ class APIHandler(BaseHTTPRequestHandler):
                 self._send(_ok(dict(r)) if r else _err("Bulunamadı"))
 
             elif path == "/api/armur":
-                rows = db.get_all_armur_desenleri()
+                # by_code=1 ise product_code'a göre filtrele (boş kod da geçerli filtre)
+                if qs.get("by_code", [""])[0] == "1":
+                    rows = db.get_all_armur_desenleri(product_code=qs.get("product_code", [""])[0])
+                else:
+                    rows = db.get_all_armur_desenleri()
                 self._send(_ok(rows))
 
             elif path.startswith("/api/armur/"):
@@ -499,7 +503,8 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/armur":
                 did = db.add_armur_desen(
                     body.get("name","Yeni Desen"), body.get("satirlar",8), body.get("sutunlar",8),
-                    body.get("grid","[]"), body.get("notes","")
+                    body.get("grid","[]"), body.get("notes",""),
+                    product_code=body.get("product_code","")
                 )
                 self._send(_ok({"id": did}))
 
