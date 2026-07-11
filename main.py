@@ -730,6 +730,15 @@ class MaliyetWidget(QWidget):
         fs.addRow("Boya/Apre Maliyeti:", self.res_boya_cost)
         fs.addRow("Toplam Maliyet:", self.res_total_cost)
         vlay.addWidget(grp_sonuc)
+
+        # 1 mt mamul için gerekli ham dokuma ve çözgü metresi (kıvrım %10 sabit)
+        grp_iht = QGroupBox("1 mt Mamul İçin Gerekli")
+        fih = QFormLayout(grp_iht); fih.setSpacing(6)
+        self.res_ham_metre   = _rl("#E65100")
+        self.res_cozgu_metre = _rl("#E65100")
+        fih.addRow("Ham Dokuma Metresi:", self.res_ham_metre)
+        fih.addRow("Çözgü Metresi (kıvrım %10):", self.res_cozgu_metre)
+        vlay.addWidget(grp_iht)
         vlay.addStretch()
 
         grp_cvt = QGroupBox("Birim Dönüştürücü")
@@ -853,7 +862,7 @@ class MaliyetWidget(QWidget):
         )
         aktif_cozgu = [r for r in self.cozgu_rows if _den_from(str(r["num"].value()), r["bir"].currentText()) > 0]
         toplam_girilen_uc_cm = sum(r["uc_cm"].value() for r in aktif_cozgu)
-        total_grs = 0.0; total_mat = 0.0
+        total_grs = 0.0; total_mat = 0.0; cozgu_grs_total = 0.0
         for row in self.cozgu_rows:
             den = _den_from(str(row["num"].value()), row["bir"].currentText())
             if den <= 0:
@@ -869,7 +878,7 @@ class MaliyetWidget(QWidget):
             f_pay = max(0.0, min(row["fire"].value(), 99.0)) / 100
             mat = grs / 1000 * row["fiy"].value() / (1 - f_pay)
             row["grs"].setText(f"{grs:.2f}"); row["dol"].setText(f"{mat:.4f}")
-            total_grs += grs; total_mat += mat
+            total_grs += grs; total_mat += mat; cozgu_grs_total += grs
         for row in self.atki_rows:
             den = _den_from(str(row["num"].value()), row["bir"].currentText())
             atm = row["atm"].value()
@@ -923,6 +932,25 @@ class MaliyetWidget(QWidget):
             else:
                 top_txt += "   ($/mt için Mamul En ve Gramaj girin)"
         self.res_total_cost.setText(top_txt)
+
+        # ── 1 mt mamul için gerekli ham dokuma + çözgü metresi ──
+        # Ham ihtiyaç (gr) = Mamul En × Mamul Gramaj × (1 + Boya Firesi)
+        # Çözgü ağırlığı   = Ham ihtiyaç × (çözgü gramajı ÷ toplam gramaj)
+        # Ham Metre        = Çözgü ağırlığı ÷ ham çözgü gramajı (gr/mt)
+        # Çözgü Metresi    = Ham Metre × 1.10 (kıvrım %10 sabit)
+        if m_en > 0 and m_gr > 0 and cozgu_grs_total > 0 and total_grs > 0:
+            ham_ihtiyac  = (m_en / 100.0) * m_gr * (1 + fire_pct / 100)
+            cozgu_orani  = cozgu_grs_total / total_grs
+            cozgu_agirlik = ham_ihtiyac * cozgu_orani
+            ham_metre    = cozgu_agirlik / cozgu_grs_total
+            cozgu_metre  = ham_metre * 1.10
+            self.res_ham_metre.setText(
+                f"{ham_metre:.4f} mt   ({ham_ihtiyac:.1f} gr × %{cozgu_orani*100:.1f} çözgü ÷ {cozgu_grs_total:.1f} gr/mt)")
+            self.res_cozgu_metre.setText(f"{cozgu_metre:.4f} mt")
+        else:
+            eksik = "Mamul En/Gramaj girin" if (m_en <= 0 or m_gr <= 0) else "çözgü ipliği girin"
+            self.res_ham_metre.setText(f"—  ({eksik})")
+            self.res_cozgu_metre.setText("—")
         for row in self.cozgu_rows + self.atki_rows:
             try:
                 gv = float(row["grs"].text().replace("—", "0") or 0)
