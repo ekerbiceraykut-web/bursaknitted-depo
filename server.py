@@ -286,6 +286,20 @@ class APIHandler(BaseHTTPRequestHandler):
                     qs.get("fabric_type",[""])[0])
                 self._send(_ok(rows))
 
+            # ── Rezervasyonlar ────────────────────────────────────
+            elif path == "/api/reservations":
+                oid = qs.get("order_id",[""])[0]
+                fid = qs.get("fabric_id",[""])[0]
+                rows = db.get_reservations(
+                    order_id=int(oid) if oid else None,
+                    fabric_id=int(fid) if fid else None,
+                    active_only=qs.get("active_only",["1"])[0] == "1")
+                self._send(_ok(rows))
+
+            elif path.startswith("/api/reservations/") and path.endswith("/fabric-total"):
+                fid = int(path.split("/")[-2])
+                self._send(_ok(db.get_reserved_for_fabric(fid)))
+
             # ── Satınalma Siparişleri ──────────────────────────────
             elif path == "/api/purchase_orders":
                 order_id = qs.get("order_id",[""])[0]
@@ -518,6 +532,34 @@ class APIHandler(BaseHTTPRequestHandler):
                     product_code=body.get("product_code","")
                 )
                 self._send(_ok({"id": did}))
+
+            # ── Rezervasyon oluştur (admin + planlama) ────────────
+            elif path == "/api/reservations":
+                if user.get("role") not in ("admin", "planlama"):
+                    return self._send(_err("Rezervasyon yetkisi yok"), 403)
+                r = db.add_reservation(
+                    fabric_id=body.get("fabric_id"),
+                    order_id=body.get("order_id"),
+                    order_no=body.get("order_no",""),
+                    meter=body.get("meter",0), kg=body.get("kg",0),
+                    user_name=user.get("full_name",""),
+                    notes=body.get("notes",""))
+                self._send(_ok(r) if r.get("ok") else _err(r.get("error","Rezerve edilemedi")))
+
+            elif path.startswith("/api/reservations/") and path.endswith("/cancel"):
+                if user.get("role") not in ("admin", "planlama"):
+                    return self._send(_err("Rezervasyon yetkisi yok"), 403)
+                rid = int(path.split("/")[-2])
+                db.cancel_reservation(rid, user.get("full_name",""))
+                self._send(_ok({"id": rid}))
+
+            elif path.startswith("/api/reservations/") and path.endswith("/use"):
+                if user.get("role") not in ("admin", "planlama"):
+                    return self._send(_err("Rezervasyon yetkisi yok"), 403)
+                rid = int(path.split("/")[-2])
+                r = db.use_reservation_amount(rid, body.get("meter", 0),
+                                              user.get("full_name",""))
+                self._send(_ok(r) if r.get("ok") else _err(r.get("error","Kullanılamadı")))
 
             elif path == "/api/products/bulk":
                 n = db.import_products_bulk(body.get("records", []))

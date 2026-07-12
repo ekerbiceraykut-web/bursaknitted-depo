@@ -648,6 +648,41 @@ def get_stock_breakdown_by_code(product_code, fabric_type):
     return _get("/api/stock_breakdown", {"product_code": product_code,
                                          "fabric_type": fabric_type}) or []
 
+
+# ── Rezervasyonlar ────────────────────────────────────────────────
+
+def add_reservation(fabric_id, order_id=None, order_no="", meter=0, kg=0,
+                    user_name="", notes="", days=3):
+    try:
+        r = _post("/api/reservations", {"fabric_id": fabric_id, "order_id": order_id,
+                                        "order_no": order_no, "meter": meter, "kg": kg,
+                                        "notes": notes})
+        return r if isinstance(r, dict) else {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def get_reservations(order_id=None, fabric_id=None, active_only=True):
+    params = {"active_only": "1" if active_only else "0"}
+    if order_id:  params["order_id"] = str(order_id)
+    if fabric_id: params["fabric_id"] = str(fabric_id)
+    return _get("/api/reservations", params) or []
+
+def get_reserved_for_fabric(fabric_id):
+    try:
+        return _get(f"/api/reservations/{fabric_id}/fabric-total") or {"meter": 0, "kg": 0, "orders": []}
+    except Exception:
+        return {"meter": 0, "kg": 0, "orders": []}
+
+def cancel_reservation(rid, user_name=""):
+    _post(f"/api/reservations/{rid}/cancel", {})
+
+def use_reservation_amount(rid, meter_used, user_name=""):
+    try:
+        r = _post(f"/api/reservations/{rid}/use", {"meter": meter_used})
+        return r if isinstance(r, dict) else {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def get_all_purchase_orders(search="", status="", order_id=None):
     params = {"search": search, "status": status}
     if order_id:

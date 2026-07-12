@@ -458,6 +458,23 @@ def init_db():
         "ALTER TABLE products ADD COLUMN iplik_json TEXT DEFAULT ''",
         "ALTER TABLE fabrics ADD COLUMN numune_code TEXT DEFAULT ''",
         "ALTER TABLE armur_desenleri ADD COLUMN product_code TEXT DEFAULT ''",
+        """CREATE TABLE IF NOT EXISTS reservations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fabric_id INTEGER NOT NULL,
+            order_id INTEGER,
+            order_no TEXT DEFAULT '',
+            meter REAL DEFAULT 0,
+            kg REAL DEFAULT 0,
+            status TEXT DEFAULT 'AKTİF',
+            created_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime')),
+            expires_at TEXT,
+            used_meter REAL DEFAULT 0,
+            notes TEXT DEFAULT ''
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_res_fabric ON reservations(fabric_id)",
+        "CREATE INDEX IF NOT EXISTS idx_res_order ON reservations(order_id)",
+        "ALTER TABLE reservations ADD COLUMN used_meter REAL DEFAULT 0",
         """CREATE TABLE IF NOT EXISTS armur_desenleri (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -2297,12 +2314,15 @@ def update_order_status(order_id, status):
 
 def get_stock_breakdown_by_code(product_code, fabric_type):
     """Koda + kumaş tipine ait stokların TÜM depolardaki (DEPO grubu + dış depolar)
-    lokasyon/lot dökümü. Planlama ekranındaki stok sütunlarını ve detayını besler."""
+    lokasyon/lot dökümü + aktif rezerve miktarı. Planlama ekranını besler."""
     conn = get_connection()
+    _expire_reservations(conn); conn.commit()
     rows = conn.execute("""
-        SELECT f.location, IFNULL(l.group_name,'') AS group_name, IFNULL(f.lot,'') AS lot,
-               IFNULL(f.color,'') AS color,
-               COALESCE(f.meter,0) AS meter, COALESCE(f.kg,0) AS kg
+        SELECT f.id AS fabric_id, f.location, IFNULL(l.group_name,'') AS group_name,
+               IFNULL(f.lot,'') AS lot, IFNULL(f.color,'') AS color,
+               COALESCE(f.meter,0) AS meter, COALESCE(f.kg,0) AS kg,
+               COALESCE((SELECT SUM(r.meter - COALESCE(r.used_meter,0)) FROM reservations r
+                         WHERE r.fabric_id=f.id AND r.status='AKTİF'),0) AS rezerve_meter
         FROM fabrics f
         LEFT JOIN locations l ON l.name = f.location
         WHERE f.product_code=? AND IFNULL(f.fabric_type,'')=? AND f.deleted_at IS NULL
@@ -2311,6 +2331,110 @@ def get_stock_breakdown_by_code(product_code, fabric_type):
     """, (product_code, fabric_type)).fetchall()
     conn.close()
     return [dict(r) for r in rows]
+
+
+# ── Rezervasyonlar ──────────────────────────────────────────────
+# Depodaki stok siparişe kısmi rezerve edilir; vade 3 gün, dolunca düşer.
+
+def _expire_reservations(conn):
+    """Vadesi (3 gün) geçen aktif rezervasyonları düşürür."""
+    conn.execute("UPDATE reservations SET status='SÜRESİ DOLDU' "
+                 "WHERE status='AKTİF' AND expires_at < datetime('now','localtime')")
+
+
+def add_reservation(fabric_id, order_id=None, order_no="", meter=0, kg=0,
+                    user_name="", notes="", days=3):
+    """Stok satırından siparişe rezerv. Kullanılabilir (stok − aktif rezerv) aşılırsa reddeder.
+    Döner: {"ok": bool, "id"|"error": ...}"""
+    conn = get_connection()
+    _expire_reservations(conn)
+    fab = conn.execute("SELECT meter, kg FROM fabrics WHERE id=? AND deleted_at IS NULL",
+                       (fabric_id,)).fetchone()
+    if not fab:
+        conn.close(); return {"ok": False, "error": "Stok kaydı bulunamadı"}
+    res = conn.execute("SELECT COALESCE(SUM(meter - COALESCE(used_meter,0)),0) AS m FROM reservations "
+                       "WHERE fabric_id=? AND status='AKTİF'", (fabric_id,)).fetchone()
+    avail = (fab["meter"] or 0) - (res["m"] or 0)
+    if (meter or 0) <= 0:
+        conn.close(); return {"ok": False, "error": "Rezerve miktarı 0'dan büyük olmalı"}
+    if (meter or 0) > avail + 0.01:
+        conn.close()
+        return {"ok": False, "error": f"Kullanılabilir miktar {avail:,.1f} mt "
+                                      f"(stok {fab['meter'] or 0:,.1f} − rezerve {res['m'] or 0:,.1f})"}
+    c = conn.execute("""
+        INSERT INTO reservations (fabric_id, order_id, order_no, meter, kg, status,
+                                  created_by, expires_at, notes)
+        VALUES (?,?,?,?,?, 'AKTİF', ?, datetime('now','localtime', ?), ?)
+    """, (fabric_id, order_id, order_no or "", meter or 0, kg or 0,
+          user_name, f"+{int(days)} day", notes or ""))
+    conn.commit()
+    rid = c.lastrowid
+    conn.close()
+    return {"ok": True, "id": rid}
+
+
+def get_reservations(order_id=None, fabric_id=None, active_only=True):
+    """Rezervasyon listesi (stok bilgileriyle). Süresi dolanlar önce düşürülür."""
+    conn = get_connection()
+    _expire_reservations(conn); conn.commit()
+    q = """SELECT r.*, f.product_code, IFNULL(f.color,'') AS color, IFNULL(f.lot,'') AS lot,
+                  f.location, IFNULL(f.fabric_type,'') AS fabric_type,
+                  COALESCE(f.meter,0) AS stok_meter
+           FROM reservations r LEFT JOIN fabrics f ON f.id = r.fabric_id WHERE 1=1"""
+    params = []
+    if active_only:
+        q += " AND r.status='AKTİF'"
+    if order_id:
+        q += " AND r.order_id=?"; params.append(order_id)
+    if fabric_id:
+        q += " AND r.fabric_id=?"; params.append(fabric_id)
+    q += " ORDER BY r.created_at DESC"
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def get_reserved_for_fabric(fabric_id):
+    """Bir stok satırındaki aktif rezerve toplamı: {"meter":…, "kg":…, "orders":[…]}"""
+    conn = get_connection()
+    _expire_reservations(conn); conn.commit()
+    row = conn.execute("SELECT COALESCE(SUM(meter - COALESCE(used_meter,0)),0) AS m, "
+                       "COALESCE(SUM(kg),0) AS k "
+                       "FROM reservations WHERE fabric_id=? AND status='AKTİF'",
+                       (fabric_id,)).fetchone()
+    orders = [r["order_no"] for r in conn.execute(
+        "SELECT DISTINCT order_no FROM reservations WHERE fabric_id=? AND status='AKTİF' "
+        "AND IFNULL(order_no,'')!=''", (fabric_id,))]
+    conn.close()
+    return {"meter": row["m"] or 0, "kg": row["k"] or 0, "orders": orders}
+
+
+def cancel_reservation(rid, user_name=""):
+    conn = get_connection()
+    conn.execute("UPDATE reservations SET status='İPTAL', "
+                 "notes = notes || ' | iptal: ' || ? WHERE id=? AND status='AKTİF'",
+                 (user_name, rid))
+    conn.commit(); conn.close()
+
+
+def use_reservation_amount(rid, meter_used, user_name=""):
+    """Rezervden kısmi/tam kullanım (sevk sonrası). Rezerv biterse KULLANILDI olur.
+    Döner: {"ok":…, "kalan":…}"""
+    conn = get_connection()
+    _expire_reservations(conn)
+    row = conn.execute("SELECT meter, COALESCE(used_meter,0) AS used, status "
+                       "FROM reservations WHERE id=?", (rid,)).fetchone()
+    if not row or row["status"] != "AKTİF":
+        conn.close()
+        return {"ok": False, "error": "Aktif rezervasyon bulunamadı"}
+    new_used = min((row["meter"] or 0), (row["used"] or 0) + (meter_used or 0))
+    kalan = (row["meter"] or 0) - new_used
+    durum = "KULLANILDI" if kalan <= 0.01 else "AKTİF"
+    conn.execute("UPDATE reservations SET used_meter=?, status=?, "
+                 "notes = notes || ' | kullanım: ' || ? || ' mt (' || ? || ')' WHERE id=?",
+                 (new_used, durum, f"{meter_used:g}", user_name, rid))
+    conn.commit(); conn.close()
+    return {"ok": True, "kalan": kalan, "durum": durum}
 
 
 def get_fabric_stock_in_depo(product_code, fabric_type="HAM"):

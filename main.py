@@ -49,6 +49,7 @@ _LIST_FUNCS = {
     "get_crm_customers", "get_crm_visits", "get_crm_sales", "get_crm_orders",
     "get_crm_years", "get_stock_snapshots", "get_movement_destinations",
     "get_iplik_cinsleri", "get_iplikler", "get_stock_breakdown_by_code",
+    "get_reservations",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -694,7 +695,7 @@ class MaliyetWidget(QWidget):
         self.lbl_dokuma_mal = QLabel("—"); self.lbl_dokuma_mal.setStyleSheet("font-weight:bold; color:#1A237E;")
         self.hazirlik_mal   = QDoubleSpinBox(); self.hazirlik_mal.setRange(0,99);  self.hazirlik_mal.setDecimals(4); self.hazirlik_mal.setSuffix(" $/mt")
         self.ham_fire       = QDoubleSpinBox(); self.ham_fire.setRange(0,99);      self.ham_fire.setDecimals(1);     self.ham_fire.setSuffix(" %")
-        self.ham_fire.setToolTip("Ham dokuma firesi — ham maliyete % olarak eklenir")
+        self.ham_fire.setToolTip("Ham dokuma çekmesi — ham maliyete % olarak eklenir")
         self.boya_mal       = QDoubleSpinBox(); self.boya_mal.setRange(0,99);      self.boya_mal.setDecimals(2);     self.boya_mal.setSuffix(" $/kg")
         self.boya_fire      = QDoubleSpinBox(); self.boya_fire.setRange(0,50);     self.boya_fire.setDecimals(1);    self.boya_fire.setSuffix(" %")
         self.mamul_en       = QDoubleSpinBox(); self.mamul_en.setRange(0,500);     self.mamul_en.setDecimals(1);     self.mamul_en.setSuffix(" cm")
@@ -704,7 +705,7 @@ class MaliyetWidget(QWidget):
         fi.addRow("USD Kuru:", self.usd_kuru)
         fi.addRow("Dokuma Maliyeti (hesaplanan, $/mt):", self.lbl_dokuma_mal)
         fi.addRow("Çözgü Hazırlık Maliyeti:", self.hazirlik_mal)
-        fi.addRow("Ham Dokuma Firesi:", self.ham_fire)
+        fi.addRow("Ham Dokuma Çekmesi:", self.ham_fire)
         fi.addRow("Mamul En:", self.mamul_en)
         fi.addRow("Mamul Gramaj:", self.mamul_gramaj)
         fi.addRow("Boya / Apre ($/kg kumaş):", self.boya_mal)
@@ -914,7 +915,7 @@ class MaliyetWidget(QWidget):
         dok = self.fason_dokuma.value() * atki_sik / 100.0 / usd_kuru
         self.lbl_dokuma_mal.setText(f"{dok:.4f} $/mt  ({self.fason_dokuma.value():.2f} krş × {atki_sik:.1f} ÷ {usd_kuru:.2f})")
         haz = self.hazirlik_mal.value(); boya_kg = self.boya_mal.value(); fire_pct = self.boya_fire.value()
-        # Ham maliyet: malzeme + dokuma + hazırlık, üzerine ham dokuma firesi %
+        # Ham maliyet: malzeme + dokuma + hazırlık, üzerine ham dokuma çekmesi %
         gri  = (total_mat + dok + haz) * (1 + self.ham_fire.value() / 100)
         # Boya/Apre = Mamul En × Mamul Gramaj × Boya Fiyatı × (1 + Boya Firesi)
         # Mamul en/gramaj girilmemişse eski usül toplam gramaj üzerinden hesaplanır
@@ -7152,9 +7153,20 @@ class SplitCikisDialog(QDialog):
         lay = QVBoxLayout(self)
         f = self.fabric
         av_m = f.get("meter") or 0; av_k = f.get("kg") or 0
-        info = QLabel(f"<b>{f.get('product_name') or f.get('product_code')}</b>  |  Renk: {f.get('color','')}  |  "
-                     f"Lot: {f.get('lot','')}  |  Lokasyon: {f.get('location','')}<br>"
-                     f"Mevcut: <b>{av_m:,.2f} mt / {av_k:,.2f} kg</b>")
+        info_txt = (f"<b>{f.get('product_name') or f.get('product_code')}</b>  |  Renk: {f.get('color','')}  |  "
+                    f"Lot: {f.get('lot','')}  |  Lokasyon: {f.get('location','')}<br>"
+                    f"Mevcut: <b>{av_m:,.2f} mt / {av_k:,.2f} kg</b>")
+        # Aktif rezervasyon varsa herkes görür — kullanılabilir miktarı belirt
+        try:
+            rez = db.get_reserved_for_fabric(f.get("id")) or {}
+            rez_m = float(rez.get("meter") or 0)
+        except Exception:
+            rez_m = 0; rez = {}
+        if rez_m > 0:
+            sips = ", ".join(rez.get("orders") or []) or "—"
+            info_txt += (f"<br><span style='color:#C62828'>📌 Rezerve: <b>{rez_m:,.2f} mt</b> "
+                         f"({sips})  →  Kullanılabilir: <b>{max(0, av_m - rez_m):,.2f} mt</b></span>")
+        info = QLabel(info_txt)
         info.setStyleSheet("background:#FFEBEE; padding:8px; border-radius:4px;")
         lay.addWidget(info)
 
@@ -7345,6 +7357,68 @@ class SplitCikisDialog(QDialog):
                 pct = ((pm - tot_m) / pm * 100) if pm > 0 else 0
                 fire = {"pre_m": pm, "pre_k": pk, "out_m": tot_m, "out_k": tot_k, "pct": pct}
         return self._lines, out, fire
+
+
+def run_split_cikis(parent, fabric, extra_note="", banner=""):
+    """SplitCikisDialog'u açar ve çıkışı uygular (fire dahil).
+    Stok listesi ve rezervden sevk akışlarının ortak yürütücüsü.
+    Döner: yapılan toplam çıkış metresi (iptalde None)."""
+    fabric = dict(fabric)
+    fid = fabric.get("id")
+    dlg = SplitCikisDialog(parent, fabric)
+    if banner:
+        try:
+            dlg.setWindowTitle(dlg.windowTitle() + f"  —  {banner}")
+        except Exception:
+            pass
+    if extra_note:
+        dlg.notes.setText(extra_note)
+    if not dlg.exec():
+        return None
+    lines, out, fire = dlg.result()
+    total_m = sum(l[2] for l in lines)
+    total_k = sum(l[3] for l in lines)
+    notes = out["notes"]
+    if fire:
+        fire_note = f"Fire: %{fire['pct']:.1f}"
+        notes = f"{notes} | {fire_note}" if notes else fire_note
+    fire_extra_m = (fire["pre_m"] - total_m) if fire else 0
+    fire_extra_k = (fire["pre_k"] - total_k) if fire else 0
+    first_mid = None
+    for idx, (tip, dest, mt, kg) in enumerate(lines):
+        ded_m = ded_k = None
+        if fire and idx == 0:   # fire kaybı ilk satırın stok düşüşüne eklenir
+            ded_m = mt + fire_extra_m
+            ded_k = kg + fire_extra_k
+        mid = db.add_movement(fid, "ÇIKIŞ", mt, kg, "", notes,
+                              user_name=CURRENT_USER["full_name"],
+                              destination=dest, destination_type=tip,
+                              deduct_meter=ded_m, deduct_kg=ded_k,
+                              out_color=out["out_color"], lab_no=out["lab_no"],
+                              parti_no=out["parti_no"],
+                              out_fabric_type=out["out_fabric_type"],
+                              out_print_type=out["out_print_type"],
+                              out_zemin_rengi=out["out_zemin_rengi"],
+                              out_baski_desen_no=out["out_baski_desen_no"])
+        if first_mid is None:
+            first_mid = mid
+    if fire:
+        hedefler = "; ".join(f"{d} ({m:,.0f}mt)" for _, d, m, _ in lines)
+        db.add_fire_record(
+            fid, first_mid, fabric["product_code"], fabric["color"] or "",
+            fabric["lot"] or "", fabric["location"] or "", hedefler,
+            fire["pre_m"], fire["pre_k"], fire["out_m"], fire["out_k"], fire["pct"],
+            manual_pct=False, user_name=CURRENT_USER["full_name"],
+            out_color=out["out_color"], lab_no=out["lab_no"], parti_no=out["parti_no"])
+        if db.finalize_lot_if_consumed(fid, CURRENT_USER["full_name"]):
+            QMessageBox.information(
+                parent, "Lot Tükendi",
+                f"<b>{fabric['product_code']} / {fabric['lot'] or '-'}</b> lotu tükendi.<br>"
+                f"Toplam fire 'Boyahane Fire Oranları' sekmesine işlendi.")
+    if len(lines) > 1:
+        QMessageBox.information(parent, "Çıkış",
+            f"{len(lines)} hedefe parçalı çıkış yapıldı. Toplam {total_m:,.0f} mt.")
+    return total_m
 
 
 TYPE_COLORS = {"GİRİŞ": "#2E7D32", "SATINALMA GİRİŞİ": "#1565C0",
@@ -8386,53 +8460,8 @@ class StockTable(QWidget):
         if not fid:
             return
         fabric = db.get_fabric(fid)
-        dlg = SplitCikisDialog(self, fabric)
-        if not dlg.exec():
-            return
-        lines, out, fire = dlg.result()
-        total_m = sum(l[2] for l in lines)
-        total_k = sum(l[3] for l in lines)
-        notes = out["notes"]
-        if fire:
-            fire_note = f"Fire: %{fire['pct']:.1f}"
-            notes = f"{notes} | {fire_note}" if notes else fire_note
-        fire_extra_m = (fire["pre_m"] - total_m) if fire else 0
-        fire_extra_k = (fire["pre_k"] - total_k) if fire else 0
-        first_mid = None
-        for idx, (tip, dest, mt, kg) in enumerate(lines):
-            ded_m = ded_k = None
-            if fire and idx == 0:   # fire kaybı ilk satırın stok düşüşüne eklenir
-                ded_m = mt + fire_extra_m
-                ded_k = kg + fire_extra_k
-            mid = db.add_movement(fid, "ÇIKIŞ", mt, kg, "", notes,
-                                  user_name=CURRENT_USER["full_name"],
-                                  destination=dest, destination_type=tip,
-                                  deduct_meter=ded_m, deduct_kg=ded_k,
-                                  out_color=out["out_color"], lab_no=out["lab_no"],
-                                  parti_no=out["parti_no"],
-                                  out_fabric_type=out["out_fabric_type"],
-                                  out_print_type=out["out_print_type"],
-                                  out_zemin_rengi=out["out_zemin_rengi"],
-                                  out_baski_desen_no=out["out_baski_desen_no"])
-            if first_mid is None:
-                first_mid = mid
-        if fire:
-            hedefler = "; ".join(f"{d} ({m:,.0f}mt)" for _, d, m, _ in lines)
-            db.add_fire_record(
-                fid, first_mid, fabric["product_code"], fabric["color"] or "",
-                fabric["lot"] or "", fabric["location"] or "", hedefler,
-                fire["pre_m"], fire["pre_k"], fire["out_m"], fire["out_k"], fire["pct"],
-                manual_pct=False, user_name=CURRENT_USER["full_name"],
-                out_color=out["out_color"], lab_no=out["lab_no"], parti_no=out["parti_no"])
-            if db.finalize_lot_if_consumed(fid, CURRENT_USER["full_name"]):
-                QMessageBox.information(
-                    self, "Lot Tükendi",
-                    f"<b>{fabric['product_code']} / {fabric['lot'] or '-'}</b> lotu tükendi.<br>"
-                    f"Toplam fire 'Boyahane Fire Oranları' sekmesine işlendi.")
-        self.refresh()
-        if len(lines) > 1:
-            QMessageBox.information(self, "Çıkış",
-                f"{len(lines)} hedefe parçalı çıkış yapıldı. Toplam {total_m:,.0f} mt.")
+        if run_split_cikis(self, fabric) is not None:
+            self.refresh()
 
     # Çift tıklanabilen sütunlar → veritabanı alanı
     CELL_FIELDS = {1: "product_code", 2: "product_name", 3: "description", 4: "color",
@@ -9751,6 +9780,9 @@ class PlanningView(QWidget):
         top = QHBoxLayout()
         top.addWidget(QLabel("<b>📌 Planlama Modülü</b>"))
         top.addStretch()
+        btn_rez = QPushButton("📌 Rezervasyonlar")
+        btn_rez.clicked.connect(self._show_reservations)
+        top.addWidget(btn_rez)
         btn_ref = QPushButton("🔄 Yenile"); btn_ref.clicked.connect(self.refresh)
         top.addWidget(btn_ref)
         lay.addLayout(top)
@@ -10303,6 +10335,114 @@ class PlanningView(QWidget):
             QMessageBox.information(self, "Bilgi",
                 "Görüntüleme modu — değişiklikler kaydedilmedi (yetki gerekli).")
 
+    def _show_reservations(self):
+        """Aktif rezervasyonların listesi — herkes görür; admin/planlama iptal edebilir."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Aktif Rezervasyonlar")
+        dlg.setMinimumSize(860, 420)
+        dl = QVBoxLayout(dlg)
+        info = QLabel("Rezervasyonlar 3 gün geçerlidir; süresi dolanlar otomatik düşer.")
+        info.setStyleSheet("color:#555;")
+        dl.addWidget(info)
+        t = QTableWidget()
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.verticalHeader().setVisible(False)
+        t.setAlternatingRowColors(True)
+        dl.addWidget(t)
+
+        def _doldur():
+            rows = db.get_reservations(active_only=True) or []
+            t.clear()
+            t.setColumnCount(9)
+            t.setHorizontalHeaderLabels(["Sipariş", "Ürün Kodu", "Tip", "Renk", "Lot",
+                                         "Lokasyon", "Rezerve (mt)", "Rezerve Eden", "Bitiş"])
+            t.setRowCount(len(rows))
+            for i, r in enumerate(rows):
+                r = dict(r)
+                it0 = QTableWidgetItem(r.get("order_no", "") or "—")
+                it0.setData(Qt.ItemDataRole.UserRole, r.get("id"))
+                t.setItem(i, 0, it0)
+                t.setItem(i, 1, QTableWidgetItem(r.get("product_code", "") or ""))
+                t.setItem(i, 2, QTableWidgetItem(r.get("fabric_type", "") or ""))
+                t.setItem(i, 3, QTableWidgetItem(r.get("color", "") or "—"))
+                t.setItem(i, 4, QTableWidgetItem(r.get("lot", "") or "—"))
+                t.setItem(i, 5, QTableWidgetItem(r.get("location", "") or ""))
+                kalan = float(r.get("meter") or 0) - float(r.get("used_meter") or 0)
+                mi = QTableWidgetItem(f"{kalan:,.1f}")
+                mi.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                if float(r.get("used_meter") or 0) > 0:
+                    mi.setToolTip(f"Rezerve {float(r.get('meter') or 0):,.1f} mt — "
+                                  f"kullanılan {float(r.get('used_meter') or 0):,.1f} mt")
+                t.setItem(i, 6, mi)
+                t.setItem(i, 7, QTableWidgetItem(r.get("created_by", "") or ""))
+                t.setItem(i, 8, QTableWidgetItem(str(r.get("expires_at", "") or "")[:16]))
+            t.resizeColumnsToContents()
+            t.horizontalHeader().setStretchLastSection(True)
+
+        _doldur()
+        btn_row = QHBoxLayout()
+        if CURRENT_USER.get("role") in ("admin", "planlama"):
+            b_sevk = QPushButton("🚚 Rezervden Sevk (HAM → boyahane / mamul → müşteri)")
+            b_sevk.setStyleSheet("background:#1B5E20;color:white;font-weight:bold;"
+                                 "border-radius:4px;padding:6px 12px;")
+            def _sevk():
+                row = t.currentRow()
+                if row < 0:
+                    return QMessageBox.information(dlg, "Bilgi", "Sevk edilecek rezervasyonu seçin.")
+                rid = t.item(row, 0).data(Qt.ItemDataRole.UserRole)
+                rez = next((dict(r) for r in (db.get_reservations(active_only=True) or [])
+                            if dict(r).get("id") == rid), None)
+                if not rez:
+                    return QMessageBox.warning(dlg, "Rezerv", "Aktif rezervasyon bulunamadı (süresi dolmuş olabilir).")
+                fabric = db.get_fabric(rez.get("fabric_id"))
+                if not fabric:
+                    return QMessageBox.warning(dlg, "Stok", "Stok kaydı bulunamadı.")
+                kalan_rez = float(rez.get("meter") or 0) - float(rez.get("used_meter") or 0)
+                sip = rez.get("order_no") or ""
+                # Standart çıkış ekranı: HAM → boyahane (dış depo, transfer),
+                # boyalı/baskılı → müşteri; kısmi hedefler serbest
+                total = run_split_cikis(
+                    dlg, fabric,
+                    extra_note=f"{sip} rezervinden sevk",
+                    banner=f"📌 {sip} rezervi — kalan {kalan_rez:,.1f} mt")
+                if total is None:
+                    return
+                r = db.use_reservation_amount(rid, total, CURRENT_USER.get("full_name",""))
+                if r.get("ok"):
+                    if r.get("durum") == "KULLANILDI":
+                        QMessageBox.information(dlg, "Rezerv Kapandı",
+                            f"Sevk edilen {total:,.1f} mt ile rezervasyon tamamen kullanıldı.")
+                    else:
+                        QMessageBox.information(dlg, "Kısmi Kullanım",
+                            f"{total:,.1f} mt sevk edildi; rezervde {r.get('kalan',0):,.1f} mt kaldı.")
+                _doldur()
+            b_sevk.clicked.connect(_sevk)
+            btn_row.addWidget(b_sevk)
+
+            b_ipt = QPushButton("✕ Seçili Rezervasyonu İptal Et")
+            b_ipt.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 12px;")
+            def _iptal():
+                row = t.currentRow()
+                if row < 0:
+                    return QMessageBox.information(dlg, "Bilgi", "Rezervasyon seçin.")
+                rid = t.item(row, 0).data(Qt.ItemDataRole.UserRole)
+                if QMessageBox.question(dlg, "İptal",
+                        "Seçili rezervasyon iptal edilsin mi?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                        == QMessageBox.StandardButton.Yes:
+                    db.cancel_reservation(rid, CURRENT_USER.get("full_name",""))
+                    _doldur()
+            b_ipt.clicked.connect(_iptal)
+            btn_row.addWidget(b_ipt)
+        btn_row.addStretch()
+        dl.addLayout(btn_row)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dlg.reject); bb.accepted.connect(dlg.accept)
+        bb.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dlg.accept)
+        dl.addWidget(bb)
+        dlg.exec()
+
     def _show_stock_breakdown(self, index):
         """HAM / BOYALI / BASKILI stok hücresine çift tıklanınca
         o kod+tipin tüm depolardaki lokasyon/lot dökümünü gösterir."""
@@ -10311,43 +10451,97 @@ class PlanningView(QWidget):
         if not (isinstance(data, tuple) and len(data) == 2):
             return
         pc, tip = data
-        rows = db.get_stock_breakdown_by_code(pc, tip) or []
         dlg = QDialog(self)
         dlg.setWindowTitle(f"{pc} — {tip} stok dökümü (tüm depolar)")
-        dlg.setMinimumSize(620, 380)
+        dlg.setMinimumSize(760, 420)
         dl = QVBoxLayout(dlg)
-        if not rows:
-            dl.addWidget(QLabel(f"Depolarda <b>{pc}</b> koduna ait <b>{tip}</b> stok bulunmuyor."))
-        else:
-            t = QTableWidget(len(rows) + 1, 6)
-            t.setHorizontalHeaderLabels(["Lokasyon", "Grup", "Lot", "Renk", "Metre", "Kilo"])
-            t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-            t.verticalHeader().setVisible(False)
-            t.setAlternatingRowColors(True)
-            tot_m = tot_k = 0.0
+        t = QTableWidget()
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.verticalHeader().setVisible(False)
+        t.setAlternatingRowColors(True)
+        bos_lbl = QLabel(f"Depolarda <b>{pc}</b> koduna ait <b>{tip}</b> stok bulunmuyor.")
+
+        def _doldur():
+            rows = db.get_stock_breakdown_by_code(pc, tip) or []
+            bos_lbl.setVisible(not rows); t.setVisible(bool(rows))
+            t.clear()
+            t.setColumnCount(8)
+            t.setHorizontalHeaderLabels(
+                ["Lokasyon", "Grup", "Lot", "Renk", "Metre", "Rezerve", "Kullanılabilir", "Kilo"])
+            t.setRowCount(len(rows) + (1 if rows else 0))
+            tot_m = tot_k = tot_r = 0.0
             for i, r in enumerate(rows):
                 r = dict(r)
                 m = float(r.get("meter") or 0); k = float(r.get("kg") or 0)
-                tot_m += m; tot_k += k
+                rez = float(r.get("rezerve_meter") or 0)
+                tot_m += m; tot_k += k; tot_r += rez
                 grp = r.get("group_name") or ""
-                t.setItem(i, 0, QTableWidgetItem(r.get("location", "") or ""))
+                it0 = QTableWidgetItem(r.get("location", "") or "")
+                it0.setData(Qt.ItemDataRole.UserRole, r.get("fabric_id"))
+                t.setItem(i, 0, it0)
                 t.setItem(i, 1, QTableWidgetItem("DEPO" if grp == "DEPO" else (grp or "—")))
                 t.setItem(i, 2, QTableWidgetItem(r.get("lot", "") or "—"))
                 t.setItem(i, 3, QTableWidgetItem(r.get("color", "") or "—"))
-                mi = QTableWidgetItem(f"{m:,.2f}"); mi.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                ki = QTableWidgetItem(f"{k:,.2f}"); ki.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                t.setItem(i, 4, mi); t.setItem(i, 5, ki)
-            # Toplam satırı
-            bold = QFont("", -1, QFont.Weight.Bold)
-            last = len(rows)
-            for c, val in [(0, "TOPLAM"), (4, f"{tot_m:,.2f}"), (5, f"{tot_k:,.2f}")]:
-                it = QTableWidgetItem(val); it.setFont(bold)
-                if c in (4, 5):
-                    it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-                t.setItem(last, c, it)
+                for c, v, renk in ((4, m, None), (5, rez, "#C62828" if rez > 0 else None),
+                                   (6, m - rez, "#2E7D32"), (7, k, None)):
+                    ci = QTableWidgetItem(f"{v:,.2f}")
+                    ci.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    if renk: ci.setForeground(QBrush(QColor(renk)))
+                    t.setItem(i, c, ci)
+            if rows:
+                bold = QFont("", -1, QFont.Weight.Bold)
+                last = len(rows)
+                for c, val in [(0, "TOPLAM"), (4, f"{tot_m:,.2f}"), (5, f"{tot_r:,.2f}"),
+                               (6, f"{tot_m - tot_r:,.2f}"), (7, f"{tot_k:,.2f}")]:
+                    it = QTableWidgetItem(val); it.setFont(bold)
+                    if c >= 4:
+                        it.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    t.setItem(last, c, it)
             t.resizeColumnsToContents()
             t.horizontalHeader().setStretchLastSection(True)
-            dl.addWidget(t)
+
+        _doldur()
+        dl.addWidget(bos_lbl); dl.addWidget(t)
+
+        btn_row = QHBoxLayout()
+        if CURRENT_USER.get("role") in ("admin", "planlama") and self._current_order_id:
+            b_rez = QPushButton("📌 Seçili Lotu Bu Siparişe Rezerve Et (3 gün)")
+            b_rez.setStyleSheet("background:#1565C0;color:white;font-weight:bold;"
+                                "border-radius:4px;padding:6px 12px;")
+            def _rezerve():
+                row = t.currentRow()
+                if row < 0 or row >= t.rowCount() - 1:
+                    return QMessageBox.information(dlg, "Bilgi", "Rezerve edilecek lot satırını seçin.")
+                fid = t.item(row, 0).data(Qt.ItemDataRole.UserRole)
+                try:
+                    avail = float(t.item(row, 6).text().replace(",", ""))
+                except Exception:
+                    avail = 0
+                if avail <= 0:
+                    return QMessageBox.warning(dlg, "Rezerve", "Bu lotta kullanılabilir miktar kalmamış.")
+                order = db.get_order(self._current_order_id) or {}
+                from PyQt6.QtWidgets import QInputDialog
+                mt, ok = QInputDialog.getDouble(
+                    dlg, "Rezerve Miktarı",
+                    f"{order.get('order_no','')} siparişi için rezerve edilecek metre "
+                    f"(kullanılabilir {avail:,.1f} mt):", avail, 0.01, avail, 1)
+                if not ok:
+                    return
+                r = db.add_reservation(fabric_id=fid, order_id=self._current_order_id,
+                                       order_no=order.get("order_no",""), meter=mt,
+                                       user_name=CURRENT_USER.get("full_name",""))
+                if r.get("ok"):
+                    QMessageBox.information(dlg, "Rezerve Edildi",
+                        f"{mt:,.1f} mt {order.get('order_no','')} siparişine rezerve edildi (3 gün geçerli).")
+                    _doldur()
+                else:
+                    QMessageBox.warning(dlg, "Rezerve Edilemedi", r.get("error", "Bilinmeyen hata"))
+            b_rez.clicked.connect(_rezerve)
+            btn_row.addWidget(b_rez)
+        btn_row.addStretch()
+        dl.addLayout(btn_row)
+
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
         bb.rejected.connect(dlg.reject); bb.accepted.connect(dlg.accept)
         bb.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dlg.accept)
@@ -10429,29 +10623,34 @@ class PlanningView(QWidget):
         order = db.get_order(self._current_order_id)
         if not order:
             return
+        # Satınalma her durumda açılabilir: stok yeterli olsa da seçili kalem PO'ya girer.
+        # Varsayılan miktar: eksik varsa eksik, yoksa sipariş miktarının tamamı
+        # (PO ekranında 'Ham Sip. Mt' sütunundan elle değiştirilebilir).
         missing_items = []
         for row in range(self.need_table.rowCount()):
             chk = self.need_table.item(row, 0)
             if chk and chk.checkState() == Qt.CheckState.Checked:
                 it = chk.data(Qt.ItemDataRole.UserRole)
                 pc = it.get("product_code","")
-                stock = db.get_fabric_stock_in_depo(pc, "HAM") or {"meter": 0}
-                depo_m = float(stock.get("meter", 0) or 0)
+                ham_m = sum(float(r.get("meter") or 0)
+                            for r in (db.get_stock_breakdown_by_code(pc, "HAM") or []))
                 order_m = float(it.get("meter") or 0)
-                missing = max(0.0, order_m - depo_m)
-                if missing > 0:
-                    missing_items.append({
-                        "product_code": pc,
-                        "product_name": it.get("product_name",""),
-                        "composition":  it.get("composition",""),
-                        "width":        it.get("width",""),
-                        "gramaj":       it.get("gramaj",""),
-                        "fabric_type":  "HAM",
-                        "meter":        missing, "kg": 0, "unit_price": 0,
-                        "description":  f"{order.get('order_no','')} için ham dokuma",
-                    })
+                missing = max(0.0, order_m - ham_m)
+                oneri = missing if missing > 0 else order_m
+                missing_items.append({
+                    "product_code": pc,
+                    "product_name": it.get("product_name",""),
+                    "composition":  it.get("composition",""),
+                    "width":        it.get("width",""),
+                    "gramaj":       it.get("gramaj",""),
+                    "fabric_type":  "HAM",
+                    "meter":        oneri, "kg": 0, "unit_price": 0,
+                    "description":  f"{order.get('order_no','')} için ham dokuma"
+                                    + ("" if missing > 0 else f" (depoda {ham_m:,.0f} mt HAM mevcut)"),
+                })
         if not missing_items:
-            QMessageBox.information(self, "Bilgi", "Eksik kalem seçilmedi veya tüm stok yeterli.")
+            QMessageBox.information(self, "Bilgi",
+                "Kalem seçilmedi — PO'ya eklemek istediğiniz satırların 'Seç' kutusunu işaretleyin.")
             return
         dlg = PurchaseOrderDialog(self, missing_items=missing_items)
         if dlg.exec():
