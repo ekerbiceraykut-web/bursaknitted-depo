@@ -585,6 +585,8 @@ class APIHandler(BaseHTTPRequestHandler):
                     cozgu_iplik_kg=body.get("cozgu_iplik_kg",0),
                     atki_iplik_kg=body.get("atki_iplik_kg",0),
                     tahmini_maliyet_usd=body.get("tahmini_maliyet_usd",0),
+                    ham_metre=body.get("ham_metre",0),
+                    cozgu_ucret_usd=body.get("cozgu_ucret_usd",0),
                     notes=body.get("notes",""),
                     created_by=user.get("full_name",""))
                 self._send(_ok(r))

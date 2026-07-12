@@ -958,12 +958,14 @@ class MaliyetWidget(QWidget):
         # Çözgü ağırlığı   = Ham ihtiyaç × (çözgü gramajı ÷ toplam gramaj)
         # Ham Metre        = Çözgü ağırlığı ÷ ham çözgü gramajı (gr/mt)
         # Çözgü Metresi    = Ham Metre × 1.10 (kıvrım %10 sabit)
+        ham_metre_1mt = cozgu_metre_1mt = 0.0
         if m_en > 0 and m_gr > 0 and cozgu_grs_total > 0 and total_grs > 0:
             ham_ihtiyac  = (m_en / 100.0) * m_gr * (1 + fire_pct / 100)
             cozgu_orani  = cozgu_grs_total / total_grs
             cozgu_agirlik = ham_ihtiyac * cozgu_orani
             ham_metre    = cozgu_agirlik / cozgu_grs_total
             cozgu_metre  = ham_metre * 1.10
+            ham_metre_1mt, cozgu_metre_1mt = ham_metre, cozgu_metre
             self.res_ham_metre.setText(
                 f"{ham_metre:.4f} mt   ({ham_ihtiyac:.1f} gr × %{cozgu_orani*100:.1f} çözgü ÷ {cozgu_grs_total:.1f} gr/mt)")
             self.res_cozgu_metre.setText(f"{cozgu_metre:.4f} mt")
@@ -1004,6 +1006,9 @@ class MaliyetWidget(QWidget):
             "atki_sik": atki_sik,
             "fason_dokuma_krs": self.fason_dokuma.value(),
             "usd_kuru": usd_kuru,
+            "ham_metre_1mt": ham_metre_1mt,    # 1 mt mamul için gereken ham dokuma
+            "cozgu_metre_1mt": cozgu_metre_1mt,
+            "hazirlik_usd_mt": self.hazirlik_mal.value(),   # çözgü hazırlık $/mt
         }
 
     def _do_convert(self):
@@ -9131,7 +9136,7 @@ class PurchaseOrderDialog(QDialog):
     #      13=Termin, 14=Notlar, 15=Açıklama
     ITEM_COLS = [
         "Ürün Kodu", "Ürün Adı", "Kumaş Tipi", "Tedarikçi", "Para Birimi",
-        "Sip. Mt", "Ham Sip. Mt (+%20)", "Sip. Kg", "Ham Kg (+%20)",
+        "Sip. Mt", "Ham Sip. Mt (+%20)", "Sip. Kg", "Ham Kg (+%10)",
         "Birim Fiyat", "Toplam", "Ödeme Şekli",
         "Teslimat Şekli", "Termin", "Notlar", "Açıklama",
     ]
@@ -9153,7 +9158,8 @@ class PurchaseOrderDialog(QDialog):
         hint = QLabel(
             "<i>Her kalem için kumaş tipi, tedarikçi ve para birimi ayrı seçilebilir. "
             "Aynı tedarikçiye ait kalemler otomatik aynı PO'ya eklenir. "
-            "Sip. Mt/Kg referans; Ham değerler %20 artışlı önerilen miktardır.</i>"
+            "Sip. Kg ürün ağacındaki En × Gramaj'dan otomatik hesaplanır; "
+            "Ham Mt +%20, Ham Kg +%10 önerilen miktardır.</i>"
         )
         hint.setStyleSheet("color:#757575;font-size:11px;"); hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -9186,7 +9192,8 @@ class PurchaseOrderDialog(QDialog):
         lay.addWidget(btns)
 
     def _reload_suppliers(self):
-        self._suppliers = db.get_all_suppliers()
+        # dict'e çevir: yerel modda sqlite3.Row döner, .get() çağrısı çöker
+        self._suppliers = [dict(s) for s in (db.get_all_suppliers() or [])]
         for row in range(self.table.rowCount()):
             sup_cb = self.table.cellWidget(row, 3)
             if isinstance(sup_cb, QComboBox):
@@ -9255,10 +9262,22 @@ class PurchaseOrderDialog(QDialog):
 
         orig_meter = float(item.get("meter") or 0)
         orig_kg    = float(item.get("kg") or 0)
+        # Kilo verilmemişse ürün ağacındaki En × Gramaj'dan otomatik hesapla:
+        # kg = metre × (en/100) × (gramaj/1000)
+        if orig_kg <= 0 and orig_meter > 0 and item.get("product_code"):
+            try:
+                p = db.get_product_by_code(item.get("product_code")) or {}
+                p = dict(p)
+                en = float(str(p.get("width") or "0").replace(",", ".") or 0)
+                gr = float(str(p.get("gramaj") or "0").replace(",", ".") or 0)
+                if en > 0 and gr > 0:
+                    orig_kg = round(orig_meter * (en / 100.0) * gr / 1000.0, 2)
+            except Exception:
+                pass
         ham_meter  = item.get("ham_meter")
         ham_kg     = item.get("ham_kg")
         if ham_meter is None: ham_meter = round(orig_meter * 1.20, 2)
-        if ham_kg    is None: ham_kg    = round(orig_kg    * 1.20, 2)
+        if ham_kg    is None: ham_kg    = round(orig_kg    * 1.10, 2)   # ham kilo +%10
         termin = item.get("termin") or QDate.currentDate().addDays(30).toString("dd.MM.yyyy")
 
         text_vals = {
@@ -10022,15 +10041,24 @@ class YarnPODialog(QDialog):
         except Exception:
             pass
 
+        # İplik adları ürün kataloğundan (çözgü1/atkı1) önerilir
+        p = db.get_product_by_code(self.ue.get("product_code", "")) or {}
+        p = dict(p) if p else {}
+        oneri_cozgu = (p.get("cozgu1") or "").strip()
+        oneri_atki = (p.get("atki1") or "").strip()
+
         grid = QGridLayout()
-        for c, h in enumerate(["", "İplik (katalogdan seç ya da yaz)", "Miktar (kg)",
+        for c, h in enumerate(["", "İplik (üründen önerildi — değiştirilebilir)", "Miktar (kg)",
                                "Tedarikçi", "Fiyat ($/kg)"]):
             lb = QLabel(f"<b>{h}</b>"); grid.addWidget(lb, 0, c)
         self._rows = []
-        varsayilan = [("Çözgü", float(self.ue.get("cozgu_iplik_kg") or 0)),
-                      ("Atkı",  float(self.ue.get("atki_iplik_kg") or 0))]
-        for i, (rol, kg0) in enumerate(varsayilan):
-            chk = QCheckBox(rol); chk.setChecked(kg0 > 0)
+        tip = self.ue.get("tip", "FASON")
+        varsayilan = [("Çözgü", float(self.ue.get("cozgu_iplik_kg") or 0), oneri_cozgu,
+                       tip in ("FASON", "ÇÖZGÜ ÇÖZME")),
+                      ("Atkı",  float(self.ue.get("atki_iplik_kg") or 0), oneri_atki,
+                       tip in ("FASON", "FASON DOKUMA"))]
+        for i, (rol, kg0, oneri_ad, aktif) in enumerate(varsayilan):
+            chk = QCheckBox(rol); chk.setChecked(aktif and kg0 > 0)
             ipl = QComboBox(); ipl.setEditable(True); _make_searchable(ipl)
             ipl.addItem("", None)
             for ad, fiyat, ted in self._katalog:
@@ -10053,8 +10081,15 @@ class YarnPODialog(QDialog):
                         if j >= 0: _ted.setCurrentIndex(j)
                         else: _ted.setCurrentText(t)
             ipl.currentIndexChanged.connect(_katalog_sec)
+            # Üründeki iplik adını öner: katalogda varsa seç (fiyat/tedarikçi dolar), yoksa yaz
+            if oneri_ad:
+                j = ipl.findText(oneri_ad)
+                if j >= 0: ipl.setCurrentIndex(j)
+                else: ipl.setCurrentText(oneri_ad)
             for c, w in enumerate([chk, ipl, kg, ted_cb, fiy]):
                 grid.addWidget(w, i + 1, c)
+                if not aktif:
+                    w.setEnabled(False)   # emir tipine ait olmayan satır kapalı
             self._rows.append({"rol": rol, "chk": chk, "ipl": ipl, "kg": kg,
                                "ted": ted_cb, "fiy": fiy})
         lay.addLayout(grid)
@@ -10090,23 +10125,27 @@ class YarnPODialog(QDialog):
 
 
 class ProductionOrderDialog(QDialog):
-    """Üretim emri oluşturma — FASON (iplik+çözgü+dokuma) veya HAZIR ALIM.
-    İhtiyaçlar ürün ağacındaki maliyet verisinden otomatik hesaplanır."""
+    """Üretim emri oluşturma — FASON yolunda ÇÖZGÜ ÇÖZME ve FASON DOKUMA
+    emirleri AYRI AYRI açılır; HAZIR ALIM tek emirdir.
+    Miktar MAMUL metre olarak girilir; dokuma (ham) ve çözgü metreleri
+    ürün kataloğundaki hesapla (En × Gramaj × boya firesi zinciri) bulunur."""
 
     def __init__(self, parent, order, product_code, default_miktar=0):
         super().__init__(parent)
         self.order = dict(order or {})
         self.product_code = product_code
         self.setWindowTitle(f"🏭 Üretim Emri — {product_code}")
-        self.setMinimumSize(560, 560)
+        self.setMinimumSize(580, 620)
 
         # Ürün ağacından hesap değerleri (gizli maliyet widget'ı ile)
         self._calc = {}
+        self._urun = {}
         p = db.get_product_by_code(product_code)
         if p:
+            self._urun = dict(p)
             try:
                 mw = MaliyetWidget()
-                mw.load(dict(p))
+                mw.load(self._urun)
                 self._calc = dict(getattr(mw, "calc_values", {}) or {})
                 mw.deleteLater()
             except Exception:
@@ -10118,7 +10157,7 @@ class ProductionOrderDialog(QDialog):
                                        f"{self.order.get('customer_name','')}"))
         form.addRow("Ürün Kodu:", QLabel(f"<b>{product_code}</b>"))
         self.tip = QComboBox()
-        self.tip.addItem("Fason Dokuma (iplik + çözgü + dokuma)", "FASON")
+        self.tip.addItem("Fason Üretim (çözgü çözme + dokuma — ayrı emirler)", "FASON")
         self.tip.addItem("Hazır Ham Alımı (satınalma)", "HAZIR ALIM")
         self.tip.currentIndexChanged.connect(self._tip_degisti)
         form.addRow("Üretim Yolu:", self.tip)
@@ -10126,18 +10165,25 @@ class ProductionOrderDialog(QDialog):
         self.miktar.setDecimals(0); self.miktar.setSuffix(" mt")
         self.miktar.setValue(max(1, default_miktar))
         self.miktar.valueChanged.connect(self._hesapla)
-        form.addRow("Üretilecek Ham Miktar:", self.miktar)
+        form.addRow("Üretilecek Mamul Miktar:", self.miktar)
         lay.addLayout(form)
 
-        # ── FASON bölümü ──
-        self.grp_fason = QGroupBox("Fason Dokuma Planı (ürün ağacından otomatik)")
-        ff = QFormLayout(self.grp_fason); ff.setSpacing(6)
-        self.lbl_cozgu_mt = QLabel("—"); self.lbl_cz_kg = QLabel("—"); self.lbl_at_kg = QLabel("—")
-        for l in (self.lbl_cozgu_mt, self.lbl_cz_kg, self.lbl_at_kg):
+        # ── Hesap: ürün kataloğundaki gibi ──
+        grp_hesap = QGroupBox("İhtiyaç Hesabı (ürün kataloğundan)")
+        fh0 = QFormLayout(grp_hesap); fh0.setSpacing(6)
+        self.lbl_ham_mt = QLabel("—"); self.lbl_cozgu_mt = QLabel("—")
+        self.lbl_cz_kg = QLabel("—"); self.lbl_at_kg = QLabel("—")
+        for l in (self.lbl_ham_mt, self.lbl_cozgu_mt, self.lbl_cz_kg, self.lbl_at_kg):
             l.setStyleSheet("font-weight:bold; color:#1565C0;")
-        ff.addRow("Çözgü Metresi (kıvrım %10):", self.lbl_cozgu_mt)
-        ff.addRow("Çözgü İpliği:", self.lbl_cz_kg)
-        ff.addRow("Atkı İpliği:", self.lbl_at_kg)
+        fh0.addRow("Dokuma (Ham) Metresi:", self.lbl_ham_mt)
+        fh0.addRow("Çözgü Metresi (kıvrım %10):", self.lbl_cozgu_mt)
+        fh0.addRow("Çözgü İpliği:", self.lbl_cz_kg)
+        fh0.addRow("Atkı İpliği:", self.lbl_at_kg)
+        lay.addWidget(grp_hesap)
+
+        # ── ÇÖZGÜ ÇÖZME emri ──
+        self.grp_cozgu = QGroupBox("1️⃣ Çözgü Çözme Emri")
+        fc = QFormLayout(self.grp_cozgu); fc.setSpacing(6)
         self.cozgucu = QComboBox(); _make_searchable(self.cozgucu)
         self.dokumaci = QComboBox(); _make_searchable(self.dokumaci)
         for cb in (self.cozgucu, self.dokumaci):
@@ -10145,8 +10191,15 @@ class ProductionOrderDialog(QDialog):
             for s in (db.get_all_suppliers() or []):
                 s = dict(s)
                 cb.addItem(s.get("name",""), s.get("name",""))
-        ff.addRow("Çözgücü:", self.cozgucu)
-        ff.addRow("Çözgü Çözme Ücreti:", self._spin_row("cozgu_ucret", 0, " TL/mt"))
+        fc.addRow("Çözgücü:", self.cozgucu)
+        # Ücret ürün kataloğundaki Çözgü Hazırlık Maliyeti'nden ($/mt) gelir
+        fc.addRow("Çözgü Çözme Ücreti:", self._spin_row(
+            "cozgu_ucret", self._calc.get("hazirlik_usd_mt", 0), " $/mt"))
+        lay.addWidget(self.grp_cozgu)
+
+        # ── FASON DOKUMA emri ──
+        self.grp_fason = QGroupBox("2️⃣ Fason Dokuma Emri")
+        ff = QFormLayout(self.grp_fason); ff.setSpacing(6)
         ff.addRow("Dokumacı:", self.dokumaci)
         ff.addRow("Fason Dokuma Ücreti:", self._spin_row(
             "fason_ucret", self._calc.get("fason_dokuma_krs", 0), " krş/100 atkı"))
@@ -10156,7 +10209,7 @@ class ProductionOrderDialog(QDialog):
             "usd_kuru", self._calc.get("usd_kuru") or 35.0, " TL/$"))
         self.lbl_tahmin = QLabel("—")
         self.lbl_tahmin.setStyleSheet("font-weight:bold; color:#C62828; font-size:13px;")
-        ff.addRow("Tahmini Maliyet (çözgü+dokuma):", self.lbl_tahmin)
+        ff.addRow("Tahmini Maliyet (çözgü + dokuma):", self.lbl_tahmin)
         ipl_not = QLabel("İplik maliyeti, iplik satınalma siparişleri açıldıkça emre işlenecek.")
         ipl_not.setStyleSheet("color:#757575; font-size:11px;")
         ff.addRow("", ipl_not)
@@ -10169,7 +10222,7 @@ class ProductionOrderDialog(QDialog):
         self.tedarikci_kodu.setPlaceholderText("Tedarikçinin kendi ürün kodu (varsa)")
         fh.addRow("Tedarikçi Kodu:", self.tedarikci_kodu)
         hz_not = QLabel("Emir kaydedildikten sonra 'Satınalma Siparişi Oluştur' ile PO açın —\n"
-                        "konstrüksiyon özeti PO'ya otomatik eklenecek (4b).")
+                        "konstrüksiyon özeti PO'ya otomatik eklenir.")
         hz_not.setStyleSheet("color:#757575; font-size:11px;")
         fh.addRow("", hz_not)
         lay.addWidget(self.grp_hazir)
@@ -10180,7 +10233,7 @@ class ProductionOrderDialog(QDialog):
         lay.addStretch()
 
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
-        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Üretim Emri Oluştur")
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Üretim Emirlerini Oluştur")
         bb.accepted.connect(self._accept); bb.rejected.connect(self.reject)
         lay.addWidget(bb)
 
@@ -10198,66 +10251,90 @@ class ProductionOrderDialog(QDialog):
 
     def _tip_degisti(self):
         fason = self.tip.currentData() == "FASON"
+        self.grp_cozgu.setVisible(fason)
         self.grp_fason.setVisible(fason)
         self.grp_hazir.setVisible(not fason)
 
     def _hesapla(self):
-        m = self.miktar.value()
+        m = self.miktar.value()   # MAMUL metre
         cz_grs = float(self._calc.get("cozgu_grs") or 0)
         at_grs = float(self._calc.get("atki_grs") or 0)
-        cozgu_mt = m * 1.10
+        ham_1 = float(self._calc.get("ham_metre_1mt") or 0)
+        cz_1  = float(self._calc.get("cozgu_metre_1mt") or 0)
+        ham_mt = m * ham_1
+        cozgu_mt = m * cz_1
         cz_kg = cozgu_mt * cz_grs / 1000.0
-        at_kg = m * at_grs / 1000.0
-        self._son = {"cozgu_metre": cozgu_mt, "cozgu_iplik_kg": cz_kg, "atki_iplik_kg": at_kg}
-        if cz_grs > 0:
+        at_kg = ham_mt * at_grs / 1000.0
+        self._son = {"ham_metre": ham_mt, "cozgu_metre": cozgu_mt,
+                     "cozgu_iplik_kg": cz_kg, "atki_iplik_kg": at_kg}
+        if ham_1 > 0:
+            self.lbl_ham_mt.setText(f"{ham_mt:,.0f} mt   ({ham_1:.4f} mt/mt mamul)")
             self.lbl_cozgu_mt.setText(f"{cozgu_mt:,.0f} mt")
-            self.lbl_cz_kg.setText(f"{cz_kg:,.1f} kg   ({cz_grs:.1f} gr/mt)")
-            self.lbl_at_kg.setText(f"{at_kg:,.1f} kg   ({at_grs:.1f} gr/mt)")
+            self.lbl_cz_kg.setText(
+                f"{cz_kg:,.1f} kg   {self._urun.get('cozgu1','') or ''}")
+            self.lbl_at_kg.setText(
+                f"{at_kg:,.1f} kg   {self._urun.get('atki1','') or ''}")
         else:
-            self.lbl_cozgu_mt.setText("—  (ürün ağacında maliyet/iplik verisi yok)")
-            self.lbl_cz_kg.setText("—"); self.lbl_at_kg.setText("—")
+            eksik = "ürün kataloğunda Mamul En/Gramaj veya iplik verisi eksik"
+            self.lbl_ham_mt.setText(f"—  ({eksik})")
+            for l in (self.lbl_cozgu_mt, self.lbl_cz_kg, self.lbl_at_kg):
+                l.setText("—")
+        # Tahmini maliyet: çözgü $/mt doğrudan USD; dokuma krş → kur ile USD
         kur = max(0.01, self.usd_kuru.value())
-        dokuma_usd = self.fason_ucret.value() * self.atki_sik.value() / 100.0 / kur * m
-        cozgu_usd = self.cozgu_ucret.value() * cozgu_mt / kur
-        self._son["tahmini_usd"] = dokuma_usd + cozgu_usd
+        dokuma_usd = self.fason_ucret.value() * self.atki_sik.value() / 100.0 / kur * ham_mt
+        cozgu_usd = self.cozgu_ucret.value() * cozgu_mt
+        self._son["dokuma_usd"] = dokuma_usd
+        self._son["cozgu_usd"] = cozgu_usd
         self.lbl_tahmin.setText(
             f"{dokuma_usd + cozgu_usd:,.2f} $   (dokuma {dokuma_usd:,.2f} + çözgü {cozgu_usd:,.2f})")
 
     def _accept(self):
         if self.miktar.value() <= 0:
             return QMessageBox.warning(self, "Eksik", "Üretilecek miktarı girin.")
-        if self.tip.currentData() == "FASON" and not self.dokumaci.currentData():
-            if QMessageBox.question(self, "Dokumacı",
-                    "Dokumacı seçilmedi — yine de kaydedilsin mi?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
-                    != QMessageBox.StandardButton.Yes:
-                return
+        if self.tip.currentData() == "FASON":
+            if not self._son.get("ham_metre"):
+                return QMessageBox.warning(self, "Eksik",
+                    "Dokuma metresi hesaplanamadı — ürün kataloğunda Maliyet sekmesindeki\n"
+                    "Mamul En/Gramaj ve iplik bilgilerini doldurun.")
+            if not self.dokumaci.currentData():
+                if QMessageBox.question(self, "Dokumacı",
+                        "Dokumacı seçilmedi — yine de kaydedilsin mi?",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                        != QMessageBox.StandardButton.Yes:
+                    return
         self.accept()
 
-    def result_data(self):
+    def result_orders(self):
+        """Oluşturulacak emirlerin listesi: FASON'da 2 (çözgü + dokuma), diğerinde 1."""
         tip = self.tip.currentData()
         notes = self.notlar.text().strip()
-        if tip == "HAZIR ALIM" and self.tedarikci_kodu.text().strip():
-            tk = f"Tedarikçi kodu: {self.tedarikci_kodu.text().strip()}"
-            notes = f"{notes} | {tk}" if notes else tk
-        return {
-            "order_id": self.order.get("id"),
-            "order_no": self.order.get("order_no", ""),
-            "product_code": self.product_code,
-            "tip": tip,
-            "miktar_mt": self.miktar.value(),
-            "dokumaci": self.dokumaci.currentData() or "",
-            "cozgucu": self.cozgucu.currentData() or "",
-            "fason_ucret_krs": self.fason_ucret.value(),
-            "cozgu_ucret_tl": self.cozgu_ucret.value(),
-            "usd_kuru": self.usd_kuru.value(),
-            "atki_siklik": self.atki_sik.value(),
-            "cozgu_metre": self._son.get("cozgu_metre", 0),
-            "cozgu_iplik_kg": self._son.get("cozgu_iplik_kg", 0),
-            "atki_iplik_kg": self._son.get("atki_iplik_kg", 0),
-            "tahmini_maliyet_usd": self._son.get("tahmini_usd", 0),
-            "notes": notes,
-        }
+        ortak = {"order_id": self.order.get("id"),
+                 "order_no": self.order.get("order_no", ""),
+                 "product_code": self.product_code,
+                 "miktar_mt": self.miktar.value()}   # mamul miktar
+        if tip == "HAZIR ALIM":
+            if self.tedarikci_kodu.text().strip():
+                tk = f"Tedarikçi kodu: {self.tedarikci_kodu.text().strip()}"
+                notes = f"{notes} | {tk}" if notes else tk
+            return [dict(ortak, tip="HAZIR ALIM",
+                         ham_metre=self._son.get("ham_metre", 0), notes=notes)]
+        cozgu = dict(ortak, tip="ÇÖZGÜ ÇÖZME",
+                     cozgucu=self.cozgucu.currentData() or "",
+                     cozgu_ucret_usd=self.cozgu_ucret.value(),
+                     cozgu_metre=self._son.get("cozgu_metre", 0),
+                     cozgu_iplik_kg=self._son.get("cozgu_iplik_kg", 0),
+                     tahmini_maliyet_usd=self._son.get("cozgu_usd", 0),
+                     notes=notes)
+        dokuma = dict(ortak, tip="FASON DOKUMA",
+                      dokumaci=self.dokumaci.currentData() or "",
+                      fason_ucret_krs=self.fason_ucret.value(),
+                      atki_siklik=self.atki_sik.value(),
+                      usd_kuru=self.usd_kuru.value(),
+                      ham_metre=self._son.get("ham_metre", 0),
+                      atki_iplik_kg=self._son.get("atki_iplik_kg", 0),
+                      tahmini_maliyet_usd=self._son.get("dokuma_usd", 0),
+                      notes=notes)
+        return [cozgu, dokuma]
 
 
 class PlanningView(QWidget):
@@ -10481,10 +10558,10 @@ class PlanningView(QWidget):
         # ── Üretim Emirleri ──────────────────────────────────────
         rl.addWidget(QLabel("<b>🏭 Üretim Emirleri</b>"))
         self.ue_table = QTableWidget()
-        self.ue_table.setColumnCount(9)
+        self.ue_table.setColumnCount(10)
         self.ue_table.setHorizontalHeaderLabels(
-            ["ÜE No", "Ürün", "Tip", "Miktar (mt)", "Çözgü (mt)",
-             "Çözgü İplik (kg)", "Atkı İplik (kg)", "Dokumacı", "Durum"])
+            ["ÜE No", "Ürün", "Tip", "Mamul (mt)", "Ham (mt)", "Çözgü (mt)",
+             "Çözgü İplik (kg)", "Atkı İplik (kg)", "Fasoncu", "Durum"])
         self.ue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.ue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.ue_table.verticalHeader().setVisible(False)
@@ -10941,16 +11018,17 @@ class PlanningView(QWidget):
         dlg = ProductionOrderDialog(self, order, pc, default_miktar=default_m)
         if not dlg.exec():
             return
-        d = dlg.result_data()
-        d["created_by"] = CURRENT_USER.get("full_name", "")
-        r = db.add_production_order(**d)
-        if r.get("id"):
+        olusan = []
+        for d in dlg.result_orders():
+            d["created_by"] = CURRENT_USER.get("full_name", "")
+            r = db.add_production_order(**d)
+            if r.get("id"):
+                olusan.append(f"{r.get('ue_no','')} ({d['tip']})")
+        if olusan:
             QMessageBox.information(self, "Üretim Emri",
-                f"<b>{r.get('ue_no','')}</b> oluşturuldu — {d['miktar_mt']:,.0f} mt "
-                f"{d['tip']}.\nÇözgü {d['cozgu_metre']:,.0f} mt | "
-                f"İplik: {d['cozgu_iplik_kg']:,.1f} + {d['atki_iplik_kg']:,.1f} kg")
+                "Oluşturulan emirler:\n• " + "\n• ".join(olusan))
         else:
-            QMessageBox.warning(self, "Hata", str(r.get("error", "Emir oluşturulamadı")))
+            QMessageBox.warning(self, "Hata", "Emir oluşturulamadı.")
         self._refresh_ue_table()
 
     def _refresh_ue_table(self, order_id=None):
@@ -10975,12 +11053,14 @@ class PlanningView(QWidget):
             self.ue_table.setItem(i, 0, it0)
             self.ue_table.setItem(i, 1, QTableWidgetItem(r.get("product_code", "")))
             self.ue_table.setItem(i, 2, QTableWidgetItem(r.get("tip", "")))
-            for c, v in ((3, r.get("miktar_mt")), (4, r.get("cozgu_metre")),
-                         (5, r.get("cozgu_iplik_kg")), (6, r.get("atki_iplik_kg"))):
-                ci = QTableWidgetItem(f"{float(v or 0):,.1f}")
+            for c, v in ((3, r.get("miktar_mt")), (4, r.get("ham_metre")),
+                         (5, r.get("cozgu_metre")),
+                         (6, r.get("cozgu_iplik_kg")), (7, r.get("atki_iplik_kg"))):
+                ci = QTableWidgetItem(f"{float(v or 0):,.1f}" if v else "—")
                 ci.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 self.ue_table.setItem(i, c, ci)
-            self.ue_table.setItem(i, 7, QTableWidgetItem(r.get("dokumaci", "") or "—"))
+            fasoncu = r.get("dokumaci") or r.get("cozgucu") or "—"
+            self.ue_table.setItem(i, 8, QTableWidgetItem(fasoncu))
             durum = r.get("durum", "")
             durum_txt = durum
             if durum == "İPLİK BEKLENİYOR":
@@ -10992,23 +11072,31 @@ class PlanningView(QWidget):
             st = QTableWidgetItem(durum_txt)
             st.setForeground(QBrush(QColor(renk.get(durum, "#333"))))
             f = QFont(); f.setBold(True); st.setFont(f)
-            self.ue_table.setItem(i, 8, st)
+            self.ue_table.setItem(i, 9, st)
         self.ue_table.resizeColumnsToContents()
 
     def _selected_ue(self):
         row = self.ue_table.currentRow()
         if row < 0:
             QMessageBox.information(self, "Bilgi", "Üretim emri seçin."); return None, None
-        return (self.ue_table.item(row, 0).data(Qt.ItemDataRole.UserRole),
-                self.ue_table.item(row, 8).text())
+        durum = self.ue_table.item(row, 9).text().split("  ")[0]   # '✓ iplikler geldi' ekini at
+        return (self.ue_table.item(row, 0).data(Qt.ItemDataRole.UserRole), durum)
+
+    # Emir tipine göre durum akışları
+    _UE_FLOWS = {
+        "ÇÖZGÜ ÇÖZME":  ["PLANLANDI", "İPLİK BEKLENİYOR", "ÇÖZGÜ HAZIR", "TAMAMLANDI"],
+        "FASON DOKUMA": ["PLANLANDI", "İPLİK BEKLENİYOR", "DOKUMADA", "TAMAMLANDI"],
+        "HAZIR ALIM":   ["PLANLANDI", "TAMAMLANDI"],
+        "FASON":        ["PLANLANDI", "İPLİK BEKLENİYOR", "ÇÖZGÜ HAZIR", "DOKUMADA", "TAMAMLANDI"],
+    }
 
     def _advance_production_order(self):
         pid, durum = self._selected_ue()
         if not pid:
             return
-        sira = _local_db.PRODUCTION_STATUSES if hasattr(_local_db, "PRODUCTION_STATUSES") else \
-               ["PLANLANDI", "İPLİK BEKLENİYOR", "ÇÖZGÜ HAZIR", "DOKUMADA", "TAMAMLANDI"]
-        akis = [s for s in sira if s != "İPTAL"]
+        row = self.ue_table.currentRow()
+        tip = self.ue_table.item(row, 2).text() if row >= 0 else "FASON"
+        akis = self._UE_FLOWS.get(tip, self._UE_FLOWS["FASON"])
         if durum not in akis or durum == "TAMAMLANDI":
             return QMessageBox.information(self, "Bilgi", f"'{durum}' durumundan ilerletilemez.")
         yeni = akis[akis.index(durum) + 1]
@@ -11045,24 +11133,29 @@ class PlanningView(QWidget):
         if ue.get("durum") in ("TAMAMLANDI", "İPTAL"):
             return QMessageBox.information(self, "Bilgi",
                 f"'{ue.get('durum')}' durumundaki emir için giriş yapılamaz.")
-        if ue.get("tip") != "FASON":
+        if ue.get("tip") == "HAZIR ALIM":
             return QMessageBox.information(self, "Bilgi",
                 "Hazır alım emirlerinin girişi PO mal girişi üzerinden yapılır\n"
                 "(stok listesi → Yeni Kumaş → açık PO kalemleri).")
+        if ue.get("tip") == "ÇÖZGÜ ÇÖZME":
+            return QMessageBox.information(self, "Bilgi",
+                "Çözgü çözme emri kumaş girişi üretmez — durumunu 'İlerlet' ile\n"
+                "ÇÖZGÜ HAZIR → TAMAMLANDI yapın. Ham girişi dokuma emrinden yapılır.")
 
         dlg = QDialog(self)
         dlg.setWindowTitle(f"📥 Ham Girişi — {ue.get('ue_no','')}")
         dlg.setMinimumWidth(420)
         dl = QVBoxLayout(dlg)
         form = QFormLayout(); form.setSpacing(8)
+        hedef_ham = float(ue.get("ham_metre") or 0) or float(ue.get("miktar_mt") or 0)
         form.addRow("Emir:", QLabel(f"<b>{ue.get('ue_no','')}</b> — {ue.get('product_code','')} "
-                                    f"({float(ue.get('miktar_mt') or 0):,.0f} mt hedef)"))
+                                    f"({hedef_ham:,.0f} mt ham hedef)"))
         loc = QComboBox(); _make_searchable(loc)
         for l in (db.get_active_locations() or []):
             l = dict(l)
             loc.addItem(l.get("name", ""), l.get("group_name", ""))
         metre = QDoubleSpinBox(); metre.setRange(0.01, 9999999); metre.setDecimals(2)
-        metre.setSuffix(" mt"); metre.setValue(float(ue.get("miktar_mt") or 0))
+        metre.setSuffix(" mt"); metre.setValue(hedef_ham)
         kg = QDoubleSpinBox(); kg.setRange(0, 9999999); kg.setDecimals(2); kg.setSuffix(" kg")
         from datetime import date as _d
         lot = QLineEdit(f"FSN-{_d.today().strftime('%Y%m%d')}-{ue.get('id','')}")
@@ -11089,7 +11182,7 @@ class PlanningView(QWidget):
             description=f"SİPARİŞ:{ue.get('order_no','')} | ÜE:{ue.get('ue_no','')} | fason dokuma",
             user_name=CURRENT_USER.get("full_name", ""),
             entry_location=loc.currentText())
-        hedef = float(ue.get("miktar_mt") or 0)
+        hedef = hedef_ham
         tamam = metre.value() >= hedef - 0.01
         soru = QMessageBox.question(self, "Emir Durumu",
             f"{metre.value():,.0f} mt ham depoya alındı (hedef {hedef:,.0f} mt).\n\n"
@@ -11117,9 +11210,9 @@ class PlanningView(QWidget):
                    if dict(r).get("id") == pid), None)
         if not ue:
             return
-        if ue.get("tip") != "FASON":
+        if ue.get("tip") not in ("FASON", "ÇÖZGÜ ÇÖZME", "FASON DOKUMA"):
             return QMessageBox.information(self, "Bilgi",
-                "İplik PO'su yalnızca FASON üretim emirleri için açılır.")
+                "İplik PO'su yalnızca fason üretim emirleri için açılır.")
         if ue.get("durum") in ("TAMAMLANDI", "İPTAL"):
             return QMessageBox.information(self, "Bilgi",
                 f"'{ue.get('durum')}' durumundaki emir için iplik PO'su açılamaz.")

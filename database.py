@@ -499,6 +499,8 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now','localtime'))
         )""",
         "CREATE INDEX IF NOT EXISTS idx_prod_order ON production_orders(order_id)",
+        "ALTER TABLE production_orders ADD COLUMN ham_metre REAL DEFAULT 0",
+        "ALTER TABLE production_orders ADD COLUMN cozgu_ucret_usd REAL DEFAULT 0",
         """CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             invoice_no TEXT DEFAULT '',
@@ -2579,6 +2581,7 @@ def add_production_order(order_id=None, order_no="", product_code="", tip="FASON
                          fason_ucret_krs=0, cozgu_ucret_tl=0, usd_kuru=0,
                          atki_siklik=0, cozgu_metre=0, cozgu_iplik_kg=0,
                          atki_iplik_kg=0, tahmini_maliyet_usd=0,
+                         ham_metre=0, cozgu_ucret_usd=0,
                          notes="", created_by=""):
     conn = get_connection()
     ue_no = _generate_ue_no(conn)
@@ -2587,12 +2590,13 @@ def add_production_order(order_id=None, order_no="", product_code="", tip="FASON
             (ue_no, order_id, order_no, product_code, tip, miktar_mt, durum,
              dokumaci, cozgucu, fason_ucret_krs, cozgu_ucret_tl, usd_kuru,
              atki_siklik, cozgu_metre, cozgu_iplik_kg, atki_iplik_kg,
-             tahmini_maliyet_usd, notes, created_by)
-        VALUES (?,?,?,?,?,?, 'PLANLANDI', ?,?,?,?,?,?,?,?,?,?,?,?)
+             tahmini_maliyet_usd, ham_metre, cozgu_ucret_usd, notes, created_by)
+        VALUES (?,?,?,?,?,?, 'PLANLANDI', ?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (ue_no, order_id, order_no or "", product_code or "", tip, miktar_mt or 0,
           dokumaci or "", cozgucu or "", fason_ucret_krs or 0, cozgu_ucret_tl or 0,
           usd_kuru or 0, atki_siklik or 0, cozgu_metre or 0, cozgu_iplik_kg or 0,
-          atki_iplik_kg or 0, tahmini_maliyet_usd or 0, notes or "", created_by))
+          atki_iplik_kg or 0, tahmini_maliyet_usd or 0, ham_metre or 0,
+          cozgu_ucret_usd or 0, notes or "", created_by))
     conn.commit()
     pid = c.lastrowid
     conn.close()
