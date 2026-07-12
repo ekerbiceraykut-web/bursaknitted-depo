@@ -110,11 +110,11 @@ def generate_order_pdf(order, company, file_path):
     elements.append(Spacer(1, 4 * mm))
 
     # ── Sipariş bilgileri ────────────────────────────────────────
+    # Termin, sipariş tarihinin hemen altında; müşteri referansı kalem tablosunda
     info_data = [
         ["Sipariş No:", order.get("order_no", ""), "Sipariş Tarihi:", _fmt_date(order.get("order_date"))],
-        ["Müşteri:", order.get("customer_name", ""), "Müşteri Referans:", order.get("customer_ref", "")],
-        ["Müşteri Vergi No:", order.get("customer_tax_no", "") or "", "", ""],
-        ["Termin:", _fmt_date(order.get("delivery_date")), "Ödeme Şekli:", order.get("payment_method", "")],
+        ["Müşteri:", order.get("customer_name", ""), "Termin:", _fmt_date(order.get("delivery_date"))],
+        ["Müşteri Vergi No:", order.get("customer_tax_no", "") or "", "Ödeme Şekli:", order.get("payment_method", "")],
         ["Teslimat Şartları:", order.get("delivery_terms", ""), "Teslimat Adresi:", order.get("delivery_address", "")],
     ]
     info_table = Table(info_data, colWidths=[32 * mm, 100 * mm, 32 * mm, 109 * mm])
@@ -130,10 +130,23 @@ def generate_order_pdf(order, company, file_path):
     elements.append(Spacer(1, 4 * mm))
 
     # ── Sipariş kalemleri ────────────────────────────────────────
-    headers = ["Ürün Kodu", "Kompozisyon", "En", "Gramaj", "Kumaş Tipi", "Renk",
-               "Lab No", "Açıklama", "Metre", "Kilo", f"Birim Fiyat ({symbol})", f"Tutar ({symbol})",
-               Paragraph("Baskı Tipi", _STYLE_CELL_BOLD), Paragraph("Zemin Rengi", _STYLE_CELL_BOLD),
-               Paragraph("Baskı Desen No", _STYLE_CELL_BOLD)]
+    # Baskı sütunları yalnız BASKILI kalem varsa basılır (boyalı siparişte gelmez)
+    has_print = any((it.get("fabric_type") or "").upper() == "BASKILI" for it in items)
+    musteri_ref = order.get("customer_ref", "") or ""
+
+    def _h(text):
+        return Paragraph(escape(text), _STYLE_CELL_BOLD)
+
+    def _c(text):
+        # Tüm hücreler Paragraph: uzun yazı hücre içinde alt satıra sarar, taşmaz
+        return Paragraph(escape(str(text or "")), _STYLE_CELL)
+
+    headers = [_h("Ürün Kodu"), _h("Kompozisyon"), _h("En"), _h("Gramaj"),
+               _h("Kumaş Tipi"), _h("Renk"), _h("Lab No"), _h("Müşteri Ref."),
+               _h("Açıklama"), _h("Metre"), _h("Kilo"),
+               _h(f"Birim Fiyat ({symbol})"), _h(f"Tutar ({symbol})")]
+    if has_print:
+        headers += [_h("Baskı Tipi"), _h("Zemin Rengi"), _h("Baskı Desen No")]
     item_rows = [headers]
     grand_total = 0.0
     total_meter = 0.0
@@ -146,30 +159,37 @@ def generate_order_pdf(order, company, file_path):
         grand_total += total
         total_meter += meter
         total_kg += kg
-        item_rows.append([
-            Paragraph(escape(it.get("product_code", "")), _STYLE_CELL),
-            Paragraph(escape(it.get("composition", "")), _STYLE_CELL),
-            it.get("width", "") or "",
-            it.get("gramaj", "") or "",
-            Paragraph(escape(it.get("fabric_type", "")), _STYLE_CELL),
-            Paragraph(escape(it.get("color", "")), _STYLE_CELL),
-            it.get("lab_no", "") or "",
-            Paragraph(escape(it.get("description", "")), _STYLE_CELL),
+        row = [
+            _c(it.get("product_code", "")),
+            _c(it.get("composition", "")),
+            _c(it.get("width", "")),
+            _c(it.get("gramaj", "")),
+            _c(it.get("fabric_type", "")),
+            _c(it.get("color", "")),
+            _c(it.get("lab_no", "")),
+            _c(it.get("musteri_ref") or musteri_ref),
+            _c(it.get("description", "")),
             _fmt_num(meter),
             _fmt_num(kg),
             _fmt_num(sale_price),
             _fmt_num(total),
-            Paragraph(escape(it.get("print_type") or ""), _STYLE_CELL),
-            Paragraph(escape(it.get("zemin_rengi") or ""), _STYLE_CELL),
-            Paragraph(escape(it.get("baski_desen_no") or ""), _STYLE_CELL),
-        ])
-    item_rows.append(["GENEL TOPLAM:", "", "", "", "", "", "",
-                       "", _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total),
-                       "", "", ""])
+        ]
+        if has_print:
+            row += [_c(it.get("print_type")), _c(it.get("zemin_rengi")),
+                    _c(it.get("baski_desen_no"))]
+        item_rows.append(row)
+    toplam_row = ["GENEL TOPLAM:", "", "", "", "", "", "", "", "",
+                  _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total)]
+    if has_print:
+        toplam_row += ["", "", ""]
+    item_rows.append(toplam_row)
 
-    col_widths = [20 * mm, 20 * mm, 12 * mm, 14 * mm, 18 * mm, 14 * mm, 15 * mm,
-                   26 * mm, 16 * mm, 16 * mm, 22 * mm, 22 * mm,
-                   16 * mm, 20 * mm, 22 * mm]
+    if has_print:
+        col_widths = [w * mm for w in
+                      (24, 29, 9, 11, 17, 16, 14, 20, 26, 13, 13, 16, 16, 16, 15, 18)]
+    else:
+        col_widths = [w * mm for w in
+                      (26, 34, 10, 12, 16, 18, 16, 24, 41, 14, 14, 24, 24)]
     items_table = Table(item_rows, colWidths=col_widths, repeatRows=1)
     items_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Turkish-Bold"),
@@ -178,10 +198,9 @@ def generate_order_pdf(order, company, file_path):
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EAF6")),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#BDBDBD")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (8, 0), (11, -1), "RIGHT"),
-        ("ALIGN", (2, 0), (3, -1), "CENTER"),
-        ("SPAN", (0, -1), (7, -1)),
-        ("ALIGN", (0, -1), (7, -1), "RIGHT"),
+        ("ALIGN", (9, 0), (12, -1), "RIGHT"),
+        ("SPAN", (0, -1), (8, -1)),
+        ("ALIGN", (0, -1), (8, -1), "RIGHT"),
         ("FONTNAME", (0, -1), (-1, -1), "Turkish-Bold"),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F5F5F5")),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
