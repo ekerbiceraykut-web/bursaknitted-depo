@@ -290,6 +290,15 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/po/open-items":
                 self._send(_ok(db.get_open_po_items()))
 
+            # ── Gelen Faturalar ───────────────────────────────────
+            elif path == "/api/invoices":
+                oid = qs.get("order_id",[""])[0]
+                self._send(_ok(db.get_invoices(order_id=int(oid) if oid else None)))
+
+            elif path.startswith("/api/orders/") and path.endswith("/profit"):
+                oid = int(path.split("/")[-2])
+                self._send(_ok(db.get_order_profit_summary(oid)))
+
             # ── Üretim Emirleri ───────────────────────────────────
             elif path == "/api/production_orders":
                 oid = qs.get("order_id",[""])[0]
@@ -544,6 +553,21 @@ class APIHandler(BaseHTTPRequestHandler):
                     product_code=body.get("product_code","")
                 )
                 self._send(_ok({"id": did}))
+
+            # ── Fatura ekle (muhasebe + admin) ────────────────────
+            elif path == "/api/invoices":
+                if user.get("role") not in ("admin", "muhasebe"):
+                    return self._send(_err("Fatura girme yetkisi yok"), 403)
+                iid = db.add_invoice(
+                    invoice_no=body.get("invoice_no",""),
+                    supplier_name=body.get("supplier_name",""),
+                    invoice_date=body.get("invoice_date",""),
+                    order_id=body.get("order_id"), order_no=body.get("order_no",""),
+                    po_no=body.get("po_no",""), kategori=body.get("kategori","DİĞER"),
+                    tutar=body.get("tutar",0), currency=body.get("currency","USD"),
+                    kur=body.get("kur",0), usd_tutar=body.get("usd_tutar",0),
+                    notes=body.get("notes",""), created_by=user.get("full_name",""))
+                self._send(_ok({"id": iid}))
 
             # ── Üretim emri oluştur / durum (admin + planlama) ────
             elif path == "/api/production_orders":
@@ -852,7 +876,12 @@ class APIHandler(BaseHTTPRequestHandler):
         if not user:
             return self._send(_err("Yetkisiz erişim"), 401)
         try:
-            if path.startswith("/api/fabrics/"):
+            if path.startswith("/api/invoices/"):
+                if user.get("role") not in ("admin", "muhasebe"):
+                    return self._send(_err("Fatura silme yetkisi yok"), 403)
+                db.delete_invoice(int(path.split("/")[-1]))
+                self._send(_ok())
+            elif path.startswith("/api/fabrics/"):
                 fid = int(path.split("/")[-1])
                 db.soft_delete_fabric(fid, user["full_name"])
                 self._send(_ok())

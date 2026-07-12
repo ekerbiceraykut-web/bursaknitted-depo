@@ -654,6 +654,30 @@ def get_open_po_items():
     return _get("/api/po/open-items") or []
 
 
+# ── Gelen Faturalar ───────────────────────────────────────────────
+
+def add_invoice(**kw):
+    try:
+        r = _post("/api/invoices", kw)
+        return (r or {}).get("id")
+    except Exception:
+        return None
+
+def get_invoices(order_id=None):
+    params = {}
+    if order_id: params["order_id"] = str(order_id)
+    return _get("/api/invoices", params) or []
+
+def delete_invoice(iid):
+    _delete(f"/api/invoices/{iid}")
+
+def get_order_profit_summary(order_id):
+    try:
+        return _get(f"/api/orders/{order_id}/profit") or {}
+    except Exception:
+        return {}
+
+
 # ── Üretim Emirleri ───────────────────────────────────────────────
 
 def add_production_order(**kw):

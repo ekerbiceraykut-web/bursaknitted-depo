@@ -499,6 +499,24 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now','localtime'))
         )""",
         "CREATE INDEX IF NOT EXISTS idx_prod_order ON production_orders(order_id)",
+        """CREATE TABLE IF NOT EXISTS invoices (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            invoice_no TEXT DEFAULT '',
+            supplier_name TEXT DEFAULT '',
+            invoice_date TEXT DEFAULT '',
+            order_id INTEGER,
+            order_no TEXT DEFAULT '',
+            po_no TEXT DEFAULT '',
+            kategori TEXT DEFAULT 'DİĞER',
+            tutar REAL DEFAULT 0,
+            currency TEXT DEFAULT 'USD',
+            kur REAL DEFAULT 0,
+            usd_tutar REAL DEFAULT 0,
+            notes TEXT DEFAULT '',
+            created_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_inv_order ON invoices(order_id)",
         """CREATE TABLE IF NOT EXISTS armur_desenleri (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -2439,6 +2457,75 @@ def cancel_reservation(rid, user_name=""):
                  "notes = notes || ' | iptal: ' || ? WHERE id=? AND status='AKTİF'",
                  (user_name, rid))
     conn.commit(); conn.close()
+
+
+# ── Gelen Faturalar (gerçek maliyet) ────────────────────────────
+# Muhasebe, tedarikçi faturalarını ilgili siparişe işler; sipariş karlılığı
+# tahmini değerlerden değil bu GERÇEK değerlerden hesaplanır.
+
+INVOICE_CATEGORIES = ["İPLİK", "HAM KUMAŞ", "FASON DOKUMA", "ÇÖZGÜ",
+                      "BOYAHANE", "NAKLİYE", "DİĞER"]
+
+
+def add_invoice(invoice_no="", supplier_name="", invoice_date="", order_id=None,
+                order_no="", po_no="", kategori="DİĞER", tutar=0, currency="USD",
+                kur=0, usd_tutar=0, notes="", created_by=""):
+    conn = get_connection()
+    c = conn.execute("""
+        INSERT INTO invoices (invoice_no, supplier_name, invoice_date, order_id,
+                              order_no, po_no, kategori, tutar, currency, kur,
+                              usd_tutar, notes, created_by)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (invoice_no or "", supplier_name or "", invoice_date or "", order_id,
+          order_no or "", po_no or "", kategori or "DİĞER", tutar or 0,
+          currency or "USD", kur or 0, usd_tutar or 0, notes or "", created_by))
+    conn.commit()
+    iid = c.lastrowid
+    conn.close()
+    return iid
+
+
+def get_invoices(order_id=None):
+    conn = get_connection()
+    if order_id:
+        rows = conn.execute("SELECT * FROM invoices WHERE order_id=? "
+                            "ORDER BY invoice_date DESC, id DESC", (order_id,)).fetchall()
+    else:
+        rows = conn.execute("SELECT * FROM invoices "
+                            "ORDER BY invoice_date DESC, id DESC").fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def delete_invoice(iid):
+    conn = get_connection()
+    conn.execute("DELETE FROM invoices WHERE id=?", (iid,))
+    conn.commit(); conn.close()
+
+
+def get_order_profit_summary(order_id):
+    """Sipariş karlılık özeti — GERÇEK maliyet (faturalar) + satış (sevk × fiyat).
+    Döner: {maliyet_usd, kategoriler:{...}, satis_usd, sevk_edilen_mt, net_kar_usd}"""
+    conn = get_connection()
+    maliyet = 0.0; kategoriler = {}
+    for r in conn.execute("SELECT kategori, COALESCE(SUM(usd_tutar),0) AS t "
+                          "FROM invoices WHERE order_id=? GROUP BY kategori", (order_id,)):
+        kategoriler[r["kategori"]] = r["t"] or 0
+        maliyet += r["t"] or 0
+    # Satış: sevk edilen miktar × kalem satış fiyatı (USD varsayımıyla kalem fiyatı)
+    satis = 0.0; sevk_mt = 0.0
+    for r in conn.execute("""
+        SELECT os.meter AS sevk_m, oi.sale_price
+        FROM order_shipments os
+        LEFT JOIN order_items oi ON oi.id = os.order_item_id
+        WHERE os.order_id=?""", (order_id,)):
+        m = r["sevk_m"] or 0
+        sevk_mt += m
+        satis += m * (r["sale_price"] or 0)
+    conn.close()
+    return {"maliyet_usd": maliyet, "kategoriler": kategoriler,
+            "satis_usd": satis, "sevk_edilen_mt": sevk_mt,
+            "net_kar_usd": satis - maliyet}
 
 
 def get_open_po_items():

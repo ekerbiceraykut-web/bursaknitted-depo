@@ -50,6 +50,7 @@ _LIST_FUNCS = {
     "get_crm_years", "get_stock_snapshots", "get_movement_destinations",
     "get_iplik_cinsleri", "get_iplikler", "get_stock_breakdown_by_code",
     "get_reservations", "get_production_orders", "get_open_po_items",
+    "get_invoices",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -9852,6 +9853,105 @@ class SiparisOnayDialog(QDialog):
             self.accept()
 
 
+class InvoiceDialog(QDialog):
+    """Gelen fatura girişi — siparişe bağlı GERÇEK maliyet kaydı (muhasebe)."""
+    KATEGORILER = ["İPLİK", "HAM KUMAŞ", "FASON DOKUMA", "ÇÖZGÜ",
+                   "BOYAHANE", "NAKLİYE", "DİĞER"]
+
+    def __init__(self, parent, order):
+        super().__init__(parent)
+        self.order = dict(order or {})
+        self.setWindowTitle(f"💰 Gelen Fatura — {self.order.get('order_no','')}")
+        self.setMinimumWidth(460)
+        lay = QVBoxLayout(self)
+        form = QFormLayout(); form.setSpacing(8)
+        form.addRow("Sipariş:", QLabel(f"<b>{self.order.get('order_no','')}</b>  "
+                                       f"{self.order.get('customer_name','')}"))
+        self.invoice_no = QLineEdit()
+        self.supplier = QComboBox(); self.supplier.setEditable(True)
+        _make_searchable(self.supplier)
+        for s in (db.get_all_suppliers() or []):
+            self.supplier.addItem(dict(s).get("name", ""))
+        self.supplier.setCurrentText("")
+        from PyQt6.QtCore import QDate
+        self.tarih = QDateEdit(); self.tarih.setCalendarPopup(True)
+        self.tarih.setDate(QDate.currentDate()); self.tarih.setDisplayFormat("dd.MM.yyyy")
+        self.kategori = QComboBox()
+        for k in self.KATEGORILER: self.kategori.addItem(k, k)
+        # Siparişin PO'ları (opsiyonel bağ)
+        self.po_combo = QComboBox(); self.po_combo.addItem("— PO bağı yok —", "")
+        try:
+            for po in (db.get_all_purchase_orders(order_id=self.order.get("id")) or []):
+                po = dict(po)
+                self.po_combo.addItem(f"{po.get('po_no','')} ({po.get('supplier_name','')})",
+                                      po.get("po_no", ""))
+        except Exception:
+            pass
+        self.tutar = QDoubleSpinBox(); self.tutar.setRange(0, 99999999); self.tutar.setDecimals(2)
+        self.currency = QComboBox()
+        for cur in ("USD", "TL", "EUR"): self.currency.addItem(cur, cur)
+        self.kur = QDoubleSpinBox(); self.kur.setRange(0, 9999); self.kur.setDecimals(4)
+        self.kur.setToolTip("TL/EUR faturada: 1 USD kaç TL / 1 EUR kaç USD")
+        self.usd_tutar = QDoubleSpinBox(); self.usd_tutar.setRange(0, 99999999); self.usd_tutar.setDecimals(2)
+        self.usd_tutar.setSuffix(" $")
+        self.usd_tutar.setToolTip("Karlılık raporu bu USD değeri üzerinden hesaplanır")
+        self.notlar = QLineEdit()
+        form.addRow("Fatura No:", self.invoice_no)
+        form.addRow("Tedarikçi:", self.supplier)
+        form.addRow("Fatura Tarihi:", self.tarih)
+        form.addRow("Kategori:", self.kategori)
+        form.addRow("PO Bağı (ops.):", self.po_combo)
+        form.addRow("Tutar:", self.tutar)
+        form.addRow("Para Birimi:", self.currency)
+        form.addRow("Kur:", self.kur)
+        form.addRow("USD Karşılığı:", self.usd_tutar)
+        form.addRow("Not:", self.notlar)
+        lay.addLayout(form)
+
+        def _usd_hesapla(*_):
+            cur = self.currency.currentData(); t = self.tutar.value(); k = self.kur.value()
+            if cur == "USD":
+                self.usd_tutar.setValue(t)
+            elif cur == "TL" and k > 0:
+                self.usd_tutar.setValue(t / k)       # kur: 1 USD = k TL
+            elif cur == "EUR" and k > 0:
+                self.usd_tutar.setValue(t * k)       # kur: 1 EUR = k USD
+        self.tutar.valueChanged.connect(_usd_hesapla)
+        self.kur.valueChanged.connect(_usd_hesapla)
+        self.currency.currentIndexChanged.connect(_usd_hesapla)
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Faturayı Kaydet")
+        def _acc():
+            if not self.invoice_no.text().strip():
+                return QMessageBox.warning(self, "Eksik", "Fatura numarasını girin.")
+            if self.tutar.value() <= 0:
+                return QMessageBox.warning(self, "Eksik", "Tutar 0'dan büyük olmalı.")
+            if self.usd_tutar.value() <= 0:
+                return QMessageBox.warning(self, "Eksik",
+                    "USD karşılığını girin (TL/EUR için kur girince otomatik hesaplanır).")
+            self.accept()
+        bb.accepted.connect(_acc); bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+        _disable_wheel(self)
+
+    def result_data(self):
+        return {
+            "invoice_no": self.invoice_no.text().strip(),
+            "supplier_name": self.supplier.currentText().strip(),
+            "invoice_date": self.tarih.date().toString("yyyy-MM-dd"),
+            "order_id": self.order.get("id"),
+            "order_no": self.order.get("order_no", ""),
+            "po_no": self.po_combo.currentData() or "",
+            "kategori": self.kategori.currentData() or "DİĞER",
+            "tutar": self.tutar.value(),
+            "currency": self.currency.currentData() or "USD",
+            "kur": self.kur.value(),
+            "usd_tutar": self.usd_tutar.value(),
+            "notes": self.notlar.text().strip(),
+        }
+
+
 class ProductionOrderDialog(QDialog):
     """Üretim emri oluşturma — FASON (iplik+çözgü+dokuma) veya HAZIR ALIM.
     İhtiyaçlar ürün ağacındaki maliyet verisinden otomatik hesaplanır."""
@@ -10268,6 +10368,39 @@ class PlanningView(QWidget):
         ue_btns.addStretch()
         rl.addLayout(ue_btns)
 
+        # ── Gelen Faturalar (gerçek maliyet) + karlılık özeti ────
+        rl.addWidget(QLabel("<b>💰 Gelen Faturalar</b> (siparişin gerçek maliyeti)"))
+        self.inv_table = QTableWidget()
+        self.inv_table.setColumnCount(8)
+        self.inv_table.setHorizontalHeaderLabels(
+            ["Fatura No", "Tarih", "Tedarikçi", "Kategori", "PO", "Tutar", "Para B.", "USD"])
+        self.inv_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.inv_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.inv_table.verticalHeader().setVisible(False)
+        self.inv_table.setMaximumHeight(140)
+        ivhdr = self.inv_table.horizontalHeader()
+        ivhdr.setSectionsMovable(True); ivhdr.setStretchLastSection(True)
+        rl.addWidget(self.inv_table)
+        inv_btns = QHBoxLayout()
+        self._btn_inv_add = QPushButton("+ Fatura Ekle")
+        self._btn_inv_add.setStyleSheet("background:#1B5E20;color:white;font-weight:bold;"
+                                        "border-radius:4px;padding:5px 12px;")
+        self._btn_inv_add.clicked.connect(self._add_invoice)
+        self._btn_inv_del = QPushButton("🗑 Faturayı Sil")
+        self._btn_inv_del.setStyleSheet("color:#C62828;")
+        self._btn_inv_del.clicked.connect(self._delete_invoice)
+        for b in (self._btn_inv_add, self._btn_inv_del):
+            b.setVisible(CURRENT_USER.get("role") in ("admin", "muhasebe"))
+            inv_btns.addWidget(b)
+        inv_btns.addStretch()
+        rl.addLayout(inv_btns)
+        self._profit_lbl = QLabel()
+        self._profit_lbl.setStyleSheet(
+            "background:#263238; color:white; font-weight:bold; font-size:12px;"
+            "border-radius:4px; padding:8px 12px;")
+        self._profit_lbl.setWordWrap(True)
+        rl.addWidget(self._profit_lbl)
+
         rl.addStretch()
         splitter.addWidget(scroll)
         splitter.setSizes([300, 700])
@@ -10599,6 +10732,7 @@ class PlanningView(QWidget):
 
         self._refresh_po_table(order_id)
         self._refresh_ue_table(order_id)
+        self._refresh_invoices(order_id)
         self._right_scroll.setVisible(True)
 
     def _need_context_menu(self, pos):
@@ -10737,6 +10871,70 @@ class PlanningView(QWidget):
                 == QMessageBox.StandardButton.Yes:
             db.update_production_order_status(pid, "İPTAL", CURRENT_USER.get("full_name",""))
             self._refresh_ue_table()
+
+    def _refresh_invoices(self, order_id=None):
+        oid = order_id or self._current_order_id
+        if not oid:
+            self.inv_table.setRowCount(0); self._profit_lbl.setText(""); return
+        rows = db.get_invoices(order_id=oid) or []
+        self.inv_table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            r = dict(r)
+            it0 = QTableWidgetItem(r.get("invoice_no", ""))
+            it0.setData(Qt.ItemDataRole.UserRole, r.get("id"))
+            self.inv_table.setItem(i, 0, it0)
+            self.inv_table.setItem(i, 1, QTableWidgetItem(str(r.get("invoice_date", ""))[:10]))
+            self.inv_table.setItem(i, 2, QTableWidgetItem(r.get("supplier_name", "")))
+            self.inv_table.setItem(i, 3, QTableWidgetItem(r.get("kategori", "")))
+            self.inv_table.setItem(i, 4, QTableWidgetItem(r.get("po_no", "") or "—"))
+            for c, v in ((5, f"{float(r.get('tutar') or 0):,.2f}"),
+                         (7, f"{float(r.get('usd_tutar') or 0):,.2f}")):
+                ci = QTableWidgetItem(v)
+                ci.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.inv_table.setItem(i, c, ci)
+            self.inv_table.setItem(i, 6, QTableWidgetItem(r.get("currency", "")))
+        self.inv_table.resizeColumnsToContents()
+        # Karlılık özeti — gerçek maliyet (faturalar) × satış (sevk × fiyat)
+        try:
+            p = db.get_order_profit_summary(oid) or {}
+        except Exception:
+            p = {}
+        if p:
+            kat = "  ".join(f"{k}: {v:,.0f}$" for k, v in (p.get("kategoriler") or {}).items() if v)
+            kar = p.get("net_kar_usd", 0)
+            renk = "#69F0AE" if kar >= 0 else "#FF8A80"
+            self._profit_lbl.setText(
+                f"GERÇEK MALİYET (faturalar): {p.get('maliyet_usd',0):,.2f} $"
+                + (f"   [{kat}]" if kat else "") +
+                f"     SATIŞ (sevk edilen {p.get('sevk_edilen_mt',0):,.0f} mt): "
+                f"{p.get('satis_usd',0):,.2f} $     "
+                f"NET: <span style='color:{renk}'>{kar:,.2f} $</span>")
+        else:
+            self._profit_lbl.setText("")
+
+    def _add_invoice(self):
+        if not self._current_order_id:
+            return QMessageBox.information(self, "Bilgi", "Önce bir sipariş seçin.")
+        order = db.get_order(self._current_order_id) or {}
+        dlg = InvoiceDialog(self, order)
+        if not dlg.exec():
+            return
+        d = dlg.result_data()
+        d["created_by"] = CURRENT_USER.get("full_name", "")
+        db.add_invoice(**d)
+        self._refresh_invoices()
+
+    def _delete_invoice(self):
+        row = self.inv_table.currentRow()
+        if row < 0:
+            return QMessageBox.information(self, "Bilgi", "Silinecek faturayı seçin.")
+        iid = self.inv_table.item(row, 0).data(Qt.ItemDataRole.UserRole)
+        no = self.inv_table.item(row, 0).text()
+        if QMessageBox.question(self, "Sil", f"'{no}' numaralı fatura kaydı silinsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                == QMessageBox.StandardButton.Yes:
+            db.delete_invoice(iid)
+            self._refresh_invoices()
 
     def _show_reservations(self):
         """Aktif rezervasyonların listesi — herkes görür; admin/planlama iptal edebilir."""
