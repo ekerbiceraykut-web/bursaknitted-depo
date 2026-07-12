@@ -118,6 +118,26 @@ def _get_db():
 CURRENT_USER = {"id": 0, "username": "sistem", "full_name": "Sistem", "role": "admin"}
 
 import database as _local_db
+import tcmb as _tcmb
+
+
+def _tcmb_usd_doldur(spin, varsayilan=None):
+    """Spinbox'a TCMB USD döviz satış kurunu yazar (ulaşılamazsa varsayılan kalır).
+    Alan her zaman elle değiştirilebilir; ipucu kur tarihini/kaynağını gösterir."""
+    try:
+        kur, tarih, kaynak = _tcmb.satis("USD")
+    except Exception:
+        kur, tarih, kaynak = 0.0, "", ""
+    if kur > 0:
+        spin.setValue(round(kur, 2))
+        spin.setToolTip(f"TCMB Döviz Satış {tarih} ({kaynak}) — elle değiştirilebilir")
+    elif varsayilan is not None:
+        try:
+            spin.setValue(float(varsayilan))
+        except Exception:
+            pass
+        spin.setToolTip("TCMB kuruna ulaşılamadı — elle girin")
+    return kur
 db = _local_db   # başlangıçta yerel; login sonrası proxy ile değiştirilir
 
 import order_pdf
@@ -693,6 +713,7 @@ class MaliyetWidget(QWidget):
         fi = QFormLayout(grp_islem); fi.setSpacing(6)
         self.fason_dokuma = QDoubleSpinBox(); self.fason_dokuma.setRange(0,9999); self.fason_dokuma.setDecimals(2); self.fason_dokuma.setSuffix(" krş/100 atkı")
         self.usd_kuru     = QDoubleSpinBox(); self.usd_kuru.setRange(0.01,999);   self.usd_kuru.setDecimals(2);     self.usd_kuru.setValue(35.0); self.usd_kuru.setSuffix(" TL/$")
+        _tcmb_usd_doldur(self.usd_kuru)   # açılışta TCMB döviz satış kuru gelir
         self.lbl_dokuma_mal = QLabel("—"); self.lbl_dokuma_mal.setStyleSheet("font-weight:bold; color:#1A237E;")
         self.hazirlik_mal   = QDoubleSpinBox(); self.hazirlik_mal.setRange(0,99);  self.hazirlik_mal.setDecimals(4); self.hazirlik_mal.setSuffix(" $/mt")
         self.ham_fire       = QDoubleSpinBox(); self.ham_fire.setRange(0,99);      self.ham_fire.setDecimals(1);     self.ham_fire.setSuffix(" %")
@@ -802,7 +823,8 @@ class MaliyetWidget(QWidget):
             self._recalc(); return
         try: self.fason_dokuma.setValue(float(mj.get("fason_dokuma", 0)))
         except: pass
-        try: self.usd_kuru.setValue(float(mj.get("usd_kuru", 35.0)))
+        # Kur canlı: TCMB varsa o gelir, ulaşılamazsa kayıtlı değer kullanılır
+        try: _tcmb_usd_doldur(self.usd_kuru, varsayilan=float(mj.get("usd_kuru", 35.0)))
         except: pass
         try: self.hazirlik_mal.setValue(float(mj.get("hazirlik_mal", 0)))
         except: pass
@@ -9258,7 +9280,8 @@ class PurchaseOrderDialog(QDialog):
             "<i>Her kalem için kumaş tipi, tedarikçi ve para birimi ayrı seçilebilir. "
             "Aynı tedarikçiye ait kalemler otomatik aynı PO'ya eklenir. "
             "Sip. Kg ürün ağacındaki En × Gramaj'dan otomatik hesaplanır; "
-            "Ham Mt +%20, Ham Kg +%10 önerilen miktardır.</i>"
+            "Ham Mt +%20, Ham Kg +%10 önerilen miktardır. "
+            "Toplam = Ham Sip. Mt × Birim Fiyat.</i>"
         )
         hint.setStyleSheet("color:#757575;font-size:11px;"); hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -9375,7 +9398,7 @@ class PurchaseOrderDialog(QDialog):
                 pass
         ham_meter  = item.get("ham_meter")
         ham_kg     = item.get("ham_kg")
-        if ham_meter is None: ham_meter = round(orig_meter * 1.20, 2)
+        if ham_meter is None: ham_meter = round(orig_meter * 1.20, 2)   # ham metre +%20
         if ham_kg    is None: ham_kg    = round(orig_kg    * 1.10, 2)   # ham kilo +%10
         termin = item.get("termin") or QDate.currentDate().addDays(30).toString("dd.MM.yyyy")
 
@@ -9738,11 +9761,13 @@ class GoodsReceiptDialog(QDialog):
 
 
 class SiparisOnayDialog(QDialog):
-    """Admin için sipariş sözleşme önizleme + onay/red dialog."""
+    """Admin için sipariş sözleşme önizleme + onay/red dialog.
+    readonly=True: yalnız inceleme — onay/red butonları yerine 'Kapat'."""
 
-    def __init__(self, order, parent=None):
+    def __init__(self, order, parent=None, readonly=False):
         super().__init__(parent)
         self.order    = order
+        self.readonly = readonly
         self.approved = False   # True → onaylandı, False → reddedildi / kapatıldı
         self.setWindowTitle(f"Sipariş İnceleme — {order.get('order_no','')}")
         self.setMinimumSize(820, 680)
@@ -9753,7 +9778,8 @@ class SiparisOnayDialog(QDialog):
         lay = QVBoxLayout(self); lay.setSpacing(8)
 
         # ── Başlık ──────────────────────────────────────────────────────────
-        hdr = QLabel("📋  SİPARİŞ FORMU — ADMIN İNCELEME")
+        hdr = QLabel("📋  SİPARİŞ İNCELEME" if self.readonly
+                     else "📋  SİPARİŞ FORMU — ADMIN İNCELEME")
         hdr.setStyleSheet(
             "font-size:16px;font-weight:bold;color:#1A237E;"
             "padding:8px 12px;background:#E8EAF6;border-radius:6px;")
@@ -9952,21 +9978,29 @@ class SiparisOnayDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
 
-        btn_red = QPushButton("✕  Reddet / Kapat")
-        btn_red.setStyleSheet(
-            "background:#B71C1C;color:white;font-weight:bold;"
-            "border-radius:6px;padding:8px 22px;font-size:13px;")
-        btn_red.clicked.connect(self.reject)
+        if self.readonly:
+            btn_close = QPushButton("Kapat")
+            btn_close.setStyleSheet(
+                "background:#455A64;color:white;font-weight:bold;"
+                "border-radius:6px;padding:8px 28px;font-size:13px;")
+            btn_close.clicked.connect(self.reject)
+            btn_row.addWidget(btn_close)
+        else:
+            btn_red = QPushButton("✕  Reddet / Kapat")
+            btn_red.setStyleSheet(
+                "background:#B71C1C;color:white;font-weight:bold;"
+                "border-radius:6px;padding:8px 22px;font-size:13px;")
+            btn_red.clicked.connect(self.reject)
 
-        btn_ok = QPushButton("✅  Onayla")
-        btn_ok.setStyleSheet(
-            "background:#1B5E20;color:white;font-weight:bold;"
-            "border-radius:6px;padding:8px 28px;font-size:14px;")
-        btn_ok.clicked.connect(self._do_approve)
+            btn_ok = QPushButton("✅  Onayla")
+            btn_ok.setStyleSheet(
+                "background:#1B5E20;color:white;font-weight:bold;"
+                "border-radius:6px;padding:8px 28px;font-size:14px;")
+            btn_ok.clicked.connect(self._do_approve)
 
-        btn_row.addWidget(btn_red)
-        btn_row.addSpacing(12)
-        btn_row.addWidget(btn_ok)
+            btn_row.addWidget(btn_red)
+            btn_row.addSpacing(12)
+            btn_row.addWidget(btn_ok)
         lay.addLayout(btn_row)
 
     def _do_approve(self):
@@ -10073,9 +10107,26 @@ class InvoiceDialog(QDialog):
                 self.usd_tutar.setValue(t / k)       # kur: 1 USD = k TL
             elif cur == "EUR" and k > 0:
                 self.usd_tutar.setValue(t * k)       # kur: 1 EUR = k USD
+        def _kur_oner(*_):
+            # Para birimine göre TCMB döviz satış kuru otomatik dolar (elle ezilebilir)
+            cur = self.currency.currentData()
+            try:
+                if cur == "TL":
+                    k, tarih, kaynak = _tcmb.satis("USD")
+                elif cur == "EUR":
+                    k, tarih, kaynak = _tcmb.eur_usd()
+                else:
+                    self.kur.setValue(0); self.kur.setToolTip("USD faturada kur gerekmez")
+                    _usd_hesapla(); return
+            except Exception:
+                k, tarih, kaynak = 0.0, "", ""
+            if k > 0:
+                self.kur.setValue(round(k, 4))
+                self.kur.setToolTip(f"TCMB Döviz Satış {tarih} ({kaynak}) — elle değiştirilebilir")
+            _usd_hesapla()
         self.tutar.valueChanged.connect(_usd_hesapla)
         self.kur.valueChanged.connect(_usd_hesapla)
-        self.currency.currentIndexChanged.connect(_usd_hesapla)
+        self.currency.currentIndexChanged.connect(_kur_oner)
 
         bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         bb.button(QDialogButtonBox.StandardButton.Ok).setText("Faturayı Kaydet")
@@ -10314,6 +10365,7 @@ class ProductionOrderDialog(QDialog):
             "atki_sik", self._calc.get("atki_sik", 0), " atkı/cm"))
         ff.addRow("USD Kuru:", self._spin_row(
             "usd_kuru", self._calc.get("usd_kuru") or 35.0, " TL/$"))
+        _tcmb_usd_doldur(self.usd_kuru, varsayilan=self._calc.get("usd_kuru") or 35.0)
         self.lbl_tahmin = QLabel("—")
         self.lbl_tahmin.setStyleSheet("font-weight:bold; color:#C62828; font-size:13px;")
         ff.addRow("Tahmini Maliyet (çözgü + dokuma):", self.lbl_tahmin)
@@ -10506,6 +10558,8 @@ class PlanningView(QWidget):
         qhdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
         qhdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.queue_table.itemSelectionChanged.connect(self._on_queue_select)
+        self.queue_table.setToolTip("Çift tıklayınca sipariş inceleme sayfası açılır")
+        self.queue_table.doubleClicked.connect(self._show_order_review)
         ll.addWidget(self.queue_table)
 
         # Kuyruk işlemleri: onay (admin) + planlamadan kaldırma (admin/planlama)
@@ -10568,7 +10622,7 @@ class PlanningView(QWidget):
             "Seç", "Ürün Kodu", "Ürün Adı", "Kumaş Tipi", "Renk",
             "Kompozisyon", "En", "Gramaj", "Lab No", "Baskı Tipi",
             "Zemin Rengi", "Baskı Desen No", "Sip. Mt", "Sip. Kg",
-            "Satış Fiyatı", "Açıklama",
+            "Satış Fiyatı", "Birim Fiyat", "Açıklama",
             "TÜM DEPOLAR HAM (mt)", "BOYALI (mt)", "BASKILI (mt)", "Eksik (mt)"]
         self.need_table.setColumnCount(len(_NEED_COLS))
         self.need_table.setHorizontalHeaderLabels(_NEED_COLS)
@@ -10590,12 +10644,12 @@ class PlanningView(QWidget):
         rl.addWidget(self.need_table)
 
         need_btns = QHBoxLayout()
-        btn_po = QPushButton("+ Satınalma Siparişi Oluştur (Seçili Kalemler)")
+        btn_po = QPushButton("+ Ham Satınalma Sipariş Oluştur (Seçili Kalemler)")
         btn_po.setStyleSheet("background:#1565C0;color:white;font-weight:bold;"
                              "border-radius:4px;padding:6px 14px;")
         btn_po.clicked.connect(self._create_po)
         need_btns.addWidget(btn_po)
-        self._btn_uretim = QPushButton("🏭 Üretim Emri Oluştur (Seçili Kalem)")
+        self._btn_uretim = QPushButton("🏭 Fason Üretim Emri Oluştur (Seçili Kalem)")
         self._btn_uretim.setStyleSheet("background:#6A1B9A;color:white;font-weight:bold;"
                                        "border-radius:4px;padding:6px 14px;")
         self._btn_uretim.clicked.connect(self._create_production_order)
@@ -10788,6 +10842,17 @@ class PlanningView(QWidget):
         self.queue_table.blockSignals(False)
 
     # ── Sipariş seçildi ──────────────────────────────────────────
+    def _show_order_review(self, index):
+        """Kuyruktaki siparişe çift tık → salt-okunur inceleme sayfası (kolay okuma)."""
+        item = self.queue_table.item(index.row(), 0)
+        if not item:
+            return
+        oid = item.data(Qt.ItemDataRole.UserRole)
+        order = db.get_order(oid)
+        if not order:
+            return
+        SiparisOnayDialog(dict(order), self, readonly=True).exec()
+
     def _on_queue_select(self):
         row = self.queue_table.currentRow()
         if row < 0:
@@ -11020,6 +11085,17 @@ class PlanningView(QWidget):
             self.need_table.setItem(row, 0, chk)
 
             sp = it.get("sale_price") or 0
+            # Birim fiyat: ürün kataloğundaki alış/birim fiyatı
+            birim_txt = ""
+            try:
+                pr = db.get_product_by_code(pc)
+                if pr:
+                    pr = dict(pr)
+                    bf = float(pr.get("price") or 0)
+                    if bf:
+                        birim_txt = f"{bf:.2f} {pr.get('price_currency') or 'USD'}"
+            except Exception:
+                pass
             row_vals = [
                 pc,                             # 1 Ürün Kodu
                 it.get("product_name",""),       # 2 Ürün Adı
@@ -11035,25 +11111,26 @@ class PlanningView(QWidget):
                 f"{order_m:.2f}",              # 12 Sip. Mt
                 f"{order_kg:.2f}",             # 13 Sip. Kg
                 f"{sp:.2f}" if sp else "",     # 14 Satış Fiyatı
-                it.get("description",""),       # 15 Açıklama
-                f"{ham_m:.2f}",               # 16 TÜM DEPOLAR HAM (mt)
-                f"{boyali_m:.2f}",            # 17 BOYALI (mt)
-                f"{baskili_m:.2f}",           # 18 BASKILI (mt)
-                f"{missing:.2f}",             # 19 Eksik (mt)
+                birim_txt,                     # 15 Birim Fiyat (ürün kataloğu)
+                it.get("description",""),       # 16 Açıklama
+                f"{ham_m:.2f}",               # 17 TÜM DEPOLAR HAM (mt)
+                f"{boyali_m:.2f}",            # 18 BOYALI (mt)
+                f"{baskili_m:.2f}",           # 19 BASKILI (mt)
+                f"{missing:.2f}",             # 20 Eksik (mt)
             ]
             for col, val in enumerate(row_vals, start=1):
                 cell = QTableWidgetItem(str(val))
                 cell.setFlags(cell.flags() & ~Qt.ItemFlag.ItemIsEditable)
-                if col == 16:
+                if col == 17:
                     cell.setData(Qt.ItemDataRole.UserRole, (pc, "HAM"))
                     cell.setToolTip("Çift tıkla: depo-lot dökümü")
-                elif col == 17:
+                elif col == 18:
                     cell.setData(Qt.ItemDataRole.UserRole, (pc, boyali_tip))
                     cell.setToolTip(f"{boyali_tip} — çift tıkla: depo-lot dökümü")
-                elif col == 18:
+                elif col == 19:
                     cell.setData(Qt.ItemDataRole.UserRole, (pc, "BASKILI"))
                     cell.setToolTip("Çift tıkla: depo-lot dökümü")
-                elif col == 19:
+                elif col == 20:
                     if missing > 0:
                         cell.setText(f"{missing:.2f}  ⚠ Eksik")
                         cell.setForeground(QBrush(QColor("#C62828")))
@@ -11062,6 +11139,11 @@ class PlanningView(QWidget):
                         cell.setForeground(QBrush(QColor("#2E7D32")))
                 self.need_table.setItem(row, col, cell)
         self.need_table.setSortingEnabled(True)
+        # Baskı sütunları (Baskı Tipi / Zemin Rengi / Baskı Desen No) yalnız
+        # siparişte BASKILI kalem varsa görünür
+        has_print = any((it.get("fabric_type") or "").upper() == "BASKILI" for it in items)
+        for c in (9, 10, 11):
+            self.need_table.setColumnHidden(c, not has_print)
 
         self._refresh_po_table(order_id)
         self._refresh_ue_table(order_id)
@@ -11085,28 +11167,43 @@ class PlanningView(QWidget):
             self._open_product_tree(code)
 
     def _open_product_tree(self, code):
-        """Ürün kataloğundaki tam ürün kartını (Genel/Teknik/Maliyet/Armür/Jakar) açar.
-        Kaydetme yetkisi: admin ve planlamacı."""
+        """Ürün kataloğundaki tam ürün kartını SALT OKUNUR açar —
+        planlamadan ürün değiştirilemez, düzenleme ürün kataloğundan yapılır."""
         p = db.get_product_by_code(code)
         if not p:
             return QMessageBox.information(self, "Bilgi",
                 f"'{code}' kodu ürün kataloğunda bulunamadı.")
         p = dict(p)
-        # _product_dialog / _collect_product self'i yalnızca pencere ebeveyni
-        # olarak kullanır; buradan güvenle yeniden kullanılabilir.
+        # _product_dialog self'i yalnızca pencere ebeveyni olarak kullanır
         dlg = ProductManagementDialog._product_dialog(self, p)
-        if not dlg.exec():
-            return
-        if CURRENT_USER.get("role") in ("admin", "planlama"):
-            if ProductManagementDialog._collect_product(self, dlg, pid=p.get("id"),
-                                                        active=p.get("active", 1)):
-                QMessageBox.information(self, "Kaydedildi",
-                    f"{code} ürün bilgileri güncellendi.")
-                if self._current_order_id:
-                    self._show_detail(self._current_order_id)
-        else:
-            QMessageBox.information(self, "Bilgi",
-                "Görüntüleme modu — değişiklikler kaydedilmedi (yetki gerekli).")
+        dlg.setWindowTitle(f"🌳 Ürün Ağacı — {code}  (salt okunur)")
+        # Tüm giriş alanlarını değişikliğe kapat
+        from PyQt6.QtWidgets import QAbstractSpinBox, QPlainTextEdit
+        for w in dlg.findChildren(QLineEdit):
+            w.setReadOnly(True)
+        for w in dlg.findChildren(QTextEdit):
+            w.setReadOnly(True)
+        for w in dlg.findChildren(QPlainTextEdit):
+            w.setReadOnly(True)
+        for w in dlg.findChildren(QAbstractSpinBox):
+            w.setReadOnly(True)
+        for w in dlg.findChildren(QComboBox):
+            w.setEnabled(False)
+        for w in dlg.findChildren(QCheckBox):
+            w.setEnabled(False)
+        for w in dlg.findChildren(QPushButton):
+            w.setEnabled(False)
+        # Alt buton çubuğu: Kaydet gizli, yalnız 'Kapat' aktif
+        bb = dlg.findChild(QDialogButtonBox)
+        if bb:
+            bb.setEnabled(True)
+            ok_b = bb.button(QDialogButtonBox.StandardButton.Ok)
+            if ok_b:
+                ok_b.setVisible(False)
+            cl_b = bb.button(QDialogButtonBox.StandardButton.Cancel)
+            if cl_b:
+                cl_b.setEnabled(True); cl_b.setText("Kapat")
+        dlg.exec()   # sonuç ne olursa olsun hiçbir şey kaydedilmez
 
     def _create_production_order(self):
         """Seçili ihtiyaç kalemi için üretim emri (FASON / HAZIR ALIM) oluşturur."""

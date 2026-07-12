@@ -18,6 +18,19 @@ from order_pdf import (CURRENCY_SYMBOLS, _LOGO_PATH, _STYLE_CELL,
                         _STYLE_NORMAL, _STYLE_SMALL, _STYLE_TITLE,
                         _fmt_date, _fmt_num, _multiline)
 
+# Ham dokuma satınalma şartları — formun altına eklenir
+# (po["contract_terms"] veya company["po_terms"] doluysa onlar kullanılır).
+DEFAULT_PO_TERMS = """1. İşbu sipariş formu, tedarikçinin kaşe/imzası ile sözleşme hükmündedir. Tedarikçi, siparişi 2 iş günü içinde yazılı olarak teyit etmediği takdirde form şartlarını kabul etmiş sayılır.
+2. Mallar, formda belirtilen konstrüksiyona (iplik, sıklık, tarak/en, gramaj) uygun üretilecektir. En toleransı ±2 cm, gramaj toleransı ±%3'tür.
+3. Miktar toleransı ±%5'tir; bu aralık dışındaki eksik veya fazla teslimat için alıcının yazılı onayı gerekir.
+4. Ham kumaş; dokuma hatası, iplik kaçığı, yağ/leke vb. kusurlar yönünden 4 puan sistemine göre değerlendirilir. 100 m²'de 28 puanı aşan toplar iade edilir.
+5. Her top etiketinde ürün kodu, lot/parti no, metre ve kilo bilgisi bulunacaktır. Lot bütünlüğü korunacak; farklı lotlar ayrı bildirilecektir.
+6. Termin tarihi bağlayıcıdır. Tedarikçiden kaynaklanan gecikmelerde alıcı, gecikilen her hafta için fatura bedelinin %1'i oranında cezai şart uygulama veya siparişi kısmen/tamamen iptal etme hakkını saklı tutar.
+7. Fiyatlara KDV dahil değildir. Ödeme, formda yazılı ödeme şekline göre, uygun teslimat ve fatura tesliminden sonra yapılır.
+8. Kalite uygunsuzlukları teslim tarihinden itibaren 30 gün içinde yazılı bildirilir; kusurlu mal bedeli iade edilir veya mal değiştirilir.
+9. Bu sipariş kapsamında paylaşılan konstrüksiyon ve teknik bilgiler gizlidir; üçüncü kişilerle paylaşılamaz ve başka müşteriler için kullanılamaz.
+10. Uyuşmazlıklarda Bursa Mahkemeleri ve İcra Daireleri yetkilidir."""
+
 
 def generate_purchase_order_pdf(po, company, file_path):
     symbol = CURRENCY_SYMBOLS.get(po.get("currency", "USD"), "$")
@@ -61,28 +74,39 @@ def generate_purchase_order_pdf(po, company, file_path):
     elements.append(Paragraph("HAM DOKUMA SATINALMA SİPARİŞİ FORMU", _STYLE_TITLE))
     elements.append(Spacer(1, 4 * mm))
 
-    # ── PO bilgileri ─────────────────────────────────────────────
+    # ── PO bilgileri — Termin, Sipariş Tarihi'nin hemen altında ─────
+    def _i(text):
+        return Paragraph(escape(str(text or "—")), _STYLE_NORMAL)
+
     info_data = [
-        ["PO No:", po.get("po_no", ""), "PO Tarihi:", _fmt_date(po.get("po_date"))],
-        ["Tedarikçi:", po.get("supplier_name", ""), "İlgili Sipariş No:", po.get("order_no", "") or ""],
-        ["Termin:", _fmt_date(po.get("expected_delivery")), "Ödeme Şekli:", po.get("payment_method", "")],
-        ["Teslimat Şartları:", po.get("delivery_terms", ""), "Durum:", po.get("status", "")],
+        ["Sipariş (PO) No:", _i(po.get("po_no", "")), "Sipariş Tarihi:", _i(_fmt_date(po.get("po_date")))],
+        ["Tedarikçi:", _i(po.get("supplier_name", "")), "Termin:", _i(_fmt_date(po.get("expected_delivery")))],
+        ["İlgili Müşteri Siparişi:", _i(po.get("order_no", "")), "Ödeme Şekli:", _i(po.get("payment_method", ""))],
+        ["Teslimat Şartları:", _i(po.get("delivery_terms", "")), "Para Birimi:", _i(po.get("currency", "USD"))],
+        ["Oluşturan:", _i(po.get("created_by", "")), "Durum:", _i(po.get("status", ""))],
     ]
-    info_table = Table(info_data, colWidths=[22 * mm, 68 * mm, 22 * mm, 74 * mm])
+    info_table = Table(info_data, colWidths=[36 * mm, 60 * mm, 26 * mm, 64 * mm])
     info_table.setStyle(TableStyle([
-        ("FONTNAME", (0, 0), (-1, -1), "Turkish"),
         ("FONTNAME", (0, 0), (0, -1), "Turkish-Bold"),
         ("FONTNAME", (2, 0), (2, -1), "Turkish-Bold"),
         ("FONTSIZE", (0, 0), (-1, -1), 9),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
     ]))
     elements.append(info_table)
     elements.append(Spacer(1, 4 * mm))
 
-    # ── Kalemler ─────────────────────────────────────────────────
-    headers = ["Ürün Kodu", "Kompozisyon", "En", "Gramaj", "Kumaş Tipi", "Metre", "Kilo",
-               f"Birim Fiyat ({symbol})", f"Tutar ({symbol})"]
+    # ── Kalemler — tüm hücreler sarmalı (taşma yok), açıklama dahil ──
+    def _h(t):
+        return Paragraph(escape(t), _STYLE_CELL_BOLD)
+
+    def _c(t):
+        return Paragraph(escape(str(t or "")), _STYLE_CELL)
+
+    headers = [_h("Ürün Kodu"), _h("Kompozisyon"), _h("En"), _h("Gramaj"),
+               _h("Kumaş Tipi"), _h("Açıklama / Konstrüksiyon"),
+               _h("Metre"), _h("Kilo"), _h(f"Birim Fiyat ({symbol})"), _h(f"Tutar ({symbol})")]
     item_rows = [headers]
     grand_total = 0.0
     total_meter = 0.0
@@ -91,24 +115,26 @@ def generate_purchase_order_pdf(po, company, file_path):
         meter = it.get("meter") or 0
         kg = it.get("kg") or 0
         unit_price = it.get("unit_price") or 0
-        total = meter * unit_price
+        total = meter * unit_price          # Toplam bedel = ham metre × birim fiyat
         grand_total += total
         total_meter += meter
         total_kg += kg
         item_rows.append([
-            Paragraph(escape(it.get("product_code", "")), _STYLE_CELL),
-            Paragraph(escape(it.get("composition", "")), _STYLE_CELL),
-            it.get("width", "") or "",
-            it.get("gramaj", "") or "",
-            Paragraph(escape(it.get("fabric_type", "")), _STYLE_CELL),
+            _c(it.get("product_code", "")),
+            _c(it.get("composition", "")),
+            _c(it.get("width", "")),
+            _c(it.get("gramaj", "")),
+            _c(it.get("fabric_type", "")),
+            _c(it.get("description", "")),
             _fmt_num(meter),
             _fmt_num(kg),
             _fmt_num(unit_price),
             _fmt_num(total),
         ])
-    item_rows.append(["GENEL TOPLAM:", "", "", "", "", _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total)])
+    item_rows.append(["GENEL TOPLAM:", "", "", "", "", "",
+                      _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total)])
 
-    col_widths = [28 * mm, 32 * mm, 14 * mm, 16 * mm, 20 * mm, 20 * mm, 20 * mm, 18 * mm, 18 * mm]
+    col_widths = [w * mm for w in (20, 24, 9, 12, 15, 46, 15, 15, 15, 15)]
     items_table = Table(item_rows, colWidths=col_widths, repeatRows=1)
     items_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Turkish-Bold"),
@@ -117,10 +143,9 @@ def generate_purchase_order_pdf(po, company, file_path):
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EAF6")),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#BDBDBD")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (5, 0), (8, -1), "RIGHT"),
-        ("ALIGN", (2, 0), (3, -1), "CENTER"),
-        ("SPAN", (0, -1), (4, -1)),
-        ("ALIGN", (0, -1), (4, -1), "RIGHT"),
+        ("ALIGN", (6, 0), (9, -1), "RIGHT"),
+        ("SPAN", (0, -1), (5, -1)),
+        ("ALIGN", (0, -1), (5, -1), "RIGHT"),
         ("FONTNAME", (0, -1), (-1, -1), "Turkish-Bold"),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F5F5F5")),
         ("TOPPADDING", (0, 0), (-1, -1), 3),
@@ -154,6 +179,24 @@ def generate_purchase_order_pdf(po, company, file_path):
     if (po.get("notes") or "").strip():
         elements.append(Paragraph("Notlar", _STYLE_HEADING))
         elements.append(Paragraph(_multiline(po.get("notes", "")), _STYLE_NORMAL))
+        elements.append(Spacer(1, 3 * mm))
+
+    # ── Satınalma Şartları ───────────────────────────────────────
+    terms = (po.get("contract_terms") or company.get("po_terms") or DEFAULT_PO_TERMS).strip()
+    if terms:
+        elements.append(Paragraph("Satınalma Şartları", _STYLE_HEADING))
+        elements.append(Spacer(1, 1 * mm))
+        terms_paras = [Paragraph(escape(satir.strip()), _STYLE_SMALL)
+                       for satir in terms.split("\n") if satir.strip()]
+        terms_table = Table([[terms_paras]], colWidths=[186 * mm])
+        terms_table.setStyle(TableStyle([
+            ("BOX", (0, 0), (-1, -1), 0.75, colors.HexColor("#9E9E9E")),
+            ("LEFTPADDING", (0, 0), (-1, -1), 6),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 4),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+        ]))
+        elements.append(terms_table)
         elements.append(Spacer(1, 3 * mm))
 
     # ── Kaşe / İmza alanları ──────────────────────────────────────
