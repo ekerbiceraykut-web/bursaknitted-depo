@@ -2540,11 +2540,14 @@ def get_open_po_items():
                COALESCE(i.meter,0) AS meter,
                COALESCE(i.received_meter,0) AS received_meter,
                COALESCE(i.meter,0) - COALESCE(i.received_meter,0) AS kalan_meter,
-               COALESCE(i.unit_price,0) AS unit_price
+               COALESCE(i.kg,0) - COALESCE(i.received_kg,0) AS kalan_kg,
+               COALESCE(i.unit_price,0) AS unit_price,
+               IFNULL(i.description,'') AS description
         FROM purchase_order_items i
         JOIN purchase_orders p ON p.id = i.po_id
         WHERE p.status NOT IN ('TAMAMLANDI','İPTAL')
-          AND COALESCE(i.meter,0) - COALESCE(i.received_meter,0) > 0.01
+          AND (COALESCE(i.meter,0) - COALESCE(i.received_meter,0) > 0.01
+               OR COALESCE(i.kg,0) - COALESCE(i.received_kg,0) > 0.01)
         ORDER BY p.po_no DESC
     """).fetchall()
     conn.close()
