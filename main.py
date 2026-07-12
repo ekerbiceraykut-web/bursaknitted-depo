@@ -9817,11 +9817,12 @@ class SiparisOnayDialog(QDialog):
         # ── 2. Sipariş Başlık Bilgileri ──────────────────────────────────────
         bas_grp = _grp("2 — Sipariş Bilgileri")
         bg = QGridLayout(bas_grp); bg.setSpacing(6)
+        # Termin, Sipariş Tarihi'nin hemen altında görünür (aynı sütun, alt satır)
         bas_rows = [
             ("Sipariş No:",        o.get("order_no",""),                  True),
             ("Sipariş Tarihi:",    _fmt_date(o.get("order_date","")),     False),
-            ("Termin:",            _fmt_date(o.get("delivery_date","")),  True),
             ("Para Birimi:",       o.get("currency",""),                  False),
+            ("Termin:",            _fmt_date(o.get("delivery_date","")),  True),
             ("Ödeme Şekli:",       o.get("payment_method",""),            False),
             ("Teslimat Şartları:", o.get("delivery_terms",""),            False),
             ("Siparişi Alan:",     o.get("sales_rep","") or "—",         False),
@@ -9861,34 +9862,41 @@ class SiparisOnayDialog(QDialog):
             cl.addWidget(title)
 
             grid = QGridLayout(); grid.setSpacing(5); grid.setContentsMargins(4, 2, 4, 2)
-            fields = [
-                ("Ürün Kodu",      it.get("product_code","")),
-                ("Ürün Adı",       it.get("product_name","")),
-                ("Kumaş Tipi",     it.get("fabric_type","")),
-                ("Renk",           it.get("color","")),
-                ("Kompozisyon",    it.get("composition","")),
-                ("En (cm)",        it.get("width","")),
-                ("Gramaj",         it.get("gramaj","")),
-                ("Lab No",         it.get("lab_no","")),
-                ("Baskı Tipi",     it.get("print_type","")),
-                ("Zemin Rengi",    it.get("zemin_rengi","")),
-                ("Baskı Desen No", it.get("baski_desen_no","")),
-                ("Miktar (mt)",    f"{mt:.2f}"),
-                ("Miktar (kg)",    f"{kgi:.2f}"),
-                ("Birim Fiyat",    f"{sp:.2f} {cur}" if sp else "—"),
-                ("Tutar",          f"{tut:.2f} {cur}" if sp else "—"),
-                ("Açıklama",       it.get("description","")),
+            # Sol sütun: ürün kimliği (alt alta) — Sağ sütun: tip/renk + miktar/fiyat
+            sol = [
+                ("Ürün Kodu",   it.get("product_code","")),
+                ("Ürün Adı",    it.get("product_name","")),
+                ("Kompozisyon", it.get("composition","")),
+                ("En (cm)",     it.get("width","")),
+                ("Gramaj",      it.get("gramaj","")),
             ]
-            for i, (lbl, val) in enumerate(fields):
-                r, c = divmod(i, 2)          # sağlı-sollu: 2 alan yan yana
-                cb = c * 2
-                grid.addWidget(QLabel(f"<b>{lbl}:</b>"), r, cb)
-                v = QLabel(str(val) if str(val) else "—")
-                v.setWordWrap(True)
-                v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-                if lbl == "Tutar" and sp:
-                    v.setStyleSheet("font-weight:bold;color:#C62828;")
-                grid.addWidget(v, r, cb + 1)
+            sag = [
+                ("Kumaş Tipi", it.get("fabric_type","")),
+                ("Renk",       it.get("color","")),
+                ("Lab No",     it.get("lab_no","")),
+            ]
+            # Baskı bilgileri yalnız BASKILI kalemde görünür
+            if (it.get("fabric_type") or "").upper() == "BASKILI":
+                sag += [
+                    ("Baskı Tipi",     it.get("print_type","")),
+                    ("Zemin Rengi",    it.get("zemin_rengi","")),
+                    ("Baskı Desen No", it.get("baski_desen_no","")),
+                ]
+            sag += [
+                ("Miktar",       f"{mt:.2f} mt  /  {kgi:.2f} kg"),
+                ("Birim Fiyat",  f"{sp:.2f} {cur}" if sp else "—"),
+                ("Toplam Fiyat", f"{tut:.2f} {cur}" if sp else "—"),
+                ("Açıklama",     it.get("description","")),
+            ]
+            for col_base, alanlar in ((0, sol), (2, sag)):
+                for r, (lbl, val) in enumerate(alanlar):
+                    grid.addWidget(QLabel(f"<b>{lbl}:</b>"), r, col_base)
+                    v = QLabel(str(val) if str(val) else "—")
+                    v.setWordWrap(True)
+                    v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+                    if lbl == "Toplam Fiyat" and sp:
+                        v.setStyleSheet("font-weight:bold;color:#C62828;")
+                    grid.addWidget(v, r, col_base + 1)
             grid.setColumnStretch(1, 1); grid.setColumnStretch(3, 1)
             cl.addLayout(grid)
             kg.addWidget(card)
