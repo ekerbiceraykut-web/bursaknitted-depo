@@ -263,9 +263,17 @@ class APIHandler(BaseHTTPRequestHandler):
                     status=qs.get("status",[""])[0])
                 self._send(_ok([dict(r) for r in rows]))
 
+            elif path == "/api/orders/deleted":
+                self._send(_ok(db.get_deleted_orders()))
+
             elif path == "/api/order_shipments":
                 oid = qs.get("order_id",[""])[0]
                 self._send(_ok(db.get_order_shipments(int(oid) if oid else None)))
+
+            # ÖNEMLİ: /profit gibi son-ekli rotalar genel /api/orders/{id}'den ÖNCE gelmeli
+            elif path.startswith("/api/orders/") and path.endswith("/profit"):
+                oid = int(path.split("/")[-2])
+                self._send(_ok(db.get_order_profit_summary(oid)))
 
             elif path.startswith("/api/orders/"):
                 oid = int(path.split("/")[-1])
@@ -294,10 +302,6 @@ class APIHandler(BaseHTTPRequestHandler):
             elif path == "/api/invoices":
                 oid = qs.get("order_id",[""])[0]
                 self._send(_ok(db.get_invoices(order_id=int(oid) if oid else None)))
-
-            elif path.startswith("/api/orders/") and path.endswith("/profit"):
-                oid = int(path.split("/")[-2])
-                self._send(_ok(db.get_order_profit_summary(oid)))
 
             # ── Üretim Emirleri ───────────────────────────────────
             elif path == "/api/production_orders":
@@ -835,6 +839,12 @@ class APIHandler(BaseHTTPRequestHandler):
                 po_id = int(path.split("/")[-2])
                 db.update_purchase_order_status(po_id, body.get("status",""))
                 self._send(_ok())
+            elif path.startswith("/api/orders/") and path.endswith("/restore"):
+                if user.get("role") != "admin":
+                    return self._send(_err("Geri alma yetkisi yok"), 403)
+                oid = int(path.split("/")[-2])
+                r = db.restore_order(oid)
+                self._send(_ok(r) if r.get("ok") else _err("Sipariş bulunamadı (süre dolmuş olabilir)"))
             elif path.startswith("/api/orders/"):
                 oid = int(path.split("/")[-1])
                 db.update_order(oid,

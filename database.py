@@ -501,6 +501,7 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_prod_order ON production_orders(order_id)",
         "ALTER TABLE production_orders ADD COLUMN ham_metre REAL DEFAULT 0",
         "ALTER TABLE production_orders ADD COLUMN cozgu_ucret_usd REAL DEFAULT 0",
+        "ALTER TABLE orders ADD COLUMN deleted_at TEXT DEFAULT NULL",
         """CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             invoice_no TEXT DEFAULT '',
@@ -2238,7 +2239,7 @@ def get_all_orders(search="", status=""):
             (SELECT COUNT(*) FROM order_items oi WHERE oi.order_id=o.id) AS item_count,
             (SELECT COALESCE(SUM(oi.meter*oi.sale_price),0) FROM order_items oi
                 WHERE oi.order_id=o.id) AS total_amount
-        FROM orders o WHERE 1=1
+        FROM orders o WHERE o.deleted_at IS NULL
     """
     params = []
     if search:
@@ -2341,12 +2342,52 @@ def update_order(order_id, customer_id, customer_name, customer_ref, currency,
     conn.close()
 
 
+ORDER_UNDO_HOURS = 24   # silinen sipariş bu süre içinde geri alınabilir
+
+
+def _purge_deleted_orders(conn):
+    """Geri alma süresi dolan silinmiş siparişleri kalıcı temizler."""
+    olds = conn.execute(
+        "SELECT id FROM orders WHERE deleted_at IS NOT NULL "
+        "AND deleted_at < datetime('now','localtime', ?)",
+        (f"-{ORDER_UNDO_HOURS} hour",)).fetchall()
+    for r in olds:
+        conn.execute("DELETE FROM order_items WHERE order_id=?", (r["id"],))
+        conn.execute("DELETE FROM orders WHERE id=?", (r["id"],))
+
+
 def delete_order(order_id):
+    """Yumuşak silme: sipariş listeden kalkar, ORDER_UNDO_HOURS içinde geri alınabilir."""
     conn = get_connection()
-    conn.execute("DELETE FROM order_items WHERE order_id=?", (order_id,))
-    conn.execute("DELETE FROM orders WHERE id=?", (order_id,))
+    _purge_deleted_orders(conn)
+    conn.execute("UPDATE orders SET deleted_at=datetime('now','localtime') WHERE id=?",
+                 (order_id,))
     conn.commit()
     conn.close()
+
+
+def get_deleted_orders():
+    """Geri alma süresi dolmamış silinmiş siparişler."""
+    conn = get_connection()
+    _purge_deleted_orders(conn); conn.commit()
+    rows = conn.execute(
+        "SELECT id, order_no, customer_name, status, deleted_at, "
+        "datetime(deleted_at, ?) AS purge_at "
+        "FROM orders WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC",
+        (f"+{ORDER_UNDO_HOURS} hour",)).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def restore_order(order_id):
+    """Silinmiş siparişi geri alır (süre içindeyse)."""
+    conn = get_connection()
+    _purge_deleted_orders(conn)
+    conn.execute("UPDATE orders SET deleted_at=NULL WHERE id=?", (order_id,))
+    conn.commit()
+    row = conn.execute("SELECT order_no FROM orders WHERE id=?", (order_id,)).fetchone()
+    conn.close()
+    return {"ok": bool(row), "order_no": row["order_no"] if row else ""}
 
 
 def update_order_status(order_id, status):

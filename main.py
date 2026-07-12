@@ -50,7 +50,7 @@ _LIST_FUNCS = {
     "get_crm_years", "get_stock_snapshots", "get_movement_destinations",
     "get_iplik_cinsleri", "get_iplikler", "get_stock_breakdown_by_code",
     "get_reservations", "get_production_orders", "get_open_po_items",
-    "get_invoices",
+    "get_invoices", "get_deleted_orders",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -8920,6 +8920,10 @@ class OrdersView(QWidget):
         btn_del = QPushButton("✕ Sil")
         btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
         btn_del.clicked.connect(self._delete_order)
+        btn_aktif = QPushButton("♻ Tekrar Aktifleştir")
+        btn_aktif.setStyleSheet("background:#1B5E20;color:white;border-radius:4px;padding:6px 14px;")
+        btn_aktif.setToolTip("İPTAL edilmiş siparişi yeniden ONAYDA durumuna alır")
+        btn_aktif.clicked.connect(self._reactivate_order)
         btn_pdf = QPushButton("📄 PDF Al")
         btn_pdf.clicked.connect(self._export_pdf)
         btn_refresh = QPushButton("⟳ Yenile")
@@ -8929,7 +8933,13 @@ class OrdersView(QWidget):
             btn_settings = QPushButton("🏦 Şirket/Banka Ayarları")
             btn_settings.clicked.connect(self._company_settings)
             toolbar.addWidget(btn_settings)
+        toolbar.addWidget(btn_aktif)
         toolbar.addWidget(btn_del)
+        if CURRENT_USER.get("role") == "admin":
+            btn_undo = QPushButton("♻ Silinenler")
+            btn_undo.setToolTip("Son 24 saatte silinen siparişleri geri al")
+            btn_undo.clicked.connect(self._show_deleted_orders)
+            toolbar.addWidget(btn_undo)
         toolbar.addWidget(btn_pdf)
         toolbar.addWidget(btn_refresh)
         layout.addLayout(toolbar)
@@ -9089,10 +9099,99 @@ class OrdersView(QWidget):
                 "Silebilmek için siparişin önce İPTAL edilmesi gerekir.")
             return
         if QMessageBox.question(self, "Sil",
-                f"{order.get('order_no','')} numaralı sipariş kalıcı olarak silinsin mi?",
+                f"{order.get('order_no','')} numaralı sipariş silinsin mi?\n\n"
+                "Not: 24 saat içinde '♻ Silinenler' düğmesinden geri alınabilir;\n"
+                "sonrasında kalıcı olarak temizlenir.",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) == QMessageBox.StandardButton.Yes:
             db.delete_order(oid)
             self.refresh()
+
+    def _reactivate_order(self):
+        """İPTAL edilmiş siparişi yeniden ONAYDA durumuna alır — planlama akışına döner."""
+        if CURRENT_USER.get("role") not in ("admin", "satışçı"):
+            return QMessageBox.warning(self, "Yetki",
+                "Tekrar aktifleştirme yalnızca admin veya satışçı tarafından yapılabilir.")
+        oid = self._selected_id()
+        if not oid:
+            return
+        order = db.get_order(oid)
+        if not order:
+            return
+        if order.get("status") != "İPTAL":
+            return QMessageBox.information(self, "Bilgi",
+                f"Bu sipariş '{order.get('status','')}' durumunda —\n"
+                "yalnızca İPTAL edilmiş siparişler tekrar aktifleştirilebilir.")
+        if QMessageBox.question(self, "Tekrar Aktifleştir",
+                f"<b>{order.get('order_no','')}</b> yeniden <b>ONAYDA</b> durumuna alınsın mı?<br>"
+                "<span style='color:#555'>Admin onayından sonra planlama akışına döner.</span>",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                == QMessageBox.StandardButton.Yes:
+            db.update_order_status(oid, "ONAYDA")
+            self.refresh()
+            QMessageBox.information(self, "Aktifleştirildi",
+                f"{order.get('order_no','')} yeniden ONAYDA — düzenlemek için çift tıklayabilirsiniz.")
+
+    def _show_deleted_orders(self):
+        """Son 24 saatte silinen siparişler — geri alma (admin)."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("♻ Silinen Siparişler (son 24 saat)")
+        dlg.setMinimumSize(640, 360)
+        dl = QVBoxLayout(dlg)
+        info = QLabel("Silinen siparişler 24 saat saklanır, sonra kalıcı temizlenir.")
+        info.setStyleSheet("color:#555;")
+        dl.addWidget(info)
+        t = QTableWidget()
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.verticalHeader().setVisible(False)
+        t.setAlternatingRowColors(True)
+        dl.addWidget(t)
+
+        def _doldur():
+            rows = db.get_deleted_orders() or []
+            t.clear()
+            t.setColumnCount(5)
+            t.setHorizontalHeaderLabels(["Sipariş No", "Müşteri", "Durum",
+                                         "Silinme", "Kalıcı Silinecek"])
+            t.setRowCount(len(rows))
+            for i, r in enumerate(rows):
+                r = dict(r)
+                it0 = QTableWidgetItem(r.get("order_no", ""))
+                it0.setData(Qt.ItemDataRole.UserRole, r.get("id"))
+                t.setItem(i, 0, it0)
+                t.setItem(i, 1, QTableWidgetItem(r.get("customer_name", "")))
+                t.setItem(i, 2, QTableWidgetItem(r.get("status", "")))
+                t.setItem(i, 3, QTableWidgetItem(str(r.get("deleted_at", ""))[:16]))
+                t.setItem(i, 4, QTableWidgetItem(str(r.get("purge_at", ""))[:16]))
+            t.resizeColumnsToContents()
+            t.horizontalHeader().setStretchLastSection(True)
+
+        _doldur()
+        btns = QHBoxLayout()
+        b_geri = QPushButton("♻ Seçili Siparişi Geri Al")
+        b_geri.setStyleSheet("background:#1B5E20;color:white;font-weight:bold;"
+                             "border-radius:4px;padding:6px 14px;")
+        def _geri():
+            row = t.currentRow()
+            if row < 0:
+                return QMessageBox.information(dlg, "Bilgi", "Geri alınacak siparişi seçin.")
+            oid2 = t.item(row, 0).data(Qt.ItemDataRole.UserRole)
+            r = db.restore_order(oid2)
+            if r.get("ok"):
+                QMessageBox.information(dlg, "Geri Alındı",
+                    f"{r.get('order_no','')} sipariş listesine geri döndü.")
+                _doldur(); self.refresh()
+            else:
+                QMessageBox.warning(dlg, "Geri Alınamadı",
+                    r.get("error", "Süre dolmuş olabilir."))
+        b_geri.clicked.connect(_geri)
+        btns.addWidget(b_geri); btns.addStretch()
+        dl.addLayout(btns)
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Close)
+        bb.rejected.connect(dlg.reject); bb.accepted.connect(dlg.accept)
+        bb.button(QDialogButtonBox.StandardButton.Close).clicked.connect(dlg.accept)
+        dl.addWidget(bb)
+        dlg.exec()
 
     def _export_pdf(self):
         oid = self._selected_id()

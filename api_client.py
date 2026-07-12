@@ -609,6 +609,17 @@ def update_order(oid, customer_id, customer_name, customer_ref, currency,
 def delete_order(oid):
     _delete(f"/api/orders/{oid}")
 
+def get_deleted_orders():
+    """Geri alma süresi dolmamış silinmiş siparişler."""
+    return _get("/api/orders/deleted") or []
+
+def restore_order(oid):
+    try:
+        r = _put(f"/api/orders/{oid}/restore", {})
+        return r if isinstance(r, dict) else {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 def update_order_status(order_id, status):
     _put(f"/api/orders/{order_id}/status", {"status": status})
 
