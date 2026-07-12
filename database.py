@@ -561,6 +561,20 @@ def init_db():
     except Exception:
         pass
 
+    # Tedarikçiler → Firmalar (müşteriler) birleşimi: tedarikçi sekmesi kaldırıldı,
+    # mevcut tedarikçi kayıtları ad çakışması yoksa müşteriler listesine taşınır (idempotent)
+    try:
+        c.execute("""
+            INSERT INTO customers (name, code, phone, address, tax_no, active)
+            SELECT s.name, IFNULL(s.code,''), IFNULL(s.phone,''), IFNULL(s.address,''),
+                   IFNULL(s.tax_no,''), IFNULL(s.active,1)
+            FROM suppliers s
+            WHERE NOT EXISTS (SELECT 1 FROM customers cu
+                              WHERE UPPER(TRIM(cu.name)) = UPPER(TRIM(s.name)))
+        """)
+    except Exception:
+        pass
+
     # Mevcut numune kayıtlarına numune_code'u geriye dönük doldur (bir defalık)
     try:
         c.execute("UPDATE products SET numune_code=product_code "

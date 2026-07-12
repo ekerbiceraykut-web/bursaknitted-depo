@@ -3528,7 +3528,7 @@ class CRMView(QWidget):
 class CustomerManagementDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Müşteri Yönetimi")
+        self.setWindowTitle("Firma Yönetimi (müşteriler + tedarikçiler)")
         self.setMinimumSize(680, 460)
         self._build_ui(); self._load()
 
@@ -3537,14 +3537,14 @@ class CustomerManagementDialog(QDialog):
 
         # Arama
         top = QHBoxLayout()
-        self.search = QLineEdit(); self.search.setPlaceholderText("Müşteri adı, kodu, telefon...")
+        self.search = QLineEdit(); self.search.setPlaceholderText("Firma adı, kodu, telefon...")
         self.search.textChanged.connect(lambda: self._load(self.search.text()))
         top.addWidget(QLabel("Ara:")); top.addWidget(self.search); top.addStretch()
         lay.addLayout(top)
 
         self.table = QTableWidget()
         self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Müşteri Adı", "Kodu", "Telefon", "Adres", "Vergi No", "Durum"])
+        self.table.setHorizontalHeaderLabels(["Firma Adı", "Kodu", "Telefon", "Adres", "Vergi No", "Durum"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -3554,7 +3554,7 @@ class CustomerManagementDialog(QDialog):
         lay.addWidget(self.table)
 
         btn_row = QHBoxLayout()
-        btn_add   = QPushButton("+ Yeni Müşteri");  btn_add.clicked.connect(self._add)
+        btn_add   = QPushButton("+ Yeni Firma");  btn_add.clicked.connect(self._add)
         btn_edit  = QPushButton("✎ Düzenle");        btn_edit.clicked.connect(self._edit)
         btn_del   = QPushButton("✕ Sil")
         btn_del.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:6px 14px;")
@@ -9291,8 +9291,8 @@ class PurchaseOrderDialog(QDialog):
         lay.addWidget(btns)
 
     def _reload_suppliers(self):
-        # dict'e çevir: yerel modda sqlite3.Row döner, .get() çağrısı çöker
-        self._suppliers = [dict(s) for s in (db.get_all_suppliers() or [])]
+        # Tedarikçiler artık Firmalar (müşteriler) listesinden gelir
+        self._suppliers = [dict(s) for s in (db.get_all_customers() or [])]
         for row in range(self.table.rowCount()):
             sup_cb = self.table.cellWidget(row, 3)
             if isinstance(sup_cb, QComboBox):
@@ -10019,7 +10019,7 @@ class InvoiceDialog(QDialog):
         self.invoice_no = QLineEdit()
         self.supplier = QComboBox(); self.supplier.setEditable(True)
         _make_searchable(self.supplier)
-        for s in (db.get_all_suppliers() or []):
+        for s in (db.get_all_customers() or []):   # Firmalar listesinden
             self.supplier.addItem(dict(s).get("name", ""))
         self.supplier.setCurrentText("")
         from PyQt6.QtCore import QDate
@@ -10166,7 +10166,7 @@ class YarnPODialog(QDialog):
             kg.setSuffix(" kg"); kg.setValue(round(kg0, 1))
             ted_cb = QComboBox(); ted_cb.setEditable(True); _make_searchable(ted_cb)
             ted_cb.addItem("", "")
-            for s in (db.get_all_suppliers() or []):
+            for s in (db.get_all_customers() or []):   # Firmalar listesinden
                 nm = dict(s).get("name", "")
                 ted_cb.addItem(nm, nm)
             fiy = QDoubleSpinBox(); fiy.setRange(0, 9999); fiy.setDecimals(2); fiy.setSuffix(" $/kg")
@@ -10287,7 +10287,7 @@ class ProductionOrderDialog(QDialog):
         self.dokumaci = QComboBox(); _make_searchable(self.dokumaci)
         for cb in (self.cozgucu, self.dokumaci):
             cb.addItem("— Seçiniz —", "")
-            for s in (db.get_all_suppliers() or []):
+            for s in (db.get_all_customers() or []):   # Firmalar listesinden
                 s = dict(s)
                 cb.addItem(s.get("name",""), s.get("name",""))
         fc.addRow("Çözgücü:", self.cozgucu)
@@ -11350,7 +11350,7 @@ class PlanningView(QWidget):
             return
         created = []
         for ted, satirlar in gruplar.items():
-            sup = next((dict(s) for s in (db.get_all_suppliers() or [])
+            sup = next((dict(s) for s in (db.get_all_customers() or [])
                         if dict(s).get("name") == ted), None)
             items = [{"product_code": s["iplik"], "product_name": s["iplik"],
                       "fabric_type": "İPLİK", "meter": 0, "kg": s["kg"],
@@ -13042,13 +13042,10 @@ class MainWindow(QMainWindow):
         sys_menu.addAction("Yedek Durumu ve Yönetimi...").triggered.connect(self._backup_dialog)
         sys_menu.addAction("Şimdi Yedek Al").triggered.connect(self._backup_now)
 
-        cust_menu = menubar.addMenu("👥 Müşteriler")
-        cust_menu.addAction("Müşteri Listesi...").triggered.connect(
+        # Firmalar = müşteriler + tedarikçiler tek listede (tedarikçi sekmesi kaldırıldı)
+        cust_menu = menubar.addMenu("🏢 Firmalar")
+        cust_menu.addAction("Firma Listesi...").triggered.connect(
             lambda: CustomerManagementDialog(self).exec())
-
-        sup_menu = menubar.addMenu("🏭 Tedarikçiler")
-        sup_menu.addAction("Tedarikçi Listesi...").triggered.connect(
-            lambda: SupplierManagementDialog(self).exec())
 
         prod_menu = menubar.addMenu("📦 Ürünler")
         prod_menu.addAction("Ürün Kataloğu...").triggered.connect(
