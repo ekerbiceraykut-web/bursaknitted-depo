@@ -883,6 +883,11 @@ class APIHandler(BaseHTTPRequestHandler):
                     return self._send(_err("Fatura silme yetkisi yok"), 403)
                 db.delete_invoice(int(path.split("/")[-1]))
                 self._send(_ok())
+            elif path.startswith("/api/production_orders/"):
+                if user.get("role") not in ("admin", "planlama"):
+                    return self._send(_err("Üretim emri silme yetkisi yok"), 403)
+                r = db.delete_production_order(int(path.split("/")[-1]))
+                self._send(_ok(r) if r.get("ok") else _err(r.get("error", "Silinemedi")))
             elif path.startswith("/api/fabrics/"):
                 fid = int(path.split("/")[-1])
                 db.soft_delete_fabric(fid, user["full_name"])

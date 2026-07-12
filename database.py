@@ -2617,6 +2617,20 @@ def get_production_orders(order_id=None, active_only=False):
     return [dict(r) for r in rows]
 
 
+def delete_production_order(pid):
+    """Üretim emrini kalıcı siler — yalnız İPTAL durumundakiler (sipariş kuralıyla aynı)."""
+    conn = get_connection()
+    row = conn.execute("SELECT durum FROM production_orders WHERE id=?", (pid,)).fetchone()
+    if not row:
+        conn.close(); return {"ok": False, "error": "Emir bulunamadı"}
+    if row["durum"] != "İPTAL":
+        conn.close()
+        return {"ok": False, "error": "Silebilmek için emrin önce İPTAL edilmesi gerekir."}
+    conn.execute("DELETE FROM production_orders WHERE id=?", (pid,))
+    conn.commit(); conn.close()
+    return {"ok": True}
+
+
 def update_production_order_status(pid, durum, user_name=""):
     if durum not in PRODUCTION_STATUSES:
         return {"ok": False, "error": f"Geçersiz durum: {durum}"}

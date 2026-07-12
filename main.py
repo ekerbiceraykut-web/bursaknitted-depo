@@ -10584,7 +10584,11 @@ class PlanningView(QWidget):
         self._btn_ue_iptal = QPushButton("✕ Emri İptal Et")
         self._btn_ue_iptal.setStyleSheet("color:#C62828;")
         self._btn_ue_iptal.clicked.connect(self._cancel_production_order)
-        for b in (self._btn_ue_iplik, self._btn_ue_ileri, self._btn_ue_ham, self._btn_ue_iptal):
+        self._btn_ue_sil = QPushButton("🗑 Sil")
+        self._btn_ue_sil.setStyleSheet("background:#757575;color:white;border-radius:4px;padding:5px 12px;")
+        self._btn_ue_sil.clicked.connect(self._delete_production_order)
+        for b in (self._btn_ue_iplik, self._btn_ue_ileri, self._btn_ue_ham,
+                  self._btn_ue_iptal, self._btn_ue_sil):
             b.setVisible(CURRENT_USER.get("role") in ("admin", "planlama"))
             ue_btns.addWidget(b)
         ue_btns.addStretch()
@@ -11119,6 +11123,29 @@ class PlanningView(QWidget):
             db.update_production_order_status(pid, "İPTAL", CURRENT_USER.get("full_name",""))
             self._refresh_ue_table()
 
+    def _delete_production_order(self):
+        """İPTAL edilmiş üretim emrini kalıcı siler (sipariş silme kuralıyla aynı)."""
+        pid, durum = self._selected_ue()
+        if not pid:
+            return
+        row = self.ue_table.currentRow()
+        ue_no = self.ue_table.item(row, 0).text() if row >= 0 else ""
+        if durum != "İPTAL":
+            return QMessageBox.warning(self, "Silinemez",
+                f"<b>{ue_no}</b> emri '{durum}' durumunda.<br>"
+                "Silebilmek için önce <b>İPTAL</b> edilmesi gerekir.")
+        if QMessageBox.question(self, "Kalıcı Silme",
+                f"<b>{ue_no}</b> üretim emri <b>kalıcı olarak</b> silinsin mi?<br>"
+                "<span style='color:#555'>Bu işlem geri alınamaz.</span>",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                != QMessageBox.StandardButton.Yes:
+            return
+        r = db.delete_production_order(pid)
+        if r.get("ok"):
+            self._refresh_ue_table()
+        else:
+            QMessageBox.warning(self, "Silinemedi", r.get("error", "Bilinmeyen hata"))
+
     def _receive_production_ham(self):
         """FASON emirde dokumadan gelen ham kumaşı depoya alır (siparişe/emre etiketli);
         istenirse emri TAMAMLANDI'ya çeker. Kısmi girişe izin verir."""
@@ -11515,6 +11542,44 @@ class PlanningView(QWidget):
                     QMessageBox.warning(dlg, "Rezerve Edilemedi", r.get("error", "Bilinmeyen hata"))
             b_rez.clicked.connect(_rezerve)
             btn_row.addWidget(b_rez)
+
+            b_geri = QPushButton("↩ Rezervi Geri Al")
+            b_geri.setStyleSheet("background:#757575;color:white;font-weight:bold;"
+                                 "border-radius:4px;padding:6px 12px;")
+            def _geri_al():
+                row = t.currentRow()
+                if row < 0 or row >= t.rowCount() - 1:
+                    return QMessageBox.information(dlg, "Bilgi", "Rezervi geri alınacak lot satırını seçin.")
+                fid = t.item(row, 0).data(Qt.ItemDataRole.UserRole)
+                rezler = [dict(r) for r in (db.get_reservations(fabric_id=fid, active_only=True) or [])]
+                if not rezler:
+                    return QMessageBox.information(dlg, "Bilgi", "Bu lotta aktif rezervasyon yok.")
+                if len(rezler) == 1:
+                    secilen = rezler[0]
+                else:
+                    # Birden çok rezerv: hangisi geri alınacak seçtir
+                    from PyQt6.QtWidgets import QInputDialog
+                    etiketler = [f"{r.get('order_no','—')} — "
+                                 f"{float(r.get('meter') or 0) - float(r.get('used_meter') or 0):,.1f} mt "
+                                 f"({r.get('created_by','')}, bitiş {str(r.get('expires_at',''))[:10]})"
+                                 for r in rezler]
+                    sec, ok = QInputDialog.getItem(dlg, "Rezerv Seç",
+                        "Geri alınacak rezervasyon:", etiketler, 0, False)
+                    if not ok:
+                        return
+                    secilen = rezler[etiketler.index(sec)]
+                kalan = float(secilen.get("meter") or 0) - float(secilen.get("used_meter") or 0)
+                if QMessageBox.question(dlg, "Rezervi Geri Al",
+                        f"<b>{secilen.get('order_no','—')}</b> siparişine ait "
+                        f"<b>{kalan:,.1f} mt</b> rezerv geri alınsın mı?<br>"
+                        "<span style='color:#555'>Miktar tekrar kullanılabilir stoğa döner.</span>",
+                        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                        != QMessageBox.StandardButton.Yes:
+                    return
+                db.cancel_reservation(secilen.get("id"), CURRENT_USER.get("full_name", ""))
+                _doldur()
+            b_geri.clicked.connect(_geri_al)
+            btn_row.addWidget(b_geri)
         btn_row.addStretch()
         dl.addLayout(btn_row)
 

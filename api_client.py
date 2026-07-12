@@ -699,6 +699,13 @@ def update_production_order_status(pid, durum, user_name=""):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def delete_production_order(pid):
+    try:
+        r = _delete(f"/api/production_orders/{pid}")
+        return r if isinstance(r, dict) else {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
 
 # ── Rezervasyonlar ────────────────────────────────────────────────
 
