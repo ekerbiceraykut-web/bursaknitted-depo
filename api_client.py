@@ -649,6 +649,33 @@ def get_stock_breakdown_by_code(product_code, fabric_type):
                                          "fabric_type": fabric_type}) or []
 
 
+def get_open_po_items():
+    """Açık PO kalemleri (kalan miktarlı) — stok girişini PO'ya bağlamak için."""
+    return _get("/api/po/open-items") or []
+
+
+# ── Üretim Emirleri ───────────────────────────────────────────────
+
+def add_production_order(**kw):
+    try:
+        r = _post("/api/production_orders", kw)
+        return r if isinstance(r, dict) else {}
+    except Exception as e:
+        return {"error": str(e)}
+
+def get_production_orders(order_id=None, active_only=False):
+    params = {"active_only": "1" if active_only else "0"}
+    if order_id: params["order_id"] = str(order_id)
+    return _get("/api/production_orders", params) or []
+
+def update_production_order_status(pid, durum, user_name=""):
+    try:
+        r = _post(f"/api/production_orders/{pid}/status", {"durum": durum})
+        return r if isinstance(r, dict) else {"ok": True}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
 # ── Rezervasyonlar ────────────────────────────────────────────────
 
 def add_reservation(fabric_id, order_id=None, order_no="", meter=0, kg=0,

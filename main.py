@@ -49,7 +49,7 @@ _LIST_FUNCS = {
     "get_crm_customers", "get_crm_visits", "get_crm_sales", "get_crm_orders",
     "get_crm_years", "get_stock_snapshots", "get_movement_destinations",
     "get_iplik_cinsleri", "get_iplikler", "get_stock_breakdown_by_code",
-    "get_reservations",
+    "get_reservations", "get_production_orders", "get_open_po_items",
 }
 
 _REAUTH_IN_PROGRESS = False
@@ -994,6 +994,16 @@ class MaliyetWidget(QWidget):
                 row["pct"].setText(f"{gv / total_grs * 100:.1f}%" if total_grs > 0 else "—")
             except Exception:
                 row["pct"].setText("—")
+
+        # Programatik erişim — üretim emri bu değerlerden ihtiyaç hesaplar
+        self.calc_values = {
+            "total_grs": total_grs,            # ham toplam gramaj (gr/mt, firesiz)
+            "cozgu_grs": cozgu_grs_total,      # çözgü gramajı (gr/mt)
+            "atki_grs": total_grs - cozgu_grs_total,
+            "atki_sik": atki_sik,
+            "fason_dokuma_krs": self.fason_dokuma.value(),
+            "usd_kuru": usd_kuru,
+        }
 
     def _do_convert(self):
         v = self.cvt_val.value(); b = self.cvt_bir.currentText()
@@ -8370,11 +8380,99 @@ class StockTable(QWidget):
         return fid
 
     def _add(self):
+        """Yeni giriş: önce açık PO kalemleri gösterilir — seçilirse giriş
+        satınalma siparişine (ve dolayısıyla müşteri siparişine) bağlanır.
+        (İleride tüm girişler için sipariş zorunlu olacak.)"""
+        try:
+            open_items = db.get_open_po_items() or []
+        except Exception:
+            open_items = []
+        if open_items:
+            secim = self._pick_open_po_item(open_items)
+            if secim == "iptal":
+                return
+            if isinstance(secim, dict):          # PO kalemine mal girişi
+                dlg = ItemReceiptDialog(self, po_item=secim)
+                if dlg.exec():
+                    d = dlg.get_data()
+                    try:
+                        db.receive_purchase_order_item(
+                            secim["po_item_id"], d["metre"], d["kilo"],
+                            d["location"], user_name=CURRENT_USER["full_name"],
+                            location_group=d["location_group"], lot=d["lot"])
+                        QMessageBox.information(self, "Kaydedildi",
+                            f"Mal girişi {secim['po_no']} ({secim.get('order_no','') or 'siparişsiz'}) "
+                            f"kaydına bağlandı.")
+                    except Exception as e:
+                        QMessageBox.critical(self, "Hata", f"Mal girişi kaydedilemedi:\n{e}")
+                    self.refresh_with_locations()
+                return
+            # secim None → serbest giriş ile devam
         dlg = FabricDialog(self)
         if dlg.exec():
             d = dlg.get_data()
             fid = db.add_fabric(**d, user_name=CURRENT_USER["full_name"])
             self.refresh_with_locations()
+
+    def _pick_open_po_item(self, items):
+        """Açık PO kalemi seçtirir. Döner: kalem dict'i | None (serbest giriş) | 'iptal'."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Giriş — Açık Satınalma Kalemleri")
+        dlg.setMinimumSize(780, 400)
+        lay = QVBoxLayout(dlg)
+        info = QLabel("Gelen mal aşağıdaki açık satınalma kalemlerinden birine aitse seçin —\n"
+                      "giriş otomatik olarak PO'ya ve müşteri siparişine bağlanır.")
+        info.setStyleSheet("background:#E3F2FD; padding:8px; border-radius:4px;")
+        lay.addWidget(info)
+        t = QTableWidget(len(items), 7)
+        t.setHorizontalHeaderLabels(["PO No", "Sipariş", "Tedarikçi", "Ürün Kodu",
+                                     "Tip", "Kalan (mt)", "Birim Fiyat"])
+        t.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        t.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        t.verticalHeader().setVisible(False)
+        t.setAlternatingRowColors(True)
+        for i, r in enumerate(items):
+            r = dict(r)
+            it0 = QTableWidgetItem(r.get("po_no", ""))
+            it0.setData(Qt.ItemDataRole.UserRole, i)
+            t.setItem(i, 0, it0)
+            t.setItem(i, 1, QTableWidgetItem(r.get("order_no", "") or "—"))
+            t.setItem(i, 2, QTableWidgetItem(r.get("supplier_name", "") or ""))
+            t.setItem(i, 3, QTableWidgetItem(r.get("product_code", "") or ""))
+            t.setItem(i, 4, QTableWidgetItem(r.get("fabric_type", "") or ""))
+            km = QTableWidgetItem(f"{float(r.get('kalan_meter') or 0):,.0f}")
+            km.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            t.setItem(i, 5, km)
+            bf = QTableWidgetItem(f"{float(r.get('unit_price') or 0):,.2f}")
+            bf.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            t.setItem(i, 6, bf)
+        t.resizeColumnsToContents()
+        t.horizontalHeader().setStretchLastSection(True)
+        lay.addWidget(t)
+
+        sonuc = {"v": "iptal"}
+        btns = QHBoxLayout()
+        b_sec = QPushButton("📥 Seçili Kaleme Mal Girişi")
+        b_sec.setStyleSheet("background:#1B5E20;color:white;font-weight:bold;"
+                            "border-radius:4px;padding:6px 14px;")
+        b_ser = QPushButton("Serbest Giriş (PO'suz)")
+        b_ipt = QPushButton("Vazgeç")
+        def _sec():
+            row = t.currentRow()
+            if row < 0:
+                return QMessageBox.information(dlg, "Bilgi", "Bir kalem seçin.")
+            sonuc["v"] = dict(items[t.item(row, 0).data(Qt.ItemDataRole.UserRole)])
+            dlg.accept()
+        def _ser():
+            sonuc["v"] = None; dlg.accept()
+        b_sec.clicked.connect(_sec)
+        b_ser.clicked.connect(_ser)
+        b_ipt.clicked.connect(dlg.reject)
+        t.doubleClicked.connect(lambda *_: _sec())
+        btns.addWidget(b_sec); btns.addWidget(b_ser); btns.addStretch(); btns.addWidget(b_ipt)
+        lay.addLayout(btns)
+        dlg.exec()
+        return sonuc["v"]
 
     def _edit(self):
         fid = self._selected_id()
@@ -9754,6 +9852,177 @@ class SiparisOnayDialog(QDialog):
             self.accept()
 
 
+class ProductionOrderDialog(QDialog):
+    """Üretim emri oluşturma — FASON (iplik+çözgü+dokuma) veya HAZIR ALIM.
+    İhtiyaçlar ürün ağacındaki maliyet verisinden otomatik hesaplanır."""
+
+    def __init__(self, parent, order, product_code, default_miktar=0):
+        super().__init__(parent)
+        self.order = dict(order or {})
+        self.product_code = product_code
+        self.setWindowTitle(f"🏭 Üretim Emri — {product_code}")
+        self.setMinimumSize(560, 560)
+
+        # Ürün ağacından hesap değerleri (gizli maliyet widget'ı ile)
+        self._calc = {}
+        p = db.get_product_by_code(product_code)
+        if p:
+            try:
+                mw = MaliyetWidget()
+                mw.load(dict(p))
+                self._calc = dict(getattr(mw, "calc_values", {}) or {})
+                mw.deleteLater()
+            except Exception:
+                self._calc = {}
+
+        lay = QVBoxLayout(self)
+        form = QFormLayout(); form.setSpacing(8)
+        form.addRow("Sipariş:", QLabel(f"<b>{self.order.get('order_no','—')}</b>  "
+                                       f"{self.order.get('customer_name','')}"))
+        form.addRow("Ürün Kodu:", QLabel(f"<b>{product_code}</b>"))
+        self.tip = QComboBox()
+        self.tip.addItem("Fason Dokuma (iplik + çözgü + dokuma)", "FASON")
+        self.tip.addItem("Hazır Ham Alımı (satınalma)", "HAZIR ALIM")
+        self.tip.currentIndexChanged.connect(self._tip_degisti)
+        form.addRow("Üretim Yolu:", self.tip)
+        self.miktar = QDoubleSpinBox(); self.miktar.setRange(0.01, 9999999)
+        self.miktar.setDecimals(0); self.miktar.setSuffix(" mt")
+        self.miktar.setValue(max(1, default_miktar))
+        self.miktar.valueChanged.connect(self._hesapla)
+        form.addRow("Üretilecek Ham Miktar:", self.miktar)
+        lay.addLayout(form)
+
+        # ── FASON bölümü ──
+        self.grp_fason = QGroupBox("Fason Dokuma Planı (ürün ağacından otomatik)")
+        ff = QFormLayout(self.grp_fason); ff.setSpacing(6)
+        self.lbl_cozgu_mt = QLabel("—"); self.lbl_cz_kg = QLabel("—"); self.lbl_at_kg = QLabel("—")
+        for l in (self.lbl_cozgu_mt, self.lbl_cz_kg, self.lbl_at_kg):
+            l.setStyleSheet("font-weight:bold; color:#1565C0;")
+        ff.addRow("Çözgü Metresi (kıvrım %10):", self.lbl_cozgu_mt)
+        ff.addRow("Çözgü İpliği:", self.lbl_cz_kg)
+        ff.addRow("Atkı İpliği:", self.lbl_at_kg)
+        self.cozgucu = QComboBox(); _make_searchable(self.cozgucu)
+        self.dokumaci = QComboBox(); _make_searchable(self.dokumaci)
+        for cb in (self.cozgucu, self.dokumaci):
+            cb.addItem("— Seçiniz —", "")
+            for s in (db.get_all_suppliers() or []):
+                s = dict(s)
+                cb.addItem(s.get("name",""), s.get("name",""))
+        ff.addRow("Çözgücü:", self.cozgucu)
+        ff.addRow("Çözgü Çözme Ücreti:", self._spin_row("cozgu_ucret", 0, " TL/mt"))
+        ff.addRow("Dokumacı:", self.dokumaci)
+        ff.addRow("Fason Dokuma Ücreti:", self._spin_row(
+            "fason_ucret", self._calc.get("fason_dokuma_krs", 0), " krş/100 atkı"))
+        ff.addRow("Atkı Sıklığı:", self._spin_row(
+            "atki_sik", self._calc.get("atki_sik", 0), " atkı/cm"))
+        ff.addRow("USD Kuru:", self._spin_row(
+            "usd_kuru", self._calc.get("usd_kuru") or 35.0, " TL/$"))
+        self.lbl_tahmin = QLabel("—")
+        self.lbl_tahmin.setStyleSheet("font-weight:bold; color:#C62828; font-size:13px;")
+        ff.addRow("Tahmini Maliyet (çözgü+dokuma):", self.lbl_tahmin)
+        ipl_not = QLabel("İplik maliyeti, iplik satınalma siparişleri açıldıkça emre işlenecek.")
+        ipl_not.setStyleSheet("color:#757575; font-size:11px;")
+        ff.addRow("", ipl_not)
+        lay.addWidget(self.grp_fason)
+
+        # ── HAZIR ALIM bölümü ──
+        self.grp_hazir = QGroupBox("Hazır Ham Alımı")
+        fh = QFormLayout(self.grp_hazir); fh.setSpacing(6)
+        self.tedarikci_kodu = QLineEdit()
+        self.tedarikci_kodu.setPlaceholderText("Tedarikçinin kendi ürün kodu (varsa)")
+        fh.addRow("Tedarikçi Kodu:", self.tedarikci_kodu)
+        hz_not = QLabel("Emir kaydedildikten sonra 'Satınalma Siparişi Oluştur' ile PO açın —\n"
+                        "konstrüksiyon özeti PO'ya otomatik eklenecek (4b).")
+        hz_not.setStyleSheet("color:#757575; font-size:11px;")
+        fh.addRow("", hz_not)
+        lay.addWidget(self.grp_hazir)
+
+        self.notlar = QLineEdit()
+        fnot = QFormLayout(); fnot.addRow("Not:", self.notlar)
+        lay.addLayout(fnot)
+        lay.addStretch()
+
+        bb = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        bb.button(QDialogButtonBox.StandardButton.Ok).setText("Üretim Emri Oluştur")
+        bb.accepted.connect(self._accept); bb.rejected.connect(self.reject)
+        lay.addWidget(bb)
+
+        _disable_wheel(self)
+        self._tip_degisti()
+        self._hesapla()
+
+    def _spin_row(self, name, default, suffix):
+        sp = QDoubleSpinBox(); sp.setRange(0, 999999); sp.setDecimals(2); sp.setSuffix(suffix)
+        try: sp.setValue(float(default or 0))
+        except Exception: pass
+        sp.valueChanged.connect(self._hesapla)
+        setattr(self, name, sp)
+        return sp
+
+    def _tip_degisti(self):
+        fason = self.tip.currentData() == "FASON"
+        self.grp_fason.setVisible(fason)
+        self.grp_hazir.setVisible(not fason)
+
+    def _hesapla(self):
+        m = self.miktar.value()
+        cz_grs = float(self._calc.get("cozgu_grs") or 0)
+        at_grs = float(self._calc.get("atki_grs") or 0)
+        cozgu_mt = m * 1.10
+        cz_kg = cozgu_mt * cz_grs / 1000.0
+        at_kg = m * at_grs / 1000.0
+        self._son = {"cozgu_metre": cozgu_mt, "cozgu_iplik_kg": cz_kg, "atki_iplik_kg": at_kg}
+        if cz_grs > 0:
+            self.lbl_cozgu_mt.setText(f"{cozgu_mt:,.0f} mt")
+            self.lbl_cz_kg.setText(f"{cz_kg:,.1f} kg   ({cz_grs:.1f} gr/mt)")
+            self.lbl_at_kg.setText(f"{at_kg:,.1f} kg   ({at_grs:.1f} gr/mt)")
+        else:
+            self.lbl_cozgu_mt.setText("—  (ürün ağacında maliyet/iplik verisi yok)")
+            self.lbl_cz_kg.setText("—"); self.lbl_at_kg.setText("—")
+        kur = max(0.01, self.usd_kuru.value())
+        dokuma_usd = self.fason_ucret.value() * self.atki_sik.value() / 100.0 / kur * m
+        cozgu_usd = self.cozgu_ucret.value() * cozgu_mt / kur
+        self._son["tahmini_usd"] = dokuma_usd + cozgu_usd
+        self.lbl_tahmin.setText(
+            f"{dokuma_usd + cozgu_usd:,.2f} $   (dokuma {dokuma_usd:,.2f} + çözgü {cozgu_usd:,.2f})")
+
+    def _accept(self):
+        if self.miktar.value() <= 0:
+            return QMessageBox.warning(self, "Eksik", "Üretilecek miktarı girin.")
+        if self.tip.currentData() == "FASON" and not self.dokumaci.currentData():
+            if QMessageBox.question(self, "Dokumacı",
+                    "Dokumacı seçilmedi — yine de kaydedilsin mi?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                    != QMessageBox.StandardButton.Yes:
+                return
+        self.accept()
+
+    def result_data(self):
+        tip = self.tip.currentData()
+        notes = self.notlar.text().strip()
+        if tip == "HAZIR ALIM" and self.tedarikci_kodu.text().strip():
+            tk = f"Tedarikçi kodu: {self.tedarikci_kodu.text().strip()}"
+            notes = f"{notes} | {tk}" if notes else tk
+        return {
+            "order_id": self.order.get("id"),
+            "order_no": self.order.get("order_no", ""),
+            "product_code": self.product_code,
+            "tip": tip,
+            "miktar_mt": self.miktar.value(),
+            "dokumaci": self.dokumaci.currentData() or "",
+            "cozgucu": self.cozgucu.currentData() or "",
+            "fason_ucret_krs": self.fason_ucret.value(),
+            "cozgu_ucret_tl": self.cozgu_ucret.value(),
+            "usd_kuru": self.usd_kuru.value(),
+            "atki_siklik": self.atki_sik.value(),
+            "cozgu_metre": self._son.get("cozgu_metre", 0),
+            "cozgu_iplik_kg": self._son.get("cozgu_iplik_kg", 0),
+            "atki_iplik_kg": self._son.get("atki_iplik_kg", 0),
+            "tahmini_maliyet_usd": self._son.get("tahmini_usd", 0),
+            "notes": notes,
+        }
+
+
 class PlanningView(QWidget):
     _PLANNING_STATUSES = [
         "ONAYDA", "ONAYLANDI - PLANLAMADA", "PLANLAMA - GÖRDÜ",
@@ -9899,11 +10168,20 @@ class PlanningView(QWidget):
         self.need_table.customContextMenuRequested.connect(self._need_context_menu)
         rl.addWidget(self.need_table)
 
+        need_btns = QHBoxLayout()
         btn_po = QPushButton("+ Satınalma Siparişi Oluştur (Seçili Kalemler)")
         btn_po.setStyleSheet("background:#1565C0;color:white;font-weight:bold;"
                              "border-radius:4px;padding:6px 14px;")
         btn_po.clicked.connect(self._create_po)
-        rl.addWidget(btn_po)
+        need_btns.addWidget(btn_po)
+        self._btn_uretim = QPushButton("🏭 Üretim Emri Oluştur (Seçili Kalem)")
+        self._btn_uretim.setStyleSheet("background:#6A1B9A;color:white;font-weight:bold;"
+                                       "border-radius:4px;padding:6px 14px;")
+        self._btn_uretim.clicked.connect(self._create_production_order)
+        self._btn_uretim.setVisible(CURRENT_USER.get("role") in ("admin", "planlama"))
+        need_btns.addWidget(self._btn_uretim)
+        need_btns.addStretch()
+        rl.addLayout(need_btns)
 
         rl.addWidget(QLabel("<b>Satınalma Kalemleri</b> (çift tıklayarak mal girişi yapabilirsiniz)"))
         self.po_table = QTableWidget()
@@ -9962,6 +10240,33 @@ class PlanningView(QWidget):
         receipt_btns.addWidget(b_rec_del)
         receipt_btns.addStretch()
         rl.addLayout(receipt_btns)
+
+        # ── Üretim Emirleri ──────────────────────────────────────
+        rl.addWidget(QLabel("<b>🏭 Üretim Emirleri</b>"))
+        self.ue_table = QTableWidget()
+        self.ue_table.setColumnCount(9)
+        self.ue_table.setHorizontalHeaderLabels(
+            ["ÜE No", "Ürün", "Tip", "Miktar (mt)", "Çözgü (mt)",
+             "Çözgü İplik (kg)", "Atkı İplik (kg)", "Dokumacı", "Durum"])
+        self.ue_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.ue_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.ue_table.verticalHeader().setVisible(False)
+        uehdr = self.ue_table.horizontalHeader()
+        uehdr.setSectionsMovable(True)
+        uehdr.setStretchLastSection(True)
+        self.ue_table.setMaximumHeight(150)
+        rl.addWidget(self.ue_table)
+        ue_btns = QHBoxLayout()
+        self._btn_ue_ileri = QPushButton("▶ Durumu İlerlet")
+        self._btn_ue_ileri.clicked.connect(self._advance_production_order)
+        self._btn_ue_iptal = QPushButton("✕ Emri İptal Et")
+        self._btn_ue_iptal.setStyleSheet("color:#C62828;")
+        self._btn_ue_iptal.clicked.connect(self._cancel_production_order)
+        for b in (self._btn_ue_ileri, self._btn_ue_iptal):
+            b.setVisible(CURRENT_USER.get("role") in ("admin", "planlama"))
+            ue_btns.addWidget(b)
+        ue_btns.addStretch()
+        rl.addLayout(ue_btns)
 
         rl.addStretch()
         splitter.addWidget(scroll)
@@ -10293,6 +10598,7 @@ class PlanningView(QWidget):
         self.need_table.setSortingEnabled(True)
 
         self._refresh_po_table(order_id)
+        self._refresh_ue_table(order_id)
         self._right_scroll.setVisible(True)
 
     def _need_context_menu(self, pos):
@@ -10334,6 +10640,103 @@ class PlanningView(QWidget):
         else:
             QMessageBox.information(self, "Bilgi",
                 "Görüntüleme modu — değişiklikler kaydedilmedi (yetki gerekli).")
+
+    def _create_production_order(self):
+        """Seçili ihtiyaç kalemi için üretim emri (FASON / HAZIR ALIM) oluşturur."""
+        if not self._current_order_id:
+            return QMessageBox.information(self, "Bilgi", "Önce bir sipariş seçin.")
+        row = self.need_table.currentRow()
+        if row < 0:
+            return QMessageBox.information(self, "Bilgi", "İhtiyaç tablosundan bir kalem seçin.")
+        chk = self.need_table.item(row, 0)
+        it = chk.data(Qt.ItemDataRole.UserRole) if chk else None
+        if not it:
+            return
+        order = db.get_order(self._current_order_id) or {}
+        pc = it.get("product_code", "")
+        # Varsayılan miktar: eksik varsa eksik, yoksa sipariş miktarı
+        ham_m = sum(float(r.get("meter") or 0)
+                    for r in (db.get_stock_breakdown_by_code(pc, "HAM") or []))
+        order_m = float(it.get("meter") or 0)
+        default_m = max(0.0, order_m - ham_m) or order_m
+        dlg = ProductionOrderDialog(self, order, pc, default_miktar=default_m)
+        if not dlg.exec():
+            return
+        d = dlg.result_data()
+        d["created_by"] = CURRENT_USER.get("full_name", "")
+        r = db.add_production_order(**d)
+        if r.get("id"):
+            QMessageBox.information(self, "Üretim Emri",
+                f"<b>{r.get('ue_no','')}</b> oluşturuldu — {d['miktar_mt']:,.0f} mt "
+                f"{d['tip']}.\nÇözgü {d['cozgu_metre']:,.0f} mt | "
+                f"İplik: {d['cozgu_iplik_kg']:,.1f} + {d['atki_iplik_kg']:,.1f} kg")
+        else:
+            QMessageBox.warning(self, "Hata", str(r.get("error", "Emir oluşturulamadı")))
+        self._refresh_ue_table()
+
+    def _refresh_ue_table(self, order_id=None):
+        oid = order_id or self._current_order_id
+        if not oid:
+            self.ue_table.setRowCount(0); return
+        rows = db.get_production_orders(order_id=oid) or []
+        renk = {"PLANLANDI": "#757575", "İPLİK BEKLENİYOR": "#E65100",
+                "ÇÖZGÜ HAZIR": "#F57F17", "DOKUMADA": "#1565C0",
+                "TAMAMLANDI": "#2E7D32", "İPTAL": "#880E4F"}
+        self.ue_table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            r = dict(r)
+            it0 = QTableWidgetItem(r.get("ue_no", ""))
+            it0.setData(Qt.ItemDataRole.UserRole, r.get("id"))
+            self.ue_table.setItem(i, 0, it0)
+            self.ue_table.setItem(i, 1, QTableWidgetItem(r.get("product_code", "")))
+            self.ue_table.setItem(i, 2, QTableWidgetItem(r.get("tip", "")))
+            for c, v in ((3, r.get("miktar_mt")), (4, r.get("cozgu_metre")),
+                         (5, r.get("cozgu_iplik_kg")), (6, r.get("atki_iplik_kg"))):
+                ci = QTableWidgetItem(f"{float(v or 0):,.1f}")
+                ci.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                self.ue_table.setItem(i, c, ci)
+            self.ue_table.setItem(i, 7, QTableWidgetItem(r.get("dokumaci", "") or "—"))
+            st = QTableWidgetItem(r.get("durum", ""))
+            st.setForeground(QBrush(QColor(renk.get(r.get("durum",""), "#333"))))
+            f = QFont(); f.setBold(True); st.setFont(f)
+            self.ue_table.setItem(i, 8, st)
+        self.ue_table.resizeColumnsToContents()
+
+    def _selected_ue(self):
+        row = self.ue_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, "Bilgi", "Üretim emri seçin."); return None, None
+        return (self.ue_table.item(row, 0).data(Qt.ItemDataRole.UserRole),
+                self.ue_table.item(row, 8).text())
+
+    def _advance_production_order(self):
+        pid, durum = self._selected_ue()
+        if not pid:
+            return
+        sira = _local_db.PRODUCTION_STATUSES if hasattr(_local_db, "PRODUCTION_STATUSES") else \
+               ["PLANLANDI", "İPLİK BEKLENİYOR", "ÇÖZGÜ HAZIR", "DOKUMADA", "TAMAMLANDI"]
+        akis = [s for s in sira if s != "İPTAL"]
+        if durum not in akis or durum == "TAMAMLANDI":
+            return QMessageBox.information(self, "Bilgi", f"'{durum}' durumundan ilerletilemez.")
+        yeni = akis[akis.index(durum) + 1]
+        if QMessageBox.question(self, "Durum",
+                f"Emir '{durum}' → '<b>{yeni}</b>' durumuna alınsın mı?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                == QMessageBox.StandardButton.Yes:
+            db.update_production_order_status(pid, yeni, CURRENT_USER.get("full_name",""))
+            self._refresh_ue_table()
+
+    def _cancel_production_order(self):
+        pid, durum = self._selected_ue()
+        if not pid:
+            return
+        if durum in ("TAMAMLANDI", "İPTAL"):
+            return QMessageBox.information(self, "Bilgi", f"'{durum}' durumundaki emir iptal edilemez.")
+        if QMessageBox.question(self, "İptal", "Üretim emri iptal edilsin mi?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No) \
+                == QMessageBox.StandardButton.Yes:
+            db.update_production_order_status(pid, "İPTAL", CURRENT_USER.get("full_name",""))
+            self._refresh_ue_table()
 
     def _show_reservations(self):
         """Aktif rezervasyonların listesi — herkes görür; admin/planlama iptal edebilir."""

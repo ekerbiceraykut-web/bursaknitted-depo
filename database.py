@@ -475,6 +475,30 @@ def init_db():
         "CREATE INDEX IF NOT EXISTS idx_res_fabric ON reservations(fabric_id)",
         "CREATE INDEX IF NOT EXISTS idx_res_order ON reservations(order_id)",
         "ALTER TABLE reservations ADD COLUMN used_meter REAL DEFAULT 0",
+        """CREATE TABLE IF NOT EXISTS production_orders (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ue_no TEXT DEFAULT '',
+            order_id INTEGER,
+            order_no TEXT DEFAULT '',
+            product_code TEXT DEFAULT '',
+            tip TEXT DEFAULT 'FASON',
+            miktar_mt REAL DEFAULT 0,
+            durum TEXT DEFAULT 'PLANLANDI',
+            dokumaci TEXT DEFAULT '',
+            cozgucu TEXT DEFAULT '',
+            fason_ucret_krs REAL DEFAULT 0,
+            cozgu_ucret_tl REAL DEFAULT 0,
+            usd_kuru REAL DEFAULT 0,
+            atki_siklik REAL DEFAULT 0,
+            cozgu_metre REAL DEFAULT 0,
+            cozgu_iplik_kg REAL DEFAULT 0,
+            atki_iplik_kg REAL DEFAULT 0,
+            tahmini_maliyet_usd REAL DEFAULT 0,
+            notes TEXT DEFAULT '',
+            created_by TEXT DEFAULT '',
+            created_at TEXT DEFAULT (datetime('now','localtime'))
+        )""",
+        "CREATE INDEX IF NOT EXISTS idx_prod_order ON production_orders(order_id)",
         """CREATE TABLE IF NOT EXISTS armur_desenleri (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
@@ -2415,6 +2439,99 @@ def cancel_reservation(rid, user_name=""):
                  "notes = notes || ' | iptal: ' || ? WHERE id=? AND status='AKTİF'",
                  (user_name, rid))
     conn.commit(); conn.close()
+
+
+def get_open_po_items():
+    """Açık (tamamlanmamış/iptal edilmemiş) PO kalemleri — kalan miktarıyla.
+    Stok listesindeki girişlerin PO'ya bağlanabilmesi için."""
+    conn = get_connection()
+    rows = conn.execute("""
+        SELECT i.id AS po_item_id, i.po_id, p.po_no, p.supplier_name,
+               IFNULL(p.order_no,'') AS order_no,
+               i.product_code, IFNULL(i.product_name,'') AS product_name,
+               IFNULL(i.fabric_type,'') AS fabric_type,
+               COALESCE(i.meter,0) AS meter,
+               COALESCE(i.received_meter,0) AS received_meter,
+               COALESCE(i.meter,0) - COALESCE(i.received_meter,0) AS kalan_meter,
+               COALESCE(i.unit_price,0) AS unit_price
+        FROM purchase_order_items i
+        JOIN purchase_orders p ON p.id = i.po_id
+        WHERE p.status NOT IN ('TAMAMLANDI','İPTAL')
+          AND COALESCE(i.meter,0) - COALESCE(i.received_meter,0) > 0.01
+        ORDER BY p.po_no DESC
+    """).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+# ── Üretim Emirleri ─────────────────────────────────────────────
+# Ham kumaş üretimi: FASON (iplik + çözgü + dokuma) veya HAZIR ALIM.
+# Her emir siparişe bağlıdır (order_id) — muhasebe/karlılık raporu bunun üzerinden toplanır.
+
+PRODUCTION_STATUSES = ["PLANLANDI", "İPLİK BEKLENİYOR", "ÇÖZGÜ HAZIR",
+                       "DOKUMADA", "TAMAMLANDI", "İPTAL"]
+
+
+def _generate_ue_no(conn):
+    from datetime import date
+    prefix = f"UE-{date.today().strftime('%Y%m%d')}-"
+    row = conn.execute("SELECT ue_no FROM production_orders WHERE ue_no LIKE ? "
+                       "ORDER BY ue_no DESC LIMIT 1", (prefix + "%",)).fetchone()
+    n = 1
+    if row:
+        try: n = int(row["ue_no"].split("-")[-1]) + 1
+        except Exception: n = 1
+    return f"{prefix}{n:03d}"
+
+
+def add_production_order(order_id=None, order_no="", product_code="", tip="FASON",
+                         miktar_mt=0, dokumaci="", cozgucu="",
+                         fason_ucret_krs=0, cozgu_ucret_tl=0, usd_kuru=0,
+                         atki_siklik=0, cozgu_metre=0, cozgu_iplik_kg=0,
+                         atki_iplik_kg=0, tahmini_maliyet_usd=0,
+                         notes="", created_by=""):
+    conn = get_connection()
+    ue_no = _generate_ue_no(conn)
+    c = conn.execute("""
+        INSERT INTO production_orders
+            (ue_no, order_id, order_no, product_code, tip, miktar_mt, durum,
+             dokumaci, cozgucu, fason_ucret_krs, cozgu_ucret_tl, usd_kuru,
+             atki_siklik, cozgu_metre, cozgu_iplik_kg, atki_iplik_kg,
+             tahmini_maliyet_usd, notes, created_by)
+        VALUES (?,?,?,?,?,?, 'PLANLANDI', ?,?,?,?,?,?,?,?,?,?,?,?)
+    """, (ue_no, order_id, order_no or "", product_code or "", tip, miktar_mt or 0,
+          dokumaci or "", cozgucu or "", fason_ucret_krs or 0, cozgu_ucret_tl or 0,
+          usd_kuru or 0, atki_siklik or 0, cozgu_metre or 0, cozgu_iplik_kg or 0,
+          atki_iplik_kg or 0, tahmini_maliyet_usd or 0, notes or "", created_by))
+    conn.commit()
+    pid = c.lastrowid
+    conn.close()
+    return {"id": pid, "ue_no": ue_no}
+
+
+def get_production_orders(order_id=None, active_only=False):
+    conn = get_connection()
+    q = "SELECT * FROM production_orders WHERE 1=1"
+    params = []
+    if order_id:
+        q += " AND order_id=?"; params.append(order_id)
+    if active_only:
+        q += " AND durum NOT IN ('TAMAMLANDI','İPTAL')"
+    q += " ORDER BY created_at DESC"
+    rows = conn.execute(q, params).fetchall()
+    conn.close()
+    return [dict(r) for r in rows]
+
+
+def update_production_order_status(pid, durum, user_name=""):
+    if durum not in PRODUCTION_STATUSES:
+        return {"ok": False, "error": f"Geçersiz durum: {durum}"}
+    conn = get_connection()
+    conn.execute("UPDATE production_orders SET durum=?, "
+                 "notes = notes || ' | ' || ? || ': ' || ? WHERE id=?",
+                 (durum, durum, user_name, pid))
+    conn.commit(); conn.close()
+    return {"ok": True}
 
 
 def use_reservation_amount(rid, meter_used, user_name=""):

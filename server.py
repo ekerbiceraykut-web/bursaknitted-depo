@@ -286,6 +286,18 @@ class APIHandler(BaseHTTPRequestHandler):
                     qs.get("fabric_type",[""])[0])
                 self._send(_ok(rows))
 
+            # ── Açık PO kalemleri (stok girişi için) ──────────────
+            elif path == "/api/po/open-items":
+                self._send(_ok(db.get_open_po_items()))
+
+            # ── Üretim Emirleri ───────────────────────────────────
+            elif path == "/api/production_orders":
+                oid = qs.get("order_id",[""])[0]
+                rows = db.get_production_orders(
+                    order_id=int(oid) if oid else None,
+                    active_only=qs.get("active_only",["0"])[0] == "1")
+                self._send(_ok(rows))
+
             # ── Rezervasyonlar ────────────────────────────────────
             elif path == "/api/reservations":
                 oid = qs.get("order_id",[""])[0]
@@ -532,6 +544,34 @@ class APIHandler(BaseHTTPRequestHandler):
                     product_code=body.get("product_code","")
                 )
                 self._send(_ok({"id": did}))
+
+            # ── Üretim emri oluştur / durum (admin + planlama) ────
+            elif path == "/api/production_orders":
+                if user.get("role") not in ("admin", "planlama"):
+                    return self._send(_err("Üretim emri yetkisi yok"), 403)
+                r = db.add_production_order(
+                    order_id=body.get("order_id"), order_no=body.get("order_no",""),
+                    product_code=body.get("product_code",""), tip=body.get("tip","FASON"),
+                    miktar_mt=body.get("miktar_mt",0),
+                    dokumaci=body.get("dokumaci",""), cozgucu=body.get("cozgucu",""),
+                    fason_ucret_krs=body.get("fason_ucret_krs",0),
+                    cozgu_ucret_tl=body.get("cozgu_ucret_tl",0),
+                    usd_kuru=body.get("usd_kuru",0), atki_siklik=body.get("atki_siklik",0),
+                    cozgu_metre=body.get("cozgu_metre",0),
+                    cozgu_iplik_kg=body.get("cozgu_iplik_kg",0),
+                    atki_iplik_kg=body.get("atki_iplik_kg",0),
+                    tahmini_maliyet_usd=body.get("tahmini_maliyet_usd",0),
+                    notes=body.get("notes",""),
+                    created_by=user.get("full_name",""))
+                self._send(_ok(r))
+
+            elif path.startswith("/api/production_orders/") and path.endswith("/status"):
+                if user.get("role") not in ("admin", "planlama"):
+                    return self._send(_err("Üretim emri yetkisi yok"), 403)
+                pid = int(path.split("/")[-2])
+                r = db.update_production_order_status(pid, body.get("durum",""),
+                                                      user.get("full_name",""))
+                self._send(_ok(r) if r.get("ok") else _err(r.get("error","Güncellenemedi")))
 
             # ── Rezervasyon oluştur (admin + planlama) ────────────
             elif path == "/api/reservations":
