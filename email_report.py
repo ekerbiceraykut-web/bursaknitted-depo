@@ -11,9 +11,25 @@ from email.mime.application import MIMEApplication
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime, date
-import database as db
+import database as _local_db
 
 CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+
+def _db():
+    """Aktif bağlantıya göre veri kaynağı: uzak modda api_client (bulut),
+    yerel modda database. Rapor daha önce hep yerel dosyayı okuduğu için
+    bulut kullanıcılarında içerik 0 geliyordu."""
+    try:
+        import sys
+        m = sys.modules.get("__main__")
+        if m is not None and getattr(m, "CONNECTION_MODE", "local") == "remote":
+            import api_client
+            if getattr(api_client, "_token", None):
+                return api_client
+    except Exception:
+        pass
+    return _local_db
 
 _scheduler_thread = None
 _stop_event = threading.Event()
@@ -65,6 +81,7 @@ def save_email_config(smtp_host, smtp_port, smtp_user, smtp_pass,
 # ── HTML Rapor ───────────────────────────────────────────────────
 
 def _build_html():
+    db    = _db()   # uzak modda bulut verisi, yerel modda stok.db
     today = date.today().strftime("%d.%m.%Y")
     now   = datetime.now().strftime("%d.%m.%Y %H:%M")
     s     = db.get_summary()
