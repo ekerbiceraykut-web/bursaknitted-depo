@@ -10665,11 +10665,12 @@ class PlanningView(QWidget):
         self.queue_table.setSortingEnabled(True)
         qhdr = self.queue_table.horizontalHeader()
         qhdr.setSectionsMovable(True)
-        qhdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        qhdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        qhdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
-        qhdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)
-        qhdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
+        # Sütun genişlikleri elle ayarlanabilir; ayar kalıcı olarak saklanır
+        qhdr.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        qhdr.setStretchLastSection(True)
+        for c, w in ((0, 130), (1, 170), (2, 90), (3, 110), (4, 150)):
+            self.queue_table.setColumnWidth(c, w)
+        _wire_header_persistence(self.queue_table, "planlama_kuyruk_v1")
         self.queue_table.itemSelectionChanged.connect(self._on_queue_select)
         self.queue_table.setToolTip("Çift tıklayınca sipariş inceleme sayfası açılır")
         self.queue_table.doubleClicked.connect(self._show_order_review)
