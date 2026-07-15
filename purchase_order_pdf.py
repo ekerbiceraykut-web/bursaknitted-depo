@@ -105,7 +105,8 @@ def generate_purchase_order_pdf(po, company, file_path):
         return Paragraph(escape(str(t or "")), _STYLE_CELL)
 
     headers = [_h("Ürün Kodu"), _h("Kompozisyon"), _h("En"), _h("Gramaj"),
-               _h("Kumaş Tipi"), _h("Açıklama / Konstrüksiyon"),
+               _h("Kumaş Tipi"), _h("Çözgü"), _h("Atkı"), _h("Sıklık"),
+               _h("Tarak Eni"), _h("Örgü"), _h("Açıklama"),
                _h("Metre"), _h("Kilo"), _h(f"Birim Fiyat ({symbol})"), _h(f"Tutar ({symbol})")]
     item_rows = [headers]
     grand_total = 0.0
@@ -126,16 +127,21 @@ def generate_purchase_order_pdf(po, company, file_path):
             _c(it.get("width", "")),
             _c(it.get("gramaj", "")),
             _c(it.get("fabric_type", "")),
+            _c(it.get("cozgu", "")),
+            _c(it.get("atki", "")),
+            _c(it.get("siklik", "")),
+            _c(it.get("tarak_eni", "")),
+            _c(it.get("orgu", "")),
             _c(it.get("description", "")),
             _fmt_num(meter),
             _fmt_num(kg),
             _fmt_num(unit_price),
             _fmt_num(total),
         ])
-    item_rows.append(["GENEL TOPLAM:", "", "", "", "", "",
+    item_rows.append(["GENEL TOPLAM:", "", "", "", "", "", "", "", "", "", "",
                       _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total)])
 
-    col_widths = [w * mm for w in (20, 24, 9, 12, 15, 46, 15, 15, 15, 15)]
+    col_widths = [w * mm for w in (15, 15, 8, 9, 11, 14, 14, 12, 9, 10, 16, 12, 11, 11, 14)]
     items_table = Table(item_rows, colWidths=col_widths, repeatRows=1)
     items_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Turkish-Bold"),
@@ -144,9 +150,9 @@ def generate_purchase_order_pdf(po, company, file_path):
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#E8EAF6")),
         ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#BDBDBD")),
         ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("ALIGN", (6, 0), (9, -1), "RIGHT"),
-        ("SPAN", (0, -1), (5, -1)),
-        ("ALIGN", (0, -1), (5, -1), "RIGHT"),
+        ("ALIGN", (11, 0), (14, -1), "RIGHT"),
+        ("SPAN", (0, -1), (10, -1)),
+        ("ALIGN", (0, -1), (10, -1), "RIGHT"),
         ("FONTNAME", (0, -1), (-1, -1), "Turkish-Bold"),
         ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#F5F5F5")),
         ("TOPPADDING", (0, 0), (-1, -1), 3),

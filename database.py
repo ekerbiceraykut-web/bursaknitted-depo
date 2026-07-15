@@ -244,6 +244,11 @@ def init_db():
             kg REAL DEFAULT 0,
             unit_price REAL DEFAULT 0,
             description TEXT DEFAULT '',
+            cozgu TEXT DEFAULT '',
+            atki TEXT DEFAULT '',
+            siklik TEXT DEFAULT '',
+            tarak_eni TEXT DEFAULT '',
+            orgu TEXT DEFAULT '',
             received_meter REAL DEFAULT 0,
             received_kg REAL DEFAULT 0
         );
@@ -502,6 +507,11 @@ def init_db():
         "ALTER TABLE production_orders ADD COLUMN ham_metre REAL DEFAULT 0",
         "ALTER TABLE production_orders ADD COLUMN cozgu_ucret_usd REAL DEFAULT 0",
         "ALTER TABLE orders ADD COLUMN deleted_at TEXT DEFAULT NULL",
+        "ALTER TABLE purchase_order_items ADD COLUMN cozgu TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_items ADD COLUMN atki TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_items ADD COLUMN siklik TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_items ADD COLUMN tarak_eni TEXT DEFAULT ''",
+        "ALTER TABLE purchase_order_items ADD COLUMN orgu TEXT DEFAULT ''",
         "ALTER TABLE purchase_order_receipts ADD COLUMN order_no TEXT DEFAULT ''",
         """CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2753,7 +2763,8 @@ def _generate_po_no(conn):
 
 
 _PO_ITEM_FIELDS = ["product_code", "product_name", "composition", "width", "gramaj",
-                   "fabric_type", "meter", "kg", "unit_price", "description"]
+                   "fabric_type", "meter", "kg", "unit_price", "description",
+                   "cozgu", "atki", "siklik", "tarak_eni", "orgu"]
 
 
 def _insert_po_items(conn, po_id, items):

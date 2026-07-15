@@ -9542,6 +9542,15 @@ class PurchaseOrderDialog(QDialog):
                 cell.setBackground(QBrush(QColor("#F5F5F5")))
             self.table.setItem(row, col, cell)
 
+        # Konstrüksiyon alanları (çözgü/atkı/sıklık/tarak/örgü) satırda taşınır,
+        # PO kaydına ve PDF formuna aynen geçer
+        c0 = self.table.item(row, 0)
+        if c0 is not None:
+            c0.setData(Qt.ItemDataRole.UserRole, {
+                k: str(item.get(k, "") or "")
+                for k in ("cozgu", "atki", "siklik", "tarak_eni", "orgu",
+                          "composition", "width", "gramaj")})
+
         self.table.blockSignals(False)
         self._recalc_row(row)
         self._update_subtotal()
@@ -9697,6 +9706,10 @@ class PurchaseOrderDialog(QDialog):
                 }
             if key not in items_by_supplier:
                 items_by_supplier[key] = []
+            # Satırda taşınan konstrüksiyon + kompozisyon/en/gramaj alanları
+            c0 = self.table.item(row, 0)
+            extras = c0.data(Qt.ItemDataRole.UserRole) if c0 else None
+            extras = dict(extras) if isinstance(extras, dict) else {}
             items_by_supplier[key].append({
                 "product_code": _cell(row, 0),
                 "product_name": _cell(row, 1),
@@ -9705,9 +9718,14 @@ class PurchaseOrderDialog(QDialog):
                 "kg":           _num(row, 8),   # Ham Kg
                 "unit_price":   _num(row, 9),
                 "description":  _cell(row, 15),
-                "composition":  "",
-                "width":        "",
-                "gramaj":       "",
+                "composition":  extras.get("composition", ""),
+                "width":        extras.get("width", ""),
+                "gramaj":       extras.get("gramaj", ""),
+                "cozgu":        extras.get("cozgu", ""),
+                "atki":         extras.get("atki", ""),
+                "siklik":       extras.get("siklik", ""),
+                "tarak_eni":    extras.get("tarak_eni", ""),
+                "orgu":         extras.get("orgu", ""),
             })
         return {
             "po_groups": [
@@ -12009,21 +12027,28 @@ class PlanningView(QWidget):
                 order_m = float(it.get("meter") or 0)
                 missing = max(0.0, order_m - ham_m)
                 oneri = missing if missing > 0 else order_m
-                # Konstrüksiyon özeti tedarikçiye giden PO'da görünür (hazır ham alımı)
-                kons = _konstruksiyon_ozeti(db.get_product_by_code(pc))
-                desc = (f"{order.get('order_no','')} için ham dokuma"
-                        + ("" if missing > 0 else f" (depoda {ham_m:,.0f} mt HAM mevcut)"))
-                if kons:
-                    desc = f"{desc} || {kons}"
+                # Konstrüksiyon bilgileri ürün kataloğundan AYRI alanlara doldurulur;
+                # açıklama boş bırakılır (PO ekranında elle girilir)
+                p = dict(db.get_product_by_code(pc) or {})
+                cozguler = [str(p.get(f"cozgu{i}") or "").strip() for i in (1, 2)]
+                cozgu = " + ".join(x for x in cozguler if x and x != "-")
+                atkilar = [str(p.get(f"atki{i}") or "").strip() for i in (1, 2, 3, 4)]
+                atki = " + ".join(x for x in atkilar if x and x != "-")
+                siklik = ""
+                if p.get("cozgu_sikligi") or p.get("atki_sikligi"):
+                    siklik = f"{p.get('cozgu_sikligi','?')} tel × {p.get('atki_sikligi','?')} atkı/cm"
+                orgu = str(p.get("dokuma_tipi") or p.get("orgu_desen") or "").strip()
                 missing_items.append({
                     "product_code": pc,
                     "product_name": it.get("product_name",""),
-                    "composition":  it.get("composition",""),
-                    "width":        it.get("width",""),
-                    "gramaj":       it.get("gramaj",""),
+                    "composition":  it.get("composition","") or p.get("composition",""),
+                    "width":        it.get("width","") or p.get("width",""),
+                    "gramaj":       it.get("gramaj","") or p.get("gramaj",""),
                     "fabric_type":  "HAM",
                     "meter":        oneri, "kg": 0, "unit_price": 0,
-                    "description":  desc,
+                    "description":  "",
+                    "cozgu": cozgu, "atki": atki, "siklik": siklik,
+                    "tarak_eni": str(p.get("tarak_eni") or ""), "orgu": orgu,
                 })
         if not missing_items:
             QMessageBox.information(self, "Bilgi",
