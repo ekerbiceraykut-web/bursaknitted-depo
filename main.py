@@ -8583,12 +8583,18 @@ class StockTable(QWidget):
         fid = self._selected_id()
         if not fid:
             return
-        if db.is_fabric_linked_to_order(fid):
+        fabric = db.get_fabric(fid)
+        if not fabric:
+            return
+        f = dict(fabric)
+        sifir = (f.get("meter") or 0) <= 0.01 and (f.get("kg") or 0) <= 0.01
+        # Siparişe bağlı kayıtlar planlamadan yönetilir; ancak SIFIRLANMIŞ
+        # kalemler (0 mt / 0 kg) stok listesinden temizlenebilir.
+        if db.is_fabric_linked_to_order(fid) and not sifir:
             QMessageBox.warning(self, "Silinemez",
-                "Bu kumaş bir sipariş satınalmasına bağlıdır.\n"
+                "Bu kumaş bir sipariş satınalmasına bağlıdır ve stoğu devam ediyor.\n"
                 "Stok listesinden silinemez; işlem için planlama ekranını kullanın.")
             return
-        fabric = db.get_fabric(fid)
         reply = QMessageBox.question(
             self, "Stoktan Sil",
             f"<b>{fabric['product_code']}</b> ({fabric['color']}) stoktan silinsin mi?<br><br>"
@@ -9021,6 +9027,10 @@ class OrdersView(QWidget):
         btn_aktif.setStyleSheet("background:#1B5E20;color:white;border-radius:4px;padding:6px 14px;")
         btn_aktif.setToolTip("İPTAL edilmiş siparişi yeniden ONAYDA durumuna alır")
         btn_aktif.clicked.connect(self._reactivate_order)
+        btn_durum = QPushButton("📝 Durum Değiştir")
+        btn_durum.setToolTip("Sipariş durumunu elle düzelt (yalnızca admin)")
+        btn_durum.clicked.connect(self._change_order_status)
+        btn_durum.setVisible(CURRENT_USER.get("role") == "admin")
         btn_pdf = QPushButton("📄 PDF Al")
         btn_pdf.clicked.connect(self._export_pdf)
         btn_refresh = QPushButton("⟳ Yenile")
@@ -9031,6 +9041,7 @@ class OrdersView(QWidget):
             btn_settings.clicked.connect(self._company_settings)
             toolbar.addWidget(btn_settings)
         toolbar.addWidget(btn_aktif)
+        toolbar.addWidget(btn_durum)
         toolbar.addWidget(btn_del)
         if CURRENT_USER.get("role") == "admin":
             btn_undo = QPushButton("♻ Silinenler")
@@ -9227,6 +9238,33 @@ class OrdersView(QWidget):
             self.refresh()
             QMessageBox.information(self, "Aktifleştirildi",
                 f"{order.get('order_no','')} yeniden ONAYDA — düzenlemek için çift tıklayabilirsiniz.")
+
+    def _change_order_status(self):
+        """Admin: sipariş durumunu elle düzeltir (ör. yanlışlıkla ilerlemiş durum)."""
+        if CURRENT_USER.get("role") != "admin":
+            return QMessageBox.warning(self, "Yetki",
+                "Durum değiştirme yalnızca admin tarafından yapılabilir.")
+        oid = self._selected_id()
+        if not oid:
+            return
+        order = db.get_order(oid)
+        if not order:
+            return
+        from PyQt6.QtWidgets import QInputDialog
+        mevcut = order.get("status", "")
+        secim, ok = QInputDialog.getItem(
+            self, "Durum Değiştir",
+            f"<b>{order.get('order_no','')}</b> — mevcut durum: <b>{mevcut}</b>\n"
+            "Yeni durumu seçin:",
+            self.STATUS_OPTIONS,
+            self.STATUS_OPTIONS.index(mevcut) if mevcut in self.STATUS_OPTIONS else 0,
+            False)
+        if not ok or secim == mevcut:
+            return
+        db.update_order_status(oid, secim)
+        self.refresh()
+        QMessageBox.information(self, "Güncellendi",
+            f"{order.get('order_no','')}: {mevcut} → {secim}")
 
     def _show_deleted_orders(self):
         """Son 24 saatte silinen siparişler — geri alma (admin)."""

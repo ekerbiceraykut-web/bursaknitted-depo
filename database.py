@@ -3117,6 +3117,32 @@ def delete_boyahane_receipt(receipt_id, user_name=""):
     new_st   = "TAMAMLANDI" if fully else ("KISMİ GELDİ" if any_recv else "BEKLEMEDE")
     conn.execute("UPDATE purchase_orders SET status=? WHERE id=?", (new_st, po_id))
 
+    # Sipariş durumunu geri sar: bu siparişe ait başka dış depo sevki kalmadıysa
+    # 'BOYAHANAYA SEVKLER BAŞLADI' geriye 'PLANLANDI'ya döner
+    order_id = None
+    order_no = r["order_no"] if "order_no" in r.keys() else ""
+    if po_id:
+        po_row = conn.execute("SELECT order_id, order_no FROM purchase_orders WHERE id=?",
+                              (po_id,)).fetchone()
+        if po_row:
+            order_id = po_row["order_id"]
+            order_no = order_no or (po_row["order_no"] or "")
+    if not order_id and order_no:
+        orow = conn.execute("SELECT id FROM orders WHERE order_no=?", (order_no,)).fetchone()
+        order_id = orow["id"] if orow else None
+    if order_id:
+        kalan = conn.execute("""
+            SELECT COUNT(*) FROM purchase_order_receipts r2
+            LEFT JOIN purchase_orders p2 ON p2.id = r2.po_id
+            WHERE r2.location_group NOT IN ('', 'DEPO')
+              AND (p2.order_id = ? OR r2.order_no = ?)
+        """, (order_id, order_no or "-")).fetchone()[0]
+        if kalan == 0:
+            cur = conn.execute("SELECT status FROM orders WHERE id=?", (order_id,)).fetchone()
+            if cur and cur["status"] in ("BOYAHANAYA SEVKLER BAŞLADI",
+                                         "TÜM KUMAŞLAR BOYAHANEDE"):
+                conn.execute("UPDATE orders SET status='PLANLANDI' WHERE id=?", (order_id,))
+
     conn.commit()
     conn.close()
 
