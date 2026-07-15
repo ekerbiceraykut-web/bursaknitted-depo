@@ -9497,18 +9497,24 @@ class PurchaseOrderDialog(QDialog):
 
         orig_meter = float(item.get("meter") or 0)
         orig_kg    = float(item.get("kg") or 0)
-        # Kilo verilmemişse ürün ağacındaki En × Gramaj'dan otomatik hesapla:
+        # Kilo verilmemişse En × Gramaj'dan otomatik hesapla:
         # kg = metre × (en/100) × (gramaj/1000)
-        if orig_kg <= 0 and orig_meter > 0 and item.get("product_code"):
-            try:
-                p = db.get_product_by_code(item.get("product_code")) or {}
-                p = dict(p)
-                en = float(str(p.get("width") or "0").replace(",", ".") or 0)
-                gr = float(str(p.get("gramaj") or "0").replace(",", ".") or 0)
-                if en > 0 and gr > 0:
-                    orig_kg = round(orig_meter * (en / 100.0) * gr / 1000.0, 2)
-            except Exception:
-                pass
+        # Önce sipariş kalemindeki En/Gramaj, boşsa ürün kataloğundaki kullanılır.
+        def _sayi(x):
+            import re as _re
+            m = _re.search(r"\d+[.,]?\d*", str(x or ""))
+            return float(m.group(0).replace(",", ".")) if m else 0.0
+        if orig_kg <= 0 and orig_meter > 0:
+            en = _sayi(item.get("width")); gr = _sayi(item.get("gramaj"))
+            if (en <= 0 or gr <= 0) and item.get("product_code"):
+                try:
+                    p = dict(db.get_product_by_code(item.get("product_code")) or {})
+                    if en <= 0: en = _sayi(p.get("width"))
+                    if gr <= 0: gr = _sayi(p.get("gramaj"))
+                except Exception:
+                    pass
+            if en > 0 and gr > 0:
+                orig_kg = round(orig_meter * (en / 100.0) * gr / 1000.0, 2)
         ham_meter  = item.get("ham_meter")
         ham_kg     = item.get("ham_kg")
         if ham_meter is None: ham_meter = round(orig_meter * 1.20, 2)   # ham metre +%20
