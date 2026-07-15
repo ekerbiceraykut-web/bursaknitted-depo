@@ -603,6 +603,21 @@ class APIHandler(BaseHTTPRequestHandler):
                                                       user.get("full_name",""))
                 self._send(_ok(r) if r.get("ok") else _err(r.get("error","Güncellenemedi")))
 
+            # ── Boyahane kuyruğuna manuel sevk kaydı ──────────────
+            elif path == "/api/boyahane/manual-entry":
+                rid = db.add_manual_boyahane_entry(
+                    fabric_id=body.get("fabric_id"),
+                    product_code=body.get("product_code",""),
+                    product_name=body.get("product_name",""),
+                    fabric_type=body.get("fabric_type",""),
+                    meter=body.get("meter",0), kg=body.get("kg",0),
+                    location=body.get("location",""),
+                    location_group=body.get("location_group",""),
+                    lot=body.get("lot",""),
+                    user_name=user.get("full_name",""),
+                    order_no=body.get("order_no",""))
+                self._send(_ok({"id": rid}))
+
             # ── Rezervasyon oluştur (admin + planlama) ────────────
             elif path == "/api/reservations":
                 if user.get("role") not in ("admin", "planlama"):

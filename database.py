@@ -502,6 +502,7 @@ def init_db():
         "ALTER TABLE production_orders ADD COLUMN ham_metre REAL DEFAULT 0",
         "ALTER TABLE production_orders ADD COLUMN cozgu_ucret_usd REAL DEFAULT 0",
         "ALTER TABLE orders ADD COLUMN deleted_at TEXT DEFAULT NULL",
+        "ALTER TABLE purchase_order_receipts ADD COLUMN order_no TEXT DEFAULT ''",
         """CREATE TABLE IF NOT EXISTS invoices (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             invoice_no TEXT DEFAULT '',
@@ -2967,12 +2968,35 @@ def get_po_receipts(po_id):
     return [dict(r) for r in rows]
 
 
+def add_manual_boyahane_entry(fabric_id, product_code="", product_name="",
+                              fabric_type="", meter=0, kg=0, location="",
+                              location_group="", lot="", user_name="", order_no=""):
+    """Stok listesinden dış depoya yapılan çıkışı boyahane kuyruğuna ekler
+    (PO'suz manuel sevk — ilgili sipariş no'suyla)."""
+    conn = get_connection()
+    c = conn.execute("""
+        INSERT INTO purchase_order_receipts
+            (po_id, po_item_id, fabric_id, product_code, product_name, fabric_type,
+             meter, kg, location, location_group, unit_price, user_name, status,
+             lot, order_no)
+        VALUES (0, 0, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, 'BEKLEMEDE', ?, ?)
+    """, (fabric_id, product_code or "", product_name or "", fabric_type or "",
+          meter or 0, kg or 0, location or "", location_group or "",
+          user_name or "", lot or "", order_no or ""))
+    conn.commit()
+    rid = c.lastrowid
+    conn.close()
+    return rid
+
+
 def get_boyahane_queue(status_filter=""):
-    """Dış depoya gönderilen ve boyahane planlaması bekleyen kayıtlar."""
+    """Dış depoya gönderilen ve boyahane planlaması bekleyen kayıtlar
+    (PO mal girişleri + stoktan manuel sevkler)."""
     conn = get_connection()
     q = """
         SELECT r.*,
-               po.order_no, po.po_no, po.supplier_name
+               po.po_no, po.supplier_name,
+               COALESCE(NULLIF(r.order_no,''), po.order_no, '') AS order_no
         FROM purchase_order_receipts r
         LEFT JOIN purchase_orders po ON po.id = r.po_id
         WHERE r.location_group != 'DEPO' AND r.location_group != ''

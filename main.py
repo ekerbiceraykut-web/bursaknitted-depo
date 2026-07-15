@@ -7173,16 +7173,22 @@ class SplitCikisDialog(QDialog):
         self.fabric = dict(fabric)
         self.setWindowTitle(f"Çıkış — {self.fabric.get('product_code','')} / {self.fabric.get('color','')}")
         self.setMinimumSize(720, 560)
-        locs = db.get_active_locations() or []
-        dis = {l["name"] for l in locs if l["group_name"] != "DEPO"}
+        locs = [dict(l) for l in (db.get_active_locations() or [])]
+        dis = {l["name"] for l in locs if (l.get("group_name") or "DEPO") != "DEPO"}
+        self._dis_names = dis
         self._is_dis_depo = (self.fabric.get("location") or "") in dis
         self._loc_names = {l["name"] for l in locs}   # lokasyon adları → transfer
         self._cust_names = {c["name"] for c in (db.get_all_customers() or [])}
+        # Hedef listesi: önce depolar ve dış depolar (net etiketli), sonra müşteriler
         self._dest_options = []
-        for c in (db.get_all_customers() or []):
-            self._dest_options.append((f"👤 {c['name']}", ("Müşteri", c["name"])))
         for l in locs:
-            self._dest_options.append((f"🏭 {l['name']}", ("Lokasyon", l["name"])))
+            if (l.get("group_name") or "DEPO") == "DEPO":
+                self._dest_options.append((f"🏭 Depo: {l['name']}", ("Lokasyon", l["name"])))
+        for l in locs:
+            if (l.get("group_name") or "DEPO") != "DEPO":
+                self._dest_options.append((f"🚚 Dış Depo: {l['name']}", ("Lokasyon", l["name"])))
+        for c in (db.get_all_customers() or []):
+            self._dest_options.append((f"👤 Müşteri: {c['name']}", ("Müşteri", c["name"])))
         self._rows = []
         self._lines = []
         self._build_ui()
@@ -7253,6 +7259,19 @@ class SplitCikisDialog(QDialog):
             self.pre_kg.valueChanged.connect(self._update_totals)
             self.fire_check.toggled.connect(self._toggle_fire_fields)
             self._toggle_fire_fields(False)
+        # İlgili sipariş (opsiyonel) — dış depoya sevkte boyahane kuyruğuna bu no ile düşer
+        self.order_combo = QComboBox(); _make_searchable(self.order_combo)
+        self.order_combo.addItem("— Sipariş bağı yok —", "")
+        try:
+            for o in (db.get_all_orders() or []):
+                o = dict(o)
+                if o.get("status") in ("TAMAMLANDI", "SİPARİŞ TAMAMLANDI", "İPTAL"):
+                    continue
+                self.order_combo.addItem(
+                    f"{o.get('order_no','')} — {o.get('customer_name','')}", o.get("order_no", ""))
+        except Exception:
+            pass
+        form.addRow("İlgili Sipariş:", self.order_combo)
         self.notes = QLineEdit()
         form.addRow("Not:", self.notes)
         lay.addLayout(form)
@@ -7342,7 +7361,7 @@ class SplitCikisDialog(QDialog):
         # Hedef adını al (combo data'sından ya da yazılan metinden)
         data = combo.currentData()
         dest = data[1] if data else combo.currentText().strip()
-        for pre in ("👤 ", "🏭 "):
+        for pre in ("👤 Müşteri: ", "🏭 Depo: ", "🚚 Dış Depo: ", "👤 ", "🏭 ", "🚚 "):
             if dest.startswith(pre):
                 dest = dest[len(pre):]
         dest = dest.strip()
@@ -7384,6 +7403,8 @@ class SplitCikisDialog(QDialog):
                "lab_no": self.lab_no.text().strip(),
                "out_baski_desen_no": self.out_baski_desen_no.text().strip(),
                "parti_no": self.parti_no.text().strip(),
+               "order_no": self.order_combo.currentData() or "",
+               "dis_names": set(self._dis_names),
                "notes": self.notes.text().strip()}
         fire = None
         # Fire yalnızca kullanıcı 'Fire hesapla'yı işaretlediyse hesaplanır;
@@ -7417,6 +7438,9 @@ def run_split_cikis(parent, fabric, extra_note="", banner=""):
     total_m = sum(l[2] for l in lines)
     total_k = sum(l[3] for l in lines)
     notes = out["notes"]
+    order_no = out.get("order_no") or ""
+    if order_no:
+        notes = f"{notes} | Sipariş: {order_no}" if notes else f"Sipariş: {order_no}"
     if fire:
         fire_note = f"Fire: %{fire['pct']:.1f}"
         notes = f"{notes} | {fire_note}" if notes else fire_note
@@ -7453,9 +7477,45 @@ def run_split_cikis(parent, fabric, extra_note="", banner=""):
                 parent, "Lot Tükendi",
                 f"<b>{fabric['product_code']} / {fabric['lot'] or '-'}</b> lotu tükendi.<br>"
                 f"Toplam fire 'Boyahane Fire Oranları' sekmesine işlendi.")
+    # Dış depoya sevkler boyahane kuyruğuna düşer (ilgili sipariş no'suyla)
+    dis_names = out.get("dis_names") or set()
+    boyahane_n = 0
+    for tip, dest, mt, kg in lines:
+        if tip == "Lokasyon" and dest in dis_names:
+            try:
+                db.add_manual_boyahane_entry(
+                    fabric_id=fid,
+                    product_code=fabric.get("product_code", ""),
+                    product_name=fabric.get("product_name", ""),
+                    fabric_type=out.get("out_fabric_type") or fabric.get("fabric_type", ""),
+                    meter=mt, kg=kg, location=dest, location_group="DIŞ DEPO",
+                    lot=fabric.get("lot", ""),
+                    user_name=CURRENT_USER.get("full_name", ""),
+                    order_no=order_no)
+                boyahane_n += 1
+            except Exception:
+                pass
+    if boyahane_n:
+        QMessageBox.information(parent, "Boyahane",
+            f"{boyahane_n} sevk boyahane planlama ekranına düştü"
+            + (f" (Sipariş: {order_no})." if order_no else "."))
     if len(lines) > 1:
         QMessageBox.information(parent, "Çıkış",
             f"{len(lines)} hedefe parçalı çıkış yapıldı. Toplam {total_m:,.0f} mt.")
+    # Kalem sıfırlandıysa otomatik kaldır (hareket geçmişi korunur) + uyarı
+    try:
+        f2 = db.get_fabric(fid)
+        if f2:
+            f2 = dict(f2)
+            if not f2.get("deleted_at") and (f2.get("meter") or 0) <= 0.01 \
+                    and (f2.get("kg") or 0) <= 0.01:
+                db.soft_delete_fabric(fid, user_name=CURRENT_USER.get("full_name", ""))
+                QMessageBox.information(parent, "Kalem Sıfırlandı",
+                    f"<b>{fabric.get('product_code','')} / {fabric.get('lot','') or '—'}</b> "
+                    "kalemi sıfırlandı ve stok listesinden kaldırıldı.<br>"
+                    "<span style='color:#555'>Hareket geçmişi korunur.</span>")
+    except Exception:
+        pass
     return total_m
 
 
@@ -8571,6 +8631,7 @@ class StockTable(QWidget):
             return
         dest, dtype, notes, rows = dlg.result_data()
         n = 0
+        sifirlanan = []
         for fid, cm, ck in rows:
             if cm <= 0 and ck <= 0:
                 continue
@@ -8578,9 +8639,23 @@ class StockTable(QWidget):
                             user_name=CURRENT_USER["full_name"],
                             destination=dest, destination_type=dtype)
             n += 1
+            # Sıfırlanan kalemi otomatik kaldır (hareket geçmişi korunur)
+            try:
+                f2 = db.get_fabric(fid)
+                if f2:
+                    f2 = dict(f2)
+                    if not f2.get("deleted_at") and (f2.get("meter") or 0) <= 0.01 \
+                            and (f2.get("kg") or 0) <= 0.01:
+                        db.soft_delete_fabric(fid, user_name=CURRENT_USER["full_name"])
+                        sifirlanan.append(f"{f2.get('product_code','')}/{f2.get('lot','') or '—'}")
+            except Exception:
+                pass
         self.refresh()
-        QMessageBox.information(self, "Toplu Çıkış",
-            f"{n} kalem için çıkış yapıldı.\nHedef: {dest or '—'}")
+        msg = f"{n} kalem için çıkış yapıldı.\nHedef: {dest or '—'}"
+        if sifirlanan:
+            msg += ("\n\nSıfırlanan ve listeden kaldırılan kalemler:\n• "
+                    + "\n• ".join(sifirlanan) + "\n(Hareket geçmişi korunur.)")
+        QMessageBox.information(self, "Toplu Çıkış", msg)
 
     def _cikis_single(self):
         fid = self._selected_id()

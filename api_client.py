@@ -718,6 +718,15 @@ def delete_production_order(pid):
         return {"ok": False, "error": str(e)}
 
 
+def add_manual_boyahane_entry(**kw):
+    """Stoktan dış depoya sevki boyahane kuyruğuna işler."""
+    try:
+        r = _post("/api/boyahane/manual-entry", kw)
+        return (r or {}).get("id")
+    except Exception:
+        return None
+
+
 # ── Rezervasyonlar ────────────────────────────────────────────────
 
 def add_reservation(fabric_id, order_id=None, order_no="", meter=0, kg=0,
