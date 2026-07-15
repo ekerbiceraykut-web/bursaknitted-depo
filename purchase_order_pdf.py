@@ -115,7 +115,8 @@ def generate_purchase_order_pdf(po, company, file_path):
         meter = it.get("meter") or 0
         kg = it.get("kg") or 0
         unit_price = it.get("unit_price") or 0
-        total = meter * unit_price          # Toplam bedel = ham metre × birim fiyat
+        # Metre girildiyse fiyat metre bazlı; metre 0 ise kilo bazlı (iplik vb. $/kg)
+        total = meter * unit_price if meter > 0 else kg * unit_price
         grand_total += total
         total_meter += meter
         total_kg += kg

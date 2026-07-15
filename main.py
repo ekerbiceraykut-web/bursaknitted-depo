@@ -9549,8 +9549,10 @@ class PurchaseOrderDialog(QDialog):
     def _recalc_row(self, row):
         try:
             m  = float((self.table.item(row, 6) or QTableWidgetItem("0")).text() or 0)
+            k  = float((self.table.item(row, 8) or QTableWidgetItem("0")).text() or 0)
             up = float((self.table.item(row, 9) or QTableWidgetItem("0")).text() or 0)
-            total = m * up
+            # Ham metre girildiyse fiyat metre bazlı; metre 0 ise kilo bazlı ($/kg)
+            total = m * up if m > 0 else k * up
         except (ValueError, AttributeError):
             total = 0.0
         cur_cb = self.table.cellWidget(row, 4)
@@ -9636,14 +9638,19 @@ class PurchaseOrderDialog(QDialog):
                     f"Kalem {row+1} için tedarikçi seçilmelidir.")
                 return
             try:
-                it = self.table.item(row, 6)  # Ham Sip. Mt
-                if float(it.text() if it else "0") <= 0:
+                it_m = self.table.item(row, 6)   # Ham Sip. Mt
+                it_k = self.table.item(row, 8)   # Ham Kg
+                m = float(it_m.text() if it_m else "0")
+                k = float(it_k.text() if it_k else "0")
+                # Metre bazlı ya da kilo bazlı (iplik vb.) alım — en az biri girilmeli
+                if m <= 0 and k <= 0:
                     QMessageBox.warning(self, "Eksik Bilgi",
-                        f"Kalem {row+1} için geçerli Ham Sip. Metresi girilmelidir.")
+                        f"Kalem {row+1} için Ham Sip. Metresi veya Ham Kg girilmelidir.\n"
+                        "(Metre 0 ise fiyat kilo üzerinden hesaplanır.)")
                     return
             except ValueError:
                 QMessageBox.warning(self, "Geçersiz Değer",
-                    f"Kalem {row+1} için sayısal metre giriniz.")
+                    f"Kalem {row+1} için sayısal metre/kilo giriniz.")
                 return
         self.accept()
 
