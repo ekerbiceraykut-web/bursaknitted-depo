@@ -13,10 +13,16 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.platypus import Image, Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
+from reportlab.lib.enums import TA_RIGHT
+from reportlab.lib.styles import ParagraphStyle
+
 from order_pdf import (CURRENCY_SYMBOLS, _LOGO_PATH, _STYLE_CELL,
                         _STYLE_CELL_BOLD, _STYLE_COMPANY, _STYLE_HEADING,
                         _STYLE_NORMAL, _STYLE_SMALL, _STYLE_TITLE,
                         _fmt_date, _fmt_num, _multiline)
+
+# Sayı hücreleri: sağa dayalı, gerekirse hücre içinde sarar (taşma yok)
+_STYLE_CELL_R = ParagraphStyle("TrCellR", parent=_STYLE_CELL, alignment=TA_RIGHT)
 
 # Ham dokuma satınalma şartları — formun altına eklenir
 # (po["contract_terms"] veya company["po_terms"] doluysa onlar kullanılır).
@@ -133,15 +139,17 @@ def generate_purchase_order_pdf(po, company, file_path):
             _c(it.get("tarak_eni", "")),
             _c(it.get("orgu", "")),
             _c(it.get("description", "")),
-            _fmt_num(meter),
-            _fmt_num(kg),
-            _fmt_num(unit_price),
-            _fmt_num(total),
+            Paragraph(_fmt_num(meter), _STYLE_CELL_R),
+            Paragraph(_fmt_num(kg), _STYLE_CELL_R),
+            Paragraph(_fmt_num(unit_price), _STYLE_CELL_R),
+            Paragraph(_fmt_num(total), _STYLE_CELL_R),
         ])
     item_rows.append(["GENEL TOPLAM:", "", "", "", "", "", "", "", "", "", "",
-                      _fmt_num(total_meter), _fmt_num(total_kg), "", _fmt_num(grand_total)])
+                      Paragraph(_fmt_num(total_meter), _STYLE_CELL_R),
+                      Paragraph(_fmt_num(total_kg), _STYLE_CELL_R), "",
+                      Paragraph(_fmt_num(grand_total), _STYLE_CELL_R)])
 
-    col_widths = [w * mm for w in (15, 15, 8, 9, 11, 14, 14, 12, 9, 10, 16, 12, 11, 11, 14)]
+    col_widths = [w * mm for w in (14, 13, 8, 9, 10, 14, 14, 12, 9, 8, 13, 15, 13, 12, 16)]
     items_table = Table(item_rows, colWidths=col_widths, repeatRows=1)
     items_table.setStyle(TableStyle([
         ("FONTNAME", (0, 0), (-1, 0), "Turkish-Bold"),

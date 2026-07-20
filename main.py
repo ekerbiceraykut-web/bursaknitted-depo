@@ -9555,15 +9555,25 @@ class PurchaseOrderDialog(QDialog):
         self._recalc_row(row)
         self._update_subtotal()
 
-    def _recalc_row(self, row):
+    @staticmethod
+    def _f(txt):
+        """Virgül/nokta toleranslı sayı: '2,50' → 2.5, '1.234,56' → 1234.56"""
+        t = str(txt or "").strip().replace(" ", "")
+        if "," in t and "." in t:
+            t = t.replace(".", "").replace(",", ".")
+        else:
+            t = t.replace(",", ".")
         try:
-            m  = float((self.table.item(row, 6) or QTableWidgetItem("0")).text() or 0)
-            k  = float((self.table.item(row, 8) or QTableWidgetItem("0")).text() or 0)
-            up = float((self.table.item(row, 9) or QTableWidgetItem("0")).text() or 0)
-            # Ham metre girildiyse fiyat metre bazlı; metre 0 ise kilo bazlı ($/kg)
-            total = m * up if m > 0 else k * up
-        except (ValueError, AttributeError):
-            total = 0.0
+            return float(t or 0)
+        except ValueError:
+            return 0.0
+
+    def _recalc_row(self, row):
+        m  = self._f((self.table.item(row, 6) or QTableWidgetItem("")).text())
+        k  = self._f((self.table.item(row, 8) or QTableWidgetItem("")).text())
+        up = self._f((self.table.item(row, 9) or QTableWidgetItem("")).text())
+        # Ham metre girildiyse fiyat metre bazlı; metre 0 ise kilo bazlı ($/kg)
+        total = m * up if m > 0 else k * up
         cur_cb = self.table.cellWidget(row, 4)
         sym = ""
         if isinstance(cur_cb, QComboBox):
@@ -9582,10 +9592,8 @@ class PurchaseOrderDialog(QDialog):
     def _update_subtotal(self):
         total_mt = 0.0; total_kg = 0.0
         for r in range(self.table.rowCount()):
-            try: total_mt += float((self.table.item(r, 6) or QTableWidgetItem("0")).text() or 0)
-            except ValueError: pass
-            try: total_kg += float((self.table.item(r, 8) or QTableWidgetItem("0")).text() or 0)
-            except ValueError: pass
+            total_mt += self._f((self.table.item(r, 6) or QTableWidgetItem("")).text())
+            total_kg += self._f((self.table.item(r, 8) or QTableWidgetItem("")).text())
         self._subtotal_lbl.setText(
             f"Alt Toplam:  {total_mt:,.2f} mt  |  {total_kg:,.2f} kg")
 
@@ -9646,20 +9654,13 @@ class PurchaseOrderDialog(QDialog):
                 QMessageBox.warning(self, "Eksik Bilgi",
                     f"Kalem {row+1} için tedarikçi seçilmelidir.")
                 return
-            try:
-                it_m = self.table.item(row, 6)   # Ham Sip. Mt
-                it_k = self.table.item(row, 8)   # Ham Kg
-                m = float(it_m.text() if it_m else "0")
-                k = float(it_k.text() if it_k else "0")
-                # Metre bazlı ya da kilo bazlı (iplik vb.) alım — en az biri girilmeli
-                if m <= 0 and k <= 0:
-                    QMessageBox.warning(self, "Eksik Bilgi",
-                        f"Kalem {row+1} için Ham Sip. Metresi veya Ham Kg girilmelidir.\n"
-                        "(Metre 0 ise fiyat kilo üzerinden hesaplanır.)")
-                    return
-            except ValueError:
-                QMessageBox.warning(self, "Geçersiz Değer",
-                    f"Kalem {row+1} için sayısal metre/kilo giriniz.")
+            m = self._f((self.table.item(row, 6) or QTableWidgetItem("")).text())
+            k = self._f((self.table.item(row, 8) or QTableWidgetItem("")).text())
+            # Metre bazlı ya da kilo bazlı (iplik vb.) alım — en az biri girilmeli
+            if m <= 0 and k <= 0:
+                QMessageBox.warning(self, "Eksik Bilgi",
+                    f"Kalem {row+1} için Ham Sip. Metresi veya Ham Kg girilmelidir.\n"
+                    "(Metre 0 ise fiyat kilo üzerinden hesaplanır.)")
                 return
         self.accept()
 
@@ -9669,8 +9670,7 @@ class PurchaseOrderDialog(QDialog):
             it = self.table.item(row, col)
             return it.text().strip() if it else ""
         def _num(row, col):
-            try: return float(_cell(row, col) or 0)
-            except ValueError: return 0.0
+            return self._f(_cell(row, col))   # virgül toleranslı
 
         items_by_supplier = {}
         headers_by_supplier = {}
